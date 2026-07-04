@@ -471,7 +471,7 @@ function updateMap(dt) {
     const gx = h.tx * TS, gy = h.ty * TS;
     h.px += Math.sign(gx - h.px) * Math.min(speed, Math.abs(gx - h.px));
     h.py += Math.sign(gy - h.py) * Math.min(speed, Math.abs(gy - h.py));
-    h.anim += dt * 8;
+    h.anim += dt * 8.75; // 2 anim units per tile: half a 4-step cycle
     if (h.px === gx && h.py === gy) {
       h.moving = false;
       game.steps++;
@@ -481,17 +481,17 @@ function updateMap(dt) {
       }
     }
   } else {
-    h.anim = 1;
     if (pressed(CANCEL)) { game.menu = { mode: 'root', cursor: 0 }; sfx('Decision1'); return; }
     if (pressed(CONFIRM)) { interact(); queue = []; return; }
     const dir = dirHeld();
     if (dir) {
       h.dir = dir;
+      h.anim += dt * 8.75; // keeps stepping against walls, like RM2k
       const d = { up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0] }[dir];
       if (!isBlocked(h.tx + d[0], h.ty + d[1])) {
         h.tx += d[0]; h.ty += d[1]; h.moving = true;
       }
-    }
+    } else h.anim = 1; // standing frame
   }
 }
 
@@ -529,7 +529,7 @@ function drawMap() {
   });
   drawables.push({
     base: h.py + TS,
-    draw: () => drawChar(img.hero, 0, 0, h.dir, h.moving ? [0, 1, 2, 1][Math.floor(h.anim) % 4] : 1, h.px, h.py),
+    draw: () => drawChar(img.hero, 0, 0, h.dir, [0, 1, 2, 1][Math.floor(h.anim) % 4], h.px, h.py),
   });
   drawables.sort((a, b) => a.base - b.base);
   for (const d of drawables) d.draw();
