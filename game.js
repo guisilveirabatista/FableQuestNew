@@ -10,7 +10,7 @@ ctx.imageSmoothingEnabled = false;
 const TS = 16, MW = 20, MH = 15;
 
 // ---------------------------------------------------------------- assets
-const IMAGES = ['chipset', 'hero', 'npc', 'system', 'backdrop', 'title', 'gameover',
+const IMAGES = ['chipset', 'hero', 'npc', 'custom', 'system', 'backdrop', 'title', 'gameover',
   'slime', 'imp', 'ghost'];
 const img = {};
 let audioOk = false;
@@ -153,6 +153,7 @@ const props = [ // [tile, x, y]
 const npcs = [
   { id: 'elder', cx: 2, cy: 1, tx: 5, ty: 12, dir: 'down' },
   { id: 'girl', cx: 3, cy: 0, tx: 15, ty: 6, dir: 'down' },
+  { id: 'pixel', sheet: 'custom', cx: 0, cy: 0, tx: 8, ty: 5, dir: 'down' },
 ];
 
 const blocked = new Set();
@@ -196,6 +197,11 @@ function interact() {
     }
     if (npc.id === 'girl') {
       say(['Girl: The pond is lovely, but stay on the dirt path if you are hurt...', 'Girl: Monsters never attack on the path!']);
+      return;
+    }
+    if (npc.id === 'pixel') {
+      say(['Boy: The Elder says I just appeared here one day...',
+        'Boy: The truth? An AI drew me from scratch, pixel by pixel. All 12 frames of me!']);
       return;
     }
   }
@@ -526,7 +532,7 @@ function drawMap() {
   });
   for (const n of npcs) drawables.push({
     base: (n.ty + 1) * TS,
-    draw: () => drawChar(img.npc, n.cx, n.cy, n.dir, 1, n.tx * TS, n.ty * TS),
+    draw: () => drawChar(img[n.sheet || 'npc'], n.cx, n.cy, n.dir, 1, n.tx * TS, n.ty * TS),
   });
   drawables.push({
     base: h.py + TS,
