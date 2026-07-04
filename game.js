@@ -320,8 +320,9 @@ function drawBattle() {
   ctx.drawImage(img.backdrop, 0, 0);
   // monster with idle bob
   const m = img[e.img];
-  const s = e.scale, w = m.width * s, hh = m.height * s;
-  const mx = 160 - w / 2, my = 108 - hh + Math.sin(b.t * 2.5) * 2;
+  const s = Math.min(e.scale, 116 / m.height); // never let the sprite poke off-screen
+  const w = m.width * s, hh = m.height * s;
+  const mx = 160 - w / 2, my = 124 - hh + Math.sin(b.t * 2.5) * 2;
   if (b.ehp > 0) {
     ctx.drawImage(m, mx, my, w, hh);
     if (b.eflash > 0) {
@@ -337,7 +338,7 @@ function drawBattle() {
       ctx.globalAlpha = 1;
     }
   }
-  for (const p of b.pops) text(p.s, 158, my - 12 - p.t * 20, '#ffe080');
+  for (const p of b.pops) text(p.s, 158, Math.max(4, my - 12 - p.t * 20), '#ffe080');
 
   // enemy name + hp bar
   drawWindow(6, 6, 110, 30);
