@@ -10,7 +10,7 @@ ctx.imageSmoothingEnabled = false;
 const TS = 16, MW = 20, MH = 15;
 
 // ---------------------------------------------------------------- assets
-const IMAGES = ['chipset', 'hero', 'npc', 'custom', 'system', 'backdrop', 'title', 'gameover',
+const IMAGES = ['chipset', 'hero', 'npc', 'custom', 'knight', 'system', 'backdrop', 'title', 'gameover',
   'slime', 'imp', 'ghost'];
 const img = {};
 let audioOk = false;
@@ -154,7 +154,9 @@ const npcs = [
   { id: 'elder', cx: 2, cy: 1, tx: 5, ty: 12, dir: 'down' },
   { id: 'girl', cx: 3, cy: 0, tx: 15, ty: 6, dir: 'down' },
   { id: 'pixel', sheet: 'custom', cx: 0, cy: 0, tx: 8, ty: 5, dir: 'down' },
+  { id: 'knight', sheet: 'knight', cx: 0, cy: 0, tx: 12, ty: 6, dir: 'down', wander: 2 },
 ];
+for (const n of npcs) { n.px = n.tx * TS; n.py = n.ty * TS; n.anim = 1; n.moving = false; n.wait = 0; n.hx = n.tx; n.hy = n.ty; }
 
 const blocked = new Set();
 for (let x = 0; x < MW; x++) { blocked.add(x + ',0'); blocked.add(x + ',' + (MH - 1)); }
@@ -202,6 +204,11 @@ function interact() {
     if (npc.id === 'pixel') {
       say(['Boy: The Elder says I just appeared here one day...',
         'Boy: The truth? An AI drew me from scratch, pixel by pixel. All 12 frames of me!']);
+      return;
+    }
+    if (npc.id === 'knight') {
+      say(['Knight: Observe my stride! Contact, passing, contact... each leg in its turn, arms swinging counter to the step.',
+        'Knight: And the plume? It trails behind me as I march. Follow-through, they call it. A knight studies his animation principles!']);
       return;
     }
   }
@@ -459,6 +466,30 @@ function drawMenu() {
 }
 
 // ---------------------------------------------------------------- map scene
+function updateNpcs(dt) {
+  for (const n of npcs) {
+    if (!n.wander) continue;
+    if (n.moving) {
+      const gx = n.tx * TS, gy = n.ty * TS, sp = 40 * dt;
+      n.px += Math.sign(gx - n.px) * Math.min(sp, Math.abs(gx - n.px));
+      n.py += Math.sign(gy - n.py) * Math.min(sp, Math.abs(gy - n.py));
+      n.anim += dt * 5;
+      if (n.px === gx && n.py === gy) { n.moving = false; n.anim = 1; }
+    } else {
+      n.wait -= dt;
+      if (n.wait > 0) continue;
+      n.wait = 0.8 + Math.random() * 1.8;
+      const dir = ['up', 'down', 'left', 'right'][rnd(4)];
+      n.dir = dir;
+      const d = { up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0] }[dir];
+      const nx = n.tx + d[0], ny = n.ty + d[1];
+      if (Math.abs(nx - n.hx) > n.wander || Math.abs(ny - n.hy) > n.wander) continue;
+      if (isBlocked(nx, ny) || (game.hero.tx === nx && game.hero.ty === ny)) continue;
+      n.tx = nx; n.ty = ny; n.moving = true;
+    }
+  }
+}
+
 function updateMap(dt) {
   const h = game.hero;
   if (game.menu) { updateMenu(dt); return; }
@@ -473,6 +504,7 @@ function updateMap(dt) {
     }
     return;
   }
+  updateNpcs(dt);
   if (h.moving) {
     const speed = 70 * dt;
     const gx = h.tx * TS, gy = h.ty * TS;
@@ -531,8 +563,9 @@ function drawMap() {
     draw: () => ctx.drawImage(img.chipset, TREE[0], TREE[1], TREE[2], TREE[3], x * TS, y * TS - 16, TREE[2], TREE[3]),
   });
   for (const n of npcs) drawables.push({
-    base: (n.ty + 1) * TS,
-    draw: () => drawChar(img[n.sheet || 'npc'], n.cx, n.cy, n.dir, 1, n.tx * TS, n.ty * TS),
+    base: n.py + TS,
+    draw: () => drawChar(img[n.sheet || 'npc'], n.cx, n.cy, n.dir,
+      n.moving ? [0, 1, 2, 1][Math.floor(n.anim) % 4] : 1, n.px, n.py),
   });
   drawables.push({
     base: h.py + TS,
