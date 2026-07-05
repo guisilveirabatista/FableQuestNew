@@ -12,15 +12,19 @@ Open `index.html` in a browser (double-click it, or `open index.html`).
 
 | Key | Action |
 | --- | --- |
-| Arrows / WASD | Move / navigate menus |
-| Left click | Walk to the clicked tile (the hero finds his own way around obstacles) |
+| Arrows / WASD | Move (the most recently pressed direction wins; release it and the other held direction takes back over) / navigate menus |
+| Left click | Walk to the clicked tile (the hero finds his own way around obstacles). Clicking to move cancels a lock |
 | Right click | Lock on to the enemy under the cursor (right-click empty ground to unlock) |
 | Enter / Space / Z | Talk or read when facing someone, otherwise swing your sword |
 | 1–5 | Cast the skill equipped in that hotbar slot (equip via menu → Skills) |
-| Tab | Lock on to the nearest enemy (press again to cycle). While locked, your character walks after the target on his own, the sword strikes by itself in reach, and fireballs home in on it — even diagonally |
+| Tab | Lock on to the nearest enemy (press again to cycle). While locked, your character walks after the target on his own, the sword strikes by itself in reach, and fireballs home in on it — even diagonally. Clicking to move breaks the lock |
 | I | Show/hide the inventory panel (body + backpack, docked on the right) |
 | E | Focus the inventory panel for keyboard use (cycles backpack → body → off) |
-| Esc / X | Open the game menu (Inventory, Skills, Attribs, Status, Quest, Save, Load, Music, Autoloot, To Title) |
+| Esc / X | Open the game menu (Inventory, Skills, Attribs, Status, Quest, Save, Load, Music, Autoloot, Log, To Title) |
+
+Kills toward the quest are tracked in the Status and Quest screens (not the
+HUD). A toggleable **Log** window (bottom-left, menu → Log) records combat
+rewards — EXP, gold, loot and level-ups.
 
 The game fills the whole window, whatever its aspect ratio — the viewport is
 sized to the window at an integer pixel scale (no stretching, no black bars)

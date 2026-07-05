@@ -53,13 +53,24 @@ let queue = [];
 const CONFIRM = ['Enter', ' ', 'z', 'Z'];
 const CANCEL = ['Escape', 'x', 'X'];
 const DIRV = { up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0] };
+const KEY_DIR = { ArrowUp: 'up', w: 'up', ArrowDown: 'down', s: 'down',
+  ArrowLeft: 'left', a: 'left', ArrowRight: 'right', d: 'right' };
+let dirOrder = []; // held direction keys, most-recently-pressed last
 addEventListener('keydown', e => {
   if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' ', 'Tab'].includes(e.key)) e.preventDefault();
   if (!held[e.key]) queue.push(e.key);
   held[e.key] = true;
+  const d = KEY_DIR[e.key]; // newest direction takes over; releasing it falls back
+  if (d && !dirOrder.includes(d)) dirOrder.push(d);
   if (!audioOk) { audioOk = true; syncMusic(); }
 });
-addEventListener('keyup', e => { held[e.key] = false; });
+addEventListener('keyup', e => {
+  held[e.key] = false;
+  const d = KEY_DIR[e.key];
+  // drop the direction only if no other still-held key maps to it (w vs Arrow)
+  if (d && !Object.keys(KEY_DIR).some(k => KEY_DIR[k] === d && held[k]))
+    dirOrder = dirOrder.filter(x => x !== d);
+});
 function pressed(keys) { return queue.some(k => keys.includes(k)); }
 
 // mouse: button 0 walks (click-to-move), button 2 locks a target.
@@ -91,15 +102,13 @@ addEventListener('mouseup', e => {
 });
 function clicked(button) { return clicks.some(c => c.b === button); }
 function dirHeld() {
-  if (held['ArrowUp'] || held['w']) return 'up';
-  if (held['ArrowDown'] || held['s']) return 'down';
-  if (held['ArrowLeft'] || held['a']) return 'left';
-  if (held['ArrowRight'] || held['d']) return 'right';
+  // the most recently pressed direction wins; when it's released the previous
+  // still-held one takes back over (hold D, tap W -> up, release W -> right)
+  if (dirOrder.length) return dirOrder[dirOrder.length - 1];
   // a tap quicker than one frame still turns/steps the hero
-  if (pressed(['ArrowUp', 'w'])) return 'up';
-  if (pressed(['ArrowDown', 's'])) return 'down';
-  if (pressed(['ArrowLeft', 'a'])) return 'left';
-  if (pressed(['ArrowRight', 'd'])) return 'right';
+  for (const [keys, dir] of [[['ArrowUp', 'w'], 'up'], [['ArrowDown', 's'], 'down'],
+    [['ArrowLeft', 'a'], 'left'], [['ArrowRight', 'd'], 'right']])
+    if (pressed(keys)) return dir;
   return null;
 }
 
@@ -212,6 +221,13 @@ function resetGame() {
   game.corpseOpen = null;
   game.lootDrag = null;
   game.talkingNpc = null;
+  game.log = [];
+  game.logOpen = true;
+}
+// combat/reward log — shown in the toggleable bottom-left window
+function logMsg(str) {
+  game.log.push(str);
+  if (game.log.length > 40) game.log.shift();
 }
 
 // ---------------------------------------------------------------- music & save
@@ -229,7 +245,7 @@ function saveGame() {
   localStorage.setItem(SAVE_KEY, JSON.stringify({
     hero: game.hero, won: game.won, steps: game.steps,
     mapId: game.mapId, floor: game.floor, autoloot: game.autoloot,
-    corpses: game.corpses, invOpen: game.invOpen,
+    corpses: game.corpses, invOpen: game.invOpen, logOpen: game.logOpen,
   }));
 }
 function loadGame() {
@@ -246,6 +262,7 @@ function loadGame() {
   game.corpseOpen = null;
   game.autoloot = d.autoloot !== false;
   game.invOpen = d.invOpen !== false;
+  game.logOpen = d.logOpen !== false;
   game.shop = null;
   const h = game.hero;
   // pre-64x40 saves may sit out of bounds on the new maps
@@ -684,12 +701,12 @@ function killEnemy(en) {
   en.dying = 0.45;
   sfx('Monster1');
   h.kills++; h.exp += e.exp; h.gold += e.gold;
-  addPop(`+${e.exp}exp`, en.px + 8, en.py - 20, '#9f9');
+  logMsg(`Defeated ${e.name}: +${e.exp} EXP, +${e.gold} gold`);
   if (Math.random() < 0.25) { // loot: autoloot pockets it, otherwise it falls
     const id = Math.random() < 0.7 ? 'bread' : 'potion';
     if (game.autoloot) {
       addItem(id, 1);
-      addPop(`+1 ${ITEMS[id].name}`, en.px + 8, en.py - 30, '#9f9');
+      logMsg(`Looted ${ITEMS[id].name} x1`);
       sfx('Item1');
     } else dropFloor(id, 1, en.tx, en.ty);
   }
@@ -698,7 +715,8 @@ function killEnemy(en) {
     recalcMax();
     h.hp = h.maxhp; h.mp = h.maxmp;
     sfx('Recovery2');
-    addPop('LEVEL UP! +3pts', h.px + 8, h.py - 22, '#ffe080');
+    logMsg(`LEVEL UP! Now Lv.${h.lv}  (+3 attribute points)`);
+    addPop('LEVEL UP!', h.px + 8, h.py - 22, '#ffe080');
   }
 }
 
@@ -1372,7 +1390,7 @@ function drawPops() {
 }
 
 // ---------------------------------------------------------------- game menu
-const ROOT_MENU = ['Inventory', 'Skills', 'Attribs', 'Status', 'Quest', 'Save', 'Load', 'Music', 'Autoloot', 'To Title'];
+const ROOT_MENU = ['Inventory', 'Skills', 'Attribs', 'Status', 'Quest', 'Save', 'Load', 'Music', 'Autoloot', 'Log', 'To Title'];
 function updateMenu(dt) {
   const m = game.menu, h = game.hero;
   if (m.msg) {
@@ -1400,6 +1418,9 @@ function updateMenu(dt) {
       sfx('Decision1');
     } else if (sel === 'Autoloot') {
       game.autoloot = !game.autoloot;
+      sfx('Decision1');
+    } else if (sel === 'Log') {
+      game.logOpen = !game.logOpen;
       sfx('Decision1');
     } else { // To Title
       sfx('Decision1');
@@ -1455,6 +1476,7 @@ function drawMenu() {
     if (m.mode === 'root' && m.cursor === i) drawCursor(MRX + 6, 14 + i * 16, 100, 16);
     const label = s === 'Music' ? 'Music: ' + (MidiPlayer.isEnabled() ? 'On' : 'Off')
       : s === 'Autoloot' ? 'Autoloot: ' + (game.autoloot ? 'On' : 'Off')
+      : s === 'Log' ? 'Log: ' + (game.logOpen ? 'On' : 'Off')
       : s === 'Inventory' ? 'Inventory: ' + (game.invOpen ? 'On' : 'Off') : s;
     text(label, MRX + 14, 18 + i * 16);
   });
@@ -1687,10 +1709,17 @@ function updateMap(dt) {
   for (const c of clicks) {
     if (game.invOpen && inPanel(c)) continue; // the panel owns its clicks
     if (game.corpseOpen && inCorpseWin(c)) continue; // handled above
-    if (c.b === 2) { // right-click: lock what's under the cursor (or clear)
-      const en = enemyAtPoint(c.x + cam.x, c.y + cam.y);
-      game.lock = en || null;
-      if (en) sfx('Cursor1');
+    if (c.b === 2) { // right-click: open your corpse, else lock what's under it
+      const wx = Math.floor((c.x + cam.x) / TS), wy = Math.floor((c.y + cam.y) / TS);
+      const co = corpseAt(wx, wy);
+      if (co && nearHero(wx, wy)) {
+        game.corpseOpen = co;
+        sfx('Decision1');
+      } else {
+        const en = enemyAtPoint(c.x + cam.x, c.y + cam.y);
+        game.lock = en || null;
+        if (en) sfx('Cursor1');
+      }
     } else if (c.b === 0 && !game.invDrag) {
       const wx = Math.floor((c.x + cam.x) / TS), wy = Math.floor((c.y + cam.y) / TS);
       const co = corpseAt(wx, wy);
@@ -1702,6 +1731,7 @@ function updateMap(dt) {
         if (c.dbl) pickupAt(wx, wy);
         else game.lootDrag = { tx: wx, ty: wy };
       } else {
+        game.lock = null; // clicking to move breaks the lock-follow
         startPathTo(wx, wy);
       }
     }
@@ -1827,7 +1857,7 @@ function drawMap() {
   // HUD
   drawWindow(4, 4, 126, overloaded() ? 45 : 34);
   text(`HP ${Math.floor(h.hp)}/${h.maxhp}  Lv.${h.lv}`, 12, 10);
-  text(`MP ${Math.floor(h.mp)}/${h.maxmp}  Kills ${h.kills}/5`, 12, 21);
+  text(`MP ${Math.floor(h.mp)}/${h.maxmp}`, 12, 21);
   if (overloaded()) text('OVERWEIGHT', 12, 32, '#f76');
   if (!game.dialogue) { // skill hotbar
     h.slots.forEach((id, i) => {
@@ -1848,6 +1878,7 @@ function drawMap() {
       ctx.globalAlpha = 1;
     }
   }
+  if (game.logOpen) drawLog();
   if (game.dialogue) {
     const d = game.dialogue;
     const dw = W - 8 - (game.invOpen ? 124 : 0);
@@ -1861,6 +1892,14 @@ function drawMap() {
   if (game.menu) drawMenu();
   if (game.shop) drawShop();
   if (game.itemPopup) drawItemPopup();
+}
+// toggleable combat/reward log, docked above the skill hotbar (bottom-left)
+function drawLog() {
+  const rows = 5, lh = 10, lw = 250, lhgt = rows * lh + 16;
+  const lx = 4, ly = H - 24 - 6 - lhgt;
+  drawWindow(lx, ly, lw, lhgt);
+  text('Log', lx + 8, ly + 4, '#bcd');
+  game.log.slice(-rows).forEach((s, i) => text(s, lx + 8, ly + 15 + i * lh, '#cde'));
 }
 function prop(t, x, y) {
   return {

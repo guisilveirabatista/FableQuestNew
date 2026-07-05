@@ -1,1 +1,3 @@
-
+- I should be able to click with the mouse 2 on my corpse and open it.
+- I should be able to use the mouse in all the menus.
+- I asked before to follow the enemy that has the lock in them, but I think we should remove that. I want another way to lock into an enemy. Hold Alt/Option and clicking on mouse 1 on an enemy should lock in, but not follow. Pressing F when there is a lock in should activate the "Follow" mode. When the follow is activated, a blue square should be shown around the enemy who is being followed. Be careful that this blue square does not overlap with the lock in square.
