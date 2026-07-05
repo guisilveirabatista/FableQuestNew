@@ -207,6 +207,8 @@ function resetGame() {
   game.invOpen = true;
   game.invFocus = null;
   game.invDrag = null;
+  game.itemPopup = null;
+  game.tipBtn = null;
 }
 
 // ---------------------------------------------------------------- music & save
@@ -635,6 +637,10 @@ function die() {
   h.mp = h.maxmp;
   h.dir = 'down';
   game.iframes = 2;
+  game.dialogue = null; // death closes whatever you were reading
+  game.menu = null;
+  game.shop = null;
+  game.itemPopup = null;
   addPop('You died!', h.px + 8, h.py - 14, '#f76');
 }
 
@@ -814,20 +820,20 @@ function updateProjectiles(dt) {
 // stats(). Bag contents weigh you down: past capacity (level + Strength) the
 // hero trudges at half speed. Worn gear weighs nothing — you're wearing it.
 const ITEMS = {
-  bread: { name: 'Bread', img: 'i_bread', w: 0.4, heal: 8, price: 10 },
-  meat: { name: 'Meat', img: 'i_meat', w: 0.8, heal: 25, price: 35 },
-  potion: { name: 'Potion', img: 'i_potion', w: 0.5, heal: 15, price: 25 },
-  sword1: { name: 'Bronze Sword', img: 'i_sword1', w: 3, slot: 'main', atk: 2, cut: true, price: 60 },
-  sword2: { name: 'Iron Sword', img: 'i_sword2', w: 5, slot: 'main', atk: 5, cut: true, price: 150 },
-  sword3: { name: 'Claymore', img: 'i_sword3', w: 8, slot: 'main', atk: 9, cut: true, twoH: true, price: 340 },
-  shield: { name: 'Buckler', img: 'i_shield', w: 4, slot: 'off', def: 2, price: 90 },
-  hat: { name: 'Felt Hat', img: 'i_hat', w: 0.5, slot: 'head', def: 1, price: 40 },
-  helm: { name: 'Iron Helm', img: 'i_helm', w: 3, slot: 'head', def: 3, price: 180 },
-  armor: { name: 'Breastplate', img: 'i_armor', w: 7, slot: 'torso', def: 4, price: 260 },
-  legs: { name: 'Greaves', img: 'i_legs', w: 4, slot: 'legs', def: 2, price: 120 },
-  boots: { name: 'Swift Boots', img: 'i_boots', w: 1.5, slot: 'boots', dodge: 3, price: 110 },
-  ring: { name: 'Lucky Ring', img: 'i_ring', w: 0.1, slot: 'acc', crit: 5, price: 200 },
-  amulet: { name: 'Ward Amulet', img: 'i_amulet', w: 0.2, slot: 'acc', mdef: 3, price: 200 },
+  bread: { name: 'Bread', img: 'i_bread', w: 0.4, heal: 8, price: 10, desc: 'Fresh from the city oven. Keeps a traveler going.' },
+  meat: { name: 'Meat', img: 'i_meat', w: 0.8, heal: 25, price: 35, desc: 'A hearty roast. The grocer swears it is not slime.' },
+  potion: { name: 'Potion', img: 'i_potion', w: 0.5, heal: 15, price: 25, desc: 'Bitter red brew that knits wounds shut.' },
+  sword1: { name: 'Bronze Sword', img: 'i_sword1', w: 3, slot: 'main', atk: 2, cut: true, price: 60, desc: 'A dull but honest blade for beginners.' },
+  sword2: { name: 'Iron Sword', img: 'i_sword2', w: 5, slot: 'main', atk: 5, cut: true, price: 150, desc: 'Solid smithing. Holds an edge through a long day.' },
+  sword3: { name: 'Claymore', img: 'i_sword3', w: 8, slot: 'main', atk: 9, cut: true, twoH: true, price: 340, desc: 'A massive two-hander. Needs both arms and some nerve.' },
+  shield: { name: 'Buckler', img: 'i_shield', w: 4, slot: 'off', def: 2, price: 90, desc: 'Small round shield. Better than an elbow.' },
+  hat: { name: 'Felt Hat', img: 'i_hat', w: 0.5, slot: 'head', def: 1, price: 40, desc: 'Stylish, and it keeps the sun off.' },
+  helm: { name: 'Iron Helm', img: 'i_helm', w: 3, slot: 'head', def: 3, price: 180, desc: 'Muffles your hearing, saves your skull.' },
+  armor: { name: 'Breastplate', img: 'i_armor', w: 7, slot: 'torso', def: 4, price: 260, desc: 'Polished plate. The smith is proud of this one.' },
+  legs: { name: 'Greaves', img: 'i_legs', w: 4, slot: 'legs', def: 2, price: 120, desc: 'Shin guards that have seen some kicks.' },
+  boots: { name: 'Swift Boots', img: 'i_boots', w: 1.5, slot: 'boots', dodge: 3, price: 110, desc: 'Light soles. You barely feel the ground.' },
+  ring: { name: 'Lucky Ring', img: 'i_ring', w: 0.1, slot: 'acc', crit: 5, price: 200, desc: 'A faint shimmer. Dice seem to like you more.' },
+  amulet: { name: 'Ward Amulet', img: 'i_amulet', w: 0.2, slot: 'acc', mdef: 3, price: 200, desc: 'An old charm that soaks up curses.' },
 };
 
 // body slots: what the hero wears. 'acc' items fit either accessory slot;
@@ -868,13 +874,15 @@ function equipTo(id, slot) {
   return true;
 }
 
-// persistent inventory panel, docked to the right edge: paper doll on top,
-// backpack grid below. Toggled with I (or menu > Inventory).
-const PANEL = { x: W - 124, y: 4, w: 120, h: H - 8 };
-const BAG_UI = { x: PANEL.x + 12, y: 190, C: 4, S: 26 };
+// persistent inventory, docked to the right edge as two separate windows:
+// the body paper-doll on top, the backpack below it. Toggled with I.
+const BODY_WIN = { x: W - 124, y: 4, w: 120, h: 148 };
+const BAG_WIN = { x: W - 124, y: 156, w: 120, h: H - 160 };
+const PANEL = { x: W - 124 }; // anything right of this belongs to the panel
+const BAG_UI = { x: BAG_WIN.x + 12, y: BAG_WIN.y + 30, C: 4, S: 26 };
 const BODY_UI = {
-  head: [PANEL.x + 48, 24], main: [PANEL.x + 16, 54], torso: [PANEL.x + 48, 54], off: [PANEL.x + 80, 54],
-  legs: [PANEL.x + 48, 84], acc1: [PANEL.x + 16, 114], boots: [PANEL.x + 48, 114], acc2: [PANEL.x + 80, 114],
+  head: [BODY_WIN.x + 48, 20], main: [BODY_WIN.x + 16, 50], torso: [BODY_WIN.x + 48, 50], off: [BODY_WIN.x + 80, 50],
+  legs: [BODY_WIN.x + 48, 80], acc1: [BODY_WIN.x + 16, 110], boots: [BODY_WIN.x + 48, 110], acc2: [BODY_WIN.x + 80, 110],
 };
 const BODY_LABEL = { head: 'Hd', main: 'Wpn', off: 'Off', torso: 'Tor', legs: 'Leg', boots: 'Bt', acc1: 'Ac', acc2: 'Ac' };
 const BODY_NAV = { // keyboard moves between slots, roughly matching the doll shape
@@ -902,12 +910,34 @@ function bodySlotAt(px, py) {
 }
 function inPanel(p) { return p.x >= PANEL.x; }
 
+// what item (if any) the mouse is hovering in the panel
+function panelHoverId() {
+  if (!game.invOpen || game.invDrag) return null;
+  const bi = bagCellAt(mouse.x, mouse.y);
+  if (bi >= 0) return bagIds()[bi];
+  const bs = bodySlotAt(mouse.x, mouse.y);
+  if (bs && game.hero.equip[bs]) return game.hero.equip[bs];
+  return null;
+}
+
 // mouse interactions on the live panel: click selects, double-click
 // uses/equips/unequips, drag moves gear (drag out of the panel to drop/unequip)
 function updateInvPanel() {
   const h = game.hero, ids = bagIds();
   game.invCursor = Math.min(game.invCursor || 0, Math.max(0, ids.length - 1));
   if (!game.invSlot) game.invSlot = 'torso';
+  // the tooltip's [?] button opens the item details popup and eats the click
+  if (game.tipBtn) {
+    const b = game.tipBtn;
+    const hit = clicks.find(c => c.b === 0 &&
+      c.x >= b.x && c.x < b.x + b.w && c.y >= b.y && c.y < b.y + b.h);
+    if (hit) {
+      game.itemPopup = b.id;
+      sfx('Decision1');
+      clicks = clicks.filter(c => c !== hit);
+      return;
+    }
+  }
   for (const c of clicks) {
     if (c.b !== 0 || !inPanel(c)) continue;
     const bi = bagCellAt(c.x, c.y), bs = bodySlotAt(c.x, c.y);
@@ -979,8 +1009,10 @@ function updateInvKeys() {
 function drawInvPanel() {
   const h = game.hero, ids = bagIds();
   game.invCursor = Math.min(game.invCursor || 0, Math.max(0, ids.length - 1));
-  drawWindow(PANEL.x, PANEL.y, PANEL.w, PANEL.h);
-  text('Body', PANEL.x + 46, 12, '#bcd');
+
+  // body window
+  drawWindow(BODY_WIN.x, BODY_WIN.y, BODY_WIN.w, BODY_WIN.h);
+  text('Body', BODY_WIN.x + 46, BODY_WIN.y + 6, '#bcd');
   const mainTwoH = h.equip.main && ITEMS[h.equip.main].twoH;
   for (const [slot, [x, y]] of Object.entries(BODY_UI)) {
     ctx.fillStyle = 'rgba(10,20,30,.5)';
@@ -1001,8 +1033,10 @@ function drawInvPanel() {
     if (game.invFocus === 'body' && game.invSlot === slot) drawCursor(x - 2, y - 2, 28, 28);
   }
 
-  text('Backpack', PANEL.x + 12, 156, '#bcd');
-  text(`${bagWeight().toFixed(1)}/${capacity()}kg`, PANEL.x + 12, 168,
+  // backpack window
+  drawWindow(BAG_WIN.x, BAG_WIN.y, BAG_WIN.w, BAG_WIN.h);
+  text('Backpack', BAG_WIN.x + 12, BAG_WIN.y + 7, '#bcd');
+  text(`${bagWeight().toFixed(1)}/${capacity()}kg`, BAG_WIN.x + 12, BAG_WIN.y + 18,
     overloaded() ? '#f76' : '#bcd');
   ids.forEach((id, i) => {
     const x = BAG_UI.x + (i % BAG_UI.C) * BAG_UI.S, y = BAG_UI.y + Math.floor(i / BAG_UI.C) * BAG_UI.S;
@@ -1011,21 +1045,46 @@ function drawInvPanel() {
     text('' + h.bag[id], x + 10, y + 12, '#ffe080');
   });
   if (!ids.length) text('Empty...', BAG_UI.x, BAG_UI.y + 4, '#999');
+  text('I:hide E:keys Q:drop', BAG_WIN.x + 10, BAG_WIN.y + BAG_WIN.h - 14, '#9cf');
 
-  const selId = game.invDrag ? game.invDrag.id
-    : game.invFocus === 'body' ? h.equip[game.invSlot] : ids[game.invCursor];
-  if (selId) {
-    const it = ITEMS[selId];
-    text(it.name, PANEL.x + 10, H - 46);
-    wrapText(itemInfo(it) + `  ${it.w}kg`, PANEL.x + 10, H - 34, PANEL.w - 20);
+  // hover tooltip: item name + a [?] button that opens the details popup
+  game.tipBtn = null;
+  const hovId = panelHoverId();
+  if (hovId) {
+    const it = ITEMS[hovId];
+    ctx.font = 'bold 8px "Courier New", monospace';
+    const tw = ctx.measureText(it.name).width + 26;
+    const tx = Math.max(4, Math.min(W - tw - 4, mouse.x - tw + 4));
+    const ty = Math.max(4, mouse.y - 22);
+    drawWindow(tx, ty, tw, 18);
+    text(it.name, tx + 6, ty + 5);
+    const bx = tx + tw - 15;
+    ctx.fillStyle = '#2a4a6a';
+    ctx.fillRect(bx, ty + 4, 11, 10);
+    ctx.strokeStyle = '#9cf';
+    ctx.strokeRect(bx + 0.5, ty + 4.5, 10, 9);
+    text('?', bx + 3, ty + 5, '#9cf');
+    game.tipBtn = { x: bx, y: ty + 4, w: 11, h: 10, id: hovId };
   }
-  text('I:hide E:keys Q:drop', PANEL.x + 10, H - 14, '#9cf');
 
   if (game.invDrag) { // ghost icon rides the cursor
     ctx.globalAlpha = 0.85;
     ctx.drawImage(img[ITEMS[game.invDrag.id].img], mouse.x - 9, mouse.y - 9, 18, 18);
     ctx.globalAlpha = 1;
   }
+}
+
+function drawItemPopup() {
+  const it = ITEMS[game.itemPopup];
+  const pw = 190, ph = 96;
+  const px = (W - pw) / 2, py = (H - ph) / 2;
+  drawWindow(px, py, pw, ph);
+  ctx.drawImage(img[it.img], px + 10, py + 10, 24, 24);
+  text(it.name, px + 42, py + 12, '#ffe080');
+  text(itemInfo(it), px + 42, py + 24, '#bcd');
+  wrapText(it.desc, px + 10, py + 44, pw - 22);
+  text(`Weight ${it.w}kg   Value ${it.price}g`, px + 10, py + ph - 26, '#bcd');
+  text('Click or Esc to close', px + 10, py + ph - 14, '#9cf');
 }
 function bagIds() { return Object.keys(ITEMS).filter(id => game.hero.bag[id] > 0); }
 function bagWeight() {
@@ -1421,21 +1480,13 @@ function updateNpcs(dt) {
 
 function updateMap(dt) {
   const h = game.hero;
+  // ------------------------------------------------- simulation
+  // The world never pauses (this is headed toward an MMORPG): NPCs, enemies,
+  // projectiles, regen and your own steps keep going while dialogue, menus,
+  // shops or popups are open. UI only captures *input*.
+  const captured = game.shop || game.menu || game.dialogue || game.itemPopup || game.invFocus;
   for (const p of game.pops) p.t += dt;
   game.pops = game.pops.filter(p => p.t < 0.8);
-  if (game.shop) { updateShop(); return; }
-  if (game.menu) { updateMenu(dt); return; }
-  if (game.dialogue) {
-    const d = game.dialogue;
-    d.chars += dt * 40;
-    if (pressed(CONFIRM) || clicked(0)) {
-      if (d.chars < d.pages[d.page].length) d.chars = 999;
-      else if (++d.page >= d.pages.length) game.dialogue = null;
-      else d.chars = 0;
-      sfx('Cursor1');
-    }
-    return;
-  }
   game.iframes = Math.max(0, game.iframes - dt);
   game.atkCool = Math.max(0, game.atkCool - dt);
   game.healFx = Math.max(0, game.healFx - dt);
@@ -1448,8 +1499,72 @@ function updateMap(dt) {
   updateProjectiles(dt);
   game.bolts.forEach(b => b.t += dt);
   game.bolts = game.bolts.filter(b => b.t < 0.25);
-
   if (game.lock && (game.lock.dead || game.lock.dying > 0)) game.lock = null;
+  // locked on and in reach: the sword strikes by itself, menus or not
+  if (game.lock && game.atkCool <= 0) {
+    const dir = faceToward(game.lock);
+    if (slashReaches(dir, game.lock)) { h.dir = dir; slash(); }
+  }
+
+  if (h.moving) {
+    const speed = (overloaded() ? 32 : 70) * dt; // trudge when the pack is too heavy
+    const gx = h.tx * TS, gy = h.ty * TS;
+    h.px += Math.sign(gx - h.px) * Math.min(speed, Math.abs(gx - h.px));
+    h.py += Math.sign(gy - h.py) * Math.min(speed, Math.abs(gy - h.py));
+    h.anim += dt * (overloaded() ? 4 : 8.75); // 2 anim units per tile: half a 4-step cycle
+    if (h.px === gx && h.py === gy) {
+      h.moving = false;
+      game.steps++;
+      const exit = cur().exits[h.tx + ',' + h.ty];
+      if (exit) { switchMap(...exit); return; }
+      if (game.autoloot) pickupAt(h.tx, h.ty);
+    }
+  } else {
+    const dir = captured ? null : dirHeld();
+    if (dir) {
+      game.path = null; // keyboard overrides click-to-move
+      h.dir = dir;
+      h.anim += dt * 8.75; // keeps stepping against walls, like RM2k
+      const d = DIRV[dir];
+      const nx = h.tx + d[0], ny = h.ty + d[1];
+      if (!isBlocked(nx, ny) && !enemyAt(nx, ny)) {
+        h.tx = nx; h.ty = ny; h.moving = true;
+      }
+    } else if (game.path) { // click-to-move keeps walking under any UI
+      const [nx, ny] = game.path[0];
+      h.dir = nx > h.tx ? 'right' : nx < h.tx ? 'left' : ny > h.ty ? 'down' : 'up';
+      if (!isBlocked(nx, ny) && !enemyAt(nx, ny)) {
+        game.path.shift();
+        h.tx = nx; h.ty = ny; h.moving = true;
+      } else { // something wandered into the route: replan to the same goal
+        const [gx, gy] = game.path[game.path.length - 1];
+        game.path = findPath(h.tx, h.ty, gx, gy);
+      }
+      if (game.path && !game.path.length) game.path = null;
+    } else h.anim = 1; // standing frame
+  }
+
+  // ------------------------------------------------- input routing
+  if (game.itemPopup) { // item details popup: any confirm/click closes
+    if (pressed(CANCEL) || pressed(CONFIRM) || clicked(0)) { game.itemPopup = null; sfx('Cancel1'); }
+    return;
+  }
+  if (game.invOpen) updateInvPanel(); // panel mouse works in every mode
+  if (game.shop) { updateShop(); return; }
+  if (game.menu) { updateMenu(dt); return; }
+  if (game.dialogue) {
+    const d = game.dialogue;
+    d.chars += dt * 40;
+    const tapped = pressed(CONFIRM) ||
+      clicks.some(c => c.b === 0 && !(game.invOpen && inPanel(c)));
+    if (tapped) {
+      if (d.chars < d.pages[d.page].length) d.chars = 999;
+      else if (++d.page >= d.pages.length) game.dialogue = null;
+      else d.chars = 0;
+      sfx('Cursor1');
+    }
+    return;
+  }
 
   // inventory panel: I toggles it, E cycles keyboard focus into it
   if (pressed(['i', 'I'])) {
@@ -1461,7 +1576,6 @@ function updateMap(dt) {
     game.invFocus = game.invFocus === null ? 'bag' : game.invFocus === 'bag' ? 'body' : null;
     sfx('Cursor1');
   }
-  if (game.invOpen) updateInvPanel();
 
   const cam = camPos(); // screen clicks land in the scrolled world
   for (const c of clicks) {
@@ -1487,49 +1601,6 @@ function updateMap(dt) {
     if (game.atkCool <= 0) slash();
   }
   for (let i = 0; i < 5; i++) if (pressed([String(i + 1)])) castSlot(i);
-  // locked on and in reach: the sword strikes by itself
-  if (game.lock && game.atkCool <= 0) {
-    const dir = faceToward(game.lock);
-    if (slashReaches(dir, game.lock)) { h.dir = dir; slash(); }
-  }
-
-  if (h.moving) {
-    const speed = (overloaded() ? 32 : 70) * dt; // trudge when the pack is too heavy
-    const gx = h.tx * TS, gy = h.ty * TS;
-    h.px += Math.sign(gx - h.px) * Math.min(speed, Math.abs(gx - h.px));
-    h.py += Math.sign(gy - h.py) * Math.min(speed, Math.abs(gy - h.py));
-    h.anim += dt * (overloaded() ? 4 : 8.75); // 2 anim units per tile: half a 4-step cycle
-    if (h.px === gx && h.py === gy) {
-      h.moving = false;
-      game.steps++;
-      const exit = cur().exits[h.tx + ',' + h.ty];
-      if (exit) { switchMap(...exit); return; }
-      if (game.autoloot) pickupAt(h.tx, h.ty);
-    }
-  } else {
-    const dir = dirHeld();
-    if (dir) {
-      game.path = null; // keyboard overrides click-to-move
-      h.dir = dir;
-      h.anim += dt * 8.75; // keeps stepping against walls, like RM2k
-      const d = DIRV[dir];
-      const nx = h.tx + d[0], ny = h.ty + d[1];
-      if (!isBlocked(nx, ny) && !enemyAt(nx, ny)) {
-        h.tx = nx; h.ty = ny; h.moving = true;
-      }
-    } else if (game.path) {
-      const [nx, ny] = game.path[0];
-      h.dir = nx > h.tx ? 'right' : nx < h.tx ? 'left' : ny > h.ty ? 'down' : 'up';
-      if (!isBlocked(nx, ny) && !enemyAt(nx, ny)) {
-        game.path.shift();
-        h.tx = nx; h.ty = ny; h.moving = true;
-      } else { // something wandered into the route: replan to the same goal
-        const [gx, gy] = game.path[game.path.length - 1];
-        game.path = findPath(h.tx, h.ty, gx, gy);
-      }
-      if (game.path && !game.path.length) game.path = null;
-    } else h.anim = 1; // standing frame
-  }
 }
 
 const DIRROW = { up: 0, right: 1, down: 2, left: 3 };
@@ -1645,7 +1716,7 @@ function drawMap() {
   if (game.invOpen) drawInvPanel();
   if (game.dialogue) {
     const d = game.dialogue;
-    const dw = W - 8 - (game.invOpen ? PANEL.w + 4 : 0);
+    const dw = W - 8 - (game.invOpen ? 124 : 0);
     drawWindow(4, H - 62, dw, 58);
     const full = d.pages[d.page];
     const shown = full.slice(0, Math.floor(d.chars));
@@ -1655,6 +1726,7 @@ function drawMap() {
   }
   if (game.menu) drawMenu();
   if (game.shop) drawShop();
+  if (game.itemPopup) drawItemPopup();
 }
 function prop(t, x, y) {
   return {

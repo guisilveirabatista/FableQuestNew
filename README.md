@@ -30,6 +30,12 @@ weapon equipped. You start at the **spawn point** in the city plaza; dying is
 not the end: your body stays where you fell and you wake up back at the spawn
 with full HP, gear intact.
 
+**The world never pauses.** Dialogue, menus, shops and popups only capture
+your input — NPCs wander, monsters chase and hit, projectiles fly, regen ticks
+and click-to-move keeps walking underneath (groundwork for the planned
+multiplayer/MMORPG mode, where the world can't wait for any one player).
+Auto-melee on a locked target keeps swinging even while you read.
+
 Skills: **Fire** (4 MP fireball, homes in on your lock), **Heal** (6 MP, +15 HP),
 **Spin** (3 MP sword sweep all around you), **Bolt** (6 MP lightning on your lock
 or the nearest foe). HP and MP both regenerate slowly on their own.
@@ -43,11 +49,12 @@ Talk to a keeper to browse; Enter buys.
 
 ## Backpack, equipment & weight
 
-Press **I** (or menu → Inventory) to toggle the always-on inventory panel,
-docked to the right edge of the screen: a **paper doll** with body slots —
-head, weapon hand, off-hand (shield), torso, legs, boots and two accessory
-slots — with your backpack (icon grid, counts in the corner) below it. The
-game keeps running while it's open. Equip gear three ways:
+Press **I** (or menu → Inventory) to toggle the always-on inventory, docked to
+the right edge as two windows: a **Body** paper doll on top — head, weapon
+hand, off-hand (shield), torso, legs, boots and two accessory slots — and the
+**Backpack** below it (icon grid, counts in the corner). Hovering an item
+shows its name in a tooltip; click the tooltip's **[?]** button for a popup
+with the item's stats, description, weight and value. Equip gear three ways:
 
 - **Drag** an item from the backpack onto a body slot with the mouse (valid
   slots light up green); drag gear off the body to unequip, between the two
