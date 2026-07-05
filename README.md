@@ -13,14 +13,22 @@ Open `index.html` in a browser (double-click it, or `open index.html`).
 | Key | Action |
 | --- | --- |
 | Arrows / WASD | Move (the most recently pressed direction wins; release it and the other held direction takes back over) / navigate menus |
-| Left click | Walk to the clicked tile (the hero finds his own way around obstacles). Clicking to move cancels a lock |
-| Right click | Lock on to the enemy under the cursor (right-click empty ground to unlock) |
+| Left click | Walk to the clicked tile (the hero finds his own way around obstacles). Clicking to move cancels Follow |
+| Alt/Option + left click | Lock the enemy under the cursor and **Follow** it — the hero walks after it (blue marker) until it's in reach |
+| Right click | Lock the enemy under the cursor for attack (no follow), or open your corpse if you're next to it (right-click empty ground to unlock) |
+| F | Toggle **Follow** on the current lock (shown by a blue marker outside the yellow lock) |
 | Enter / Space / Z | Talk or read when facing someone, otherwise swing your sword |
 | 1–5 | Cast the skill equipped in that hotbar slot (equip via menu → Skills) |
-| Tab | Lock on to the nearest enemy (press again to cycle). While locked, your character walks after the target on his own, the sword strikes by itself in reach, and fireballs home in on it — even diagonally. Clicking to move breaks the lock |
+| Tab | Lock on to the nearest enemy (press again to cycle) |
 | I | Show/hide the inventory panel (body + backpack, docked on the right) |
 | E | Focus the inventory panel for keyboard use (cycles backpack → body → off) |
 | Esc / X | Open the game menu (Inventory, Skills, Attribs, Status, Quest, Save, Load, Music, Autoloot, Log, To Title) |
+
+While a target is **locked** (yellow marker) your sword strikes by itself when
+the enemy is in reach and fireballs home in on it, but the hero holds position.
+Press **F** to add **Follow** (blue marker) so he chases the target too. Every
+menu and shop is fully mouse-driven — click a row to select, click again (or
+double-click, for shop items) to act, and click outside the window to close it.
 
 Kills toward the quest are tracked in the Status and Quest screens (not the
 HUD). A toggleable **Log** window (bottom-left, menu → Log) records combat

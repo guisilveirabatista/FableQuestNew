@@ -93,7 +93,7 @@ cv.addEventListener('mousedown', e => {
   const dbl = e.button === 0 && now - lastClick.t < 400 &&
     Math.abs(p.x - lastClick.x) < 8 && Math.abs(p.y - lastClick.y) < 8;
   if (e.button === 0) lastClick = { t: dbl ? 0 : now, x: p.x, y: p.y };
-  clicks.push({ b: e.button, x: p.x, y: p.y, dbl });
+  clicks.push({ b: e.button, x: p.x, y: p.y, dbl, alt: e.altKey });
   if (!audioOk) { audioOk = true; syncMusic(); }
 });
 addEventListener('mouseup', e => {
@@ -207,6 +207,7 @@ function resetGame() {
   game.slashFx = null;
   game.healFx = 0;
   game.lock = null;
+  game.follow = false;
   game.path = null;
   game.mapId = SPAWN.map;
   game.floor = [];
@@ -1242,19 +1243,30 @@ function openShop(who) {
   game.shop = { who, cursor: 0 };
   sfx('Decision1');
 }
+function shopBuy() {
+  const s = game.shop, h = game.hero, it = ITEMS[SHOPS[s.who].stock[s.cursor]];
+  if (h.gold < it.price) { sfx('Buzzer1'); return; }
+  h.gold -= it.price;
+  addItem(SHOPS[s.who].stock[s.cursor], 1);
+  sfx('Item1');
+  addPop(`+1 ${it.name}`, h.px + 8, h.py - 12, '#9f9');
+}
 function updateShop() {
-  const s = game.shop, h = game.hero, stock = SHOPS[s.who].stock;
+  const s = game.shop, stock = SHOPS[s.who].stock;
+  const SX = (W - 240) / 2, SY = (H - stock.length * 18 - 74) / 2; // matches drawShop
+  for (const c of clicks) {
+    if (c.b !== 0) continue;
+    if (!hit(c, SX, SY, 240, stock.length * 18 + 74)) { game.shop = null; sfx('Cancel1'); return; }
+    for (let i = 0; i < stock.length; i++)
+      if (hit(c, SX + 6, SY + 20 + i * 18, 228, 18)) { // click selects, dbl-click buys
+        s.cursor = i;
+        if (c.dbl) shopBuy(); else sfx('Cursor1');
+      }
+  }
   if (pressed(CANCEL)) { game.shop = null; sfx('Cancel1'); return; }
   if (pressed(['ArrowUp', 'w'])) { s.cursor = (s.cursor + stock.length - 1) % stock.length; sfx('Cursor1'); }
   if (pressed(['ArrowDown', 's'])) { s.cursor = (s.cursor + 1) % stock.length; sfx('Cursor1'); }
-  if (pressed(CONFIRM)) {
-    const id = stock[s.cursor], it = ITEMS[id];
-    if (h.gold < it.price) { sfx('Buzzer1'); return; }
-    h.gold -= it.price;
-    addItem(id, 1);
-    sfx('Item1');
-    addPop(`+1 ${it.name}`, h.px + 8, h.py - 12, '#9f9');
-  }
+  if (pressed(CONFIRM)) shopBuy();
 }
 function drawShop() {
   const s = game.shop, h = game.hero, shop = SHOPS[s.who], stock = shop.stock;
@@ -1272,7 +1284,7 @@ function drawShop() {
   const it = ITEMS[stock[s.cursor]];
   text(itemInfo(it), SX + 12, SY + stock.length * 18 + 26, '#bcd');
   text(`Weight ${it.w}   (carrying ${bagWeight().toFixed(1)}/${capacity()})`, SX + 12, SY + stock.length * 18 + 40, '#bcd');
-  text('Enter: buy   Esc: leave', SX + 12, SY + stock.length * 18 + 56, '#9cf');
+  text('Enter / dbl-click: buy   Esc: leave', SX + 12, SY + stock.length * 18 + 56, '#9cf');
 }
 
 // tint buffer for colored hit-flashes on 24x32 charas
@@ -1318,6 +1330,15 @@ function drawLockBox() {
   ctx.fillStyle = '#1a2a3a';
   drawCorners(x + 1, y + 1, w, hh, L);
   ctx.fillStyle = '#ffe080';
+  drawCorners(x, y, w, hh, L);
+}
+// follow marker: a blue bracket that sits one ring outside the yellow lock box
+function drawFollowBox() {
+  const en = game.lock;
+  const x = en.px - 8, y = en.py - 17, w = 32, hh = 39, L = 6;
+  ctx.fillStyle = '#0a1424';
+  drawCorners(x + 1, y + 1, w, hh, L);
+  ctx.fillStyle = '#4bacff';
   drawCorners(x, y, w, hh, L);
 }
 function drawCorners(x, y, w, h, L) {
@@ -1391,68 +1412,86 @@ function drawPops() {
 
 // ---------------------------------------------------------------- game menu
 const ROOT_MENU = ['Inventory', 'Skills', 'Attribs', 'Status', 'Quest', 'Save', 'Load', 'Music', 'Autoloot', 'Log', 'To Title'];
+function rootMenuSelect(sel) {
+  const m = game.menu;
+  if (sel === 'Inventory') { game.invOpen = !game.invOpen; game.menu = null; sfx('Decision1'); }
+  else if (sel === 'Skills') { m.mode = 'skills'; m.cursor2 = 0; m.assign = false; sfx('Decision1'); }
+  else if (sel === 'Attribs') { m.mode = 'attribs'; m.cursor2 = 0; sfx('Decision1'); }
+  else if (sel === 'Status' || sel === 'Quest') { m.mode = sel.toLowerCase(); sfx('Decision1'); }
+  else if (sel === 'Save') { saveGame(); m.msg = 'Game saved!'; m.msgT = 0; sfx('Recovery1'); }
+  else if (sel === 'Load') {
+    if (loadGame()) { m.msg = 'Game loaded!'; m.msgT = 0; sfx('Recovery1'); }
+    else { m.msg = 'No saved game.'; m.msgT = 0; sfx('Buzzer1'); }
+  } else if (sel === 'Music') {
+    MidiPlayer.setEnabled(!MidiPlayer.isEnabled());
+    if (MidiPlayer.isEnabled()) syncMusic();
+    sfx('Decision1');
+  } else if (sel === 'Autoloot') { game.autoloot = !game.autoloot; sfx('Decision1'); }
+  else if (sel === 'Log') { game.logOpen = !game.logOpen; sfx('Decision1'); }
+  else { // To Title
+    sfx('Decision1');
+    game.menu = null;
+    game.scene = 'title';
+    game.titleCursor = 0;
+    syncMusic();
+  }
+}
+function assignSkillSlot(id, i) {
+  const h = game.hero, old = h.slots.indexOf(id);
+  if (old === i) h.slots[i] = null; // same slot again: unequip
+  else { if (old >= 0) h.slots[old] = null; h.slots[i] = id; }
+  sfx('Decision1');
+}
+function hit(c, x, y, w, hgt) { return c.x >= x && c.x < x + w && c.y >= y && c.y < y + hgt; }
+
 function updateMenu(dt) {
   const m = game.menu, h = game.hero;
   if (m.msg) {
     m.msgT += dt;
-    if (m.msgT > 1.1 || pressed(CONFIRM)) m.msg = null;
+    if (m.msgT > 1.1 || pressed(CONFIRM) || clicked(0)) m.msg = null;
     return;
   }
+  const mc = clicks.filter(c => c.b === 0); // left clicks route through the menu
+  const LX = MRX - 200; // must match drawMenu
   if (m.mode === 'root') {
+    for (const c of mc) {
+      let acted = false;
+      for (let i = 0; i < ROOT_MENU.length; i++)
+        if (hit(c, MRX + 6, 14 + i * 16, 100, 16)) { m.cursor = i; rootMenuSelect(ROOT_MENU[i]); acted = true; break; }
+      if (!acted && !hit(c, MRX, 8, 112, ROOT_MENU.length * 16 + 40)) { game.menu = null; sfx('Cancel1'); return; }
+      if (!game.menu || game.menu.mode !== 'root') return;
+    }
     if (pressed(['ArrowUp', 'w'])) { m.cursor = (m.cursor + ROOT_MENU.length - 1) % ROOT_MENU.length; sfx('Cursor1'); }
     if (pressed(['ArrowDown', 's'])) { m.cursor = (m.cursor + 1) % ROOT_MENU.length; sfx('Cursor1'); }
     if (pressed(CANCEL)) { game.menu = null; sfx('Cancel1'); return; }
-    if (!pressed(CONFIRM)) return;
-    const sel = ROOT_MENU[m.cursor];
-    if (sel === 'Inventory') { game.invOpen = !game.invOpen; game.menu = null; sfx('Decision1'); }
-    else if (sel === 'Skills') { m.mode = 'skills'; m.cursor2 = 0; m.assign = false; sfx('Decision1'); }
-    else if (sel === 'Attribs') { m.mode = 'attribs'; m.cursor2 = 0; sfx('Decision1'); }
-    else if (sel === 'Status' || sel === 'Quest') { m.mode = sel.toLowerCase(); sfx('Decision1'); }
-    else if (sel === 'Save') { saveGame(); m.msg = 'Game saved!'; m.msgT = 0; sfx('Recovery1'); }
-    else if (sel === 'Load') {
-      if (loadGame()) { m.msg = 'Game loaded!'; m.msgT = 0; sfx('Recovery1'); }
-      else { m.msg = 'No saved game.'; m.msgT = 0; sfx('Buzzer1'); }
-    } else if (sel === 'Music') {
-      MidiPlayer.setEnabled(!MidiPlayer.isEnabled());
-      if (MidiPlayer.isEnabled()) syncMusic();
-      sfx('Decision1');
-    } else if (sel === 'Autoloot') {
-      game.autoloot = !game.autoloot;
-      sfx('Decision1');
-    } else if (sel === 'Log') {
-      game.logOpen = !game.logOpen;
-      sfx('Decision1');
-    } else { // To Title
-      sfx('Decision1');
-      game.menu = null;
-      game.scene = 'title';
-      game.titleCursor = 0;
-      syncMusic();
-    }
+    if (pressed(CONFIRM)) rootMenuSelect(ROOT_MENU[m.cursor]);
   } else if (m.mode === 'skills') {
     const ids = Object.keys(SKILLS);
+    for (const c of mc) {
+      if (!hit(c, LX, 8, 188, ids.length * 16 + 64)) { m.mode = 'root'; sfx('Cancel1'); return; }
+      for (let i = 0; i < ids.length; i++) // click a skill row: select it
+        if (hit(c, LX + 6, 14 + i * 16, 176, 16)) { m.cursor2 = i; m.assign = true; sfx('Cursor1'); }
+      for (let j = 0; j < 5; j++) // click a hotbar slot box: assign
+        if (hit(c, LX + 12 + j * 20, ids.length * 16 + 40, 16, 16)) assignSkillSlot(ids[m.cursor2], j);
+    }
     if (m.assign) { // waiting for a slot number
       if (pressed(CANCEL)) { m.assign = false; sfx('Cancel1'); return; }
-      for (let i = 0; i < 5; i++) {
-        if (!pressed([String(i + 1)])) continue;
-        const id = ids[m.cursor2];
-        const old = h.slots.indexOf(id);
-        if (old === i) h.slots[i] = null; // same slot again: unequip
-        else {
-          if (old >= 0) h.slots[old] = null;
-          h.slots[i] = id;
-        }
-        m.assign = false;
-        sfx('Decision1');
-        return;
-      }
-      return;
+      for (let i = 0; i < 5; i++) if (pressed([String(i + 1)])) { assignSkillSlot(ids[m.cursor2], i); m.assign = false; return; }
     }
     if (pressed(CANCEL)) { m.mode = 'root'; sfx('Cancel1'); return; }
     if (pressed(['ArrowUp', 'w'])) { m.cursor2 = (m.cursor2 + ids.length - 1) % ids.length; sfx('Cursor1'); }
     if (pressed(['ArrowDown', 's'])) { m.cursor2 = (m.cursor2 + 1) % ids.length; sfx('Cursor1'); }
     if (pressed(CONFIRM)) { m.assign = true; sfx('Decision1'); }
   } else if (m.mode === 'attribs') {
+    for (const c of mc) {
+      if (!hit(c, LX, 8, 100, ATTRS.length * 15 + 34)) { m.mode = 'root'; sfx('Cancel1'); return; }
+      for (let i = 0; i < ATTRS.length; i++)
+        if (hit(c, LX + 4, 27 + i * 15, 92, 15)) { // click an attribute: spend a point
+          m.cursor2 = i;
+          if (h.points > 0) { h.attr[ATTRS[i][0]]++; h.points--; recalcMax(); sfx('Decision1'); }
+          else sfx('Buzzer1');
+        }
+    }
     if (pressed(CANCEL)) { m.mode = 'root'; sfx('Cancel1'); return; }
     if (pressed(['ArrowUp', 'w'])) { m.cursor2 = (m.cursor2 + ATTRS.length - 1) % ATTRS.length; sfx('Cursor1'); }
     if (pressed(['ArrowDown', 's'])) { m.cursor2 = (m.cursor2 + 1) % ATTRS.length; sfx('Cursor1'); }
@@ -1465,7 +1504,7 @@ function updateMenu(dt) {
       } else sfx('Buzzer1');
     }
   } else { // status / quest
-    if (pressed(CONFIRM) || pressed(CANCEL)) { m.mode = 'root'; sfx('Cancel1'); }
+    if (pressed(CONFIRM) || pressed(CANCEL) || clicked(0)) { m.mode = 'root'; sfx('Cancel1'); }
   }
 }
 const MRX = (W - 112) / 2; // root menu, centered
@@ -1485,7 +1524,7 @@ function drawMenu() {
   const LX = MRX - 200; // sub-screens open just left of the menu column
   if (m.mode === 'skills') {
     const ids = Object.keys(SKILLS);
-    drawWindow(LX, 8, 188, ids.length * 16 + 48);
+    drawWindow(LX, 8, 188, ids.length * 16 + 64);
     ids.forEach((id, i) => {
       const sk = SKILLS[id], slot = h.slots.indexOf(id);
       if (m.cursor2 === i) drawCursor(LX + 6, 14 + i * 16, 176, 16);
@@ -1493,9 +1532,14 @@ function drawMenu() {
       text(sk.mp + 'MP', LX + 80, 18 + i * 16, '#bcd');
       if (slot >= 0) text(`[${slot + 1}]`, LX + 120, 18 + i * 16, '#ffe080');
     });
-    wrapText(SKILLS[ids[m.cursor2]].desc, LX + 12, ids.length * 16 + 22, 164);
-    text(m.assign ? 'Press 1-5 (same slot clears)' : 'Enter: pick a slot', LX + 12, ids.length * 16 + 44,
-      m.assign ? '#ffe080' : '#9cf');
+    text('Slots (click to assign):', LX + 12, ids.length * 16 + 26, '#9cf');
+    for (let j = 0; j < 5; j++) { // clickable hotbar slot boxes
+      const bx = LX + 12 + j * 20, by = ids.length * 16 + 40;
+      drawWindow(bx, by, 16, 16);
+      text(String(j + 1), bx + 2, by - 8, '#9cf');
+      const sid = h.slots[j];
+      if (sid) text(SKILLS[sid].name[0], bx + 5, by + 4, sid === ids[m.cursor2] ? '#ffe080' : '#fff');
+    }
   } else if (m.mode === 'attribs') {
     const st = stats();
     drawWindow(LX, 8, 100, ATTRS.length * 15 + 34);
@@ -1590,7 +1634,7 @@ function updateMap(dt) {
   updateProjectiles(dt);
   game.bolts.forEach(b => b.t += dt);
   game.bolts = game.bolts.filter(b => b.t < 0.25);
-  if (game.lock && (game.lock.dead || game.lock.dying > 0)) game.lock = null;
+  if (game.lock && (game.lock.dead || game.lock.dying > 0)) { game.lock = null; game.follow = false; }
   // locked on and in reach: the sword strikes by itself, menus or not
   if (game.lock && game.atkCool <= 0) {
     const dir = faceToward(game.lock);
@@ -1631,8 +1675,8 @@ function updateMap(dt) {
         game.path = findPath(h.tx, h.ty, gx, gy);
       }
       if (game.path && !game.path.length) game.path = null;
-    } else if (game.lock && !game.lock.dead && game.lock.dying <= 0) {
-      // locked on: keep after the target until the sword can reach it
+    } else if (game.follow && game.lock && !game.lock.dead && game.lock.dying <= 0) {
+      // follow mode (F): keep walking after the locked target until in reach
       const en = game.lock;
       const dx = en.tx - h.tx, dy = en.ty - h.ty;
       if (Math.max(Math.abs(dx), Math.abs(dy)) > 1 || (dx !== 0 && dy !== 0)) {
@@ -1709,7 +1753,7 @@ function updateMap(dt) {
   for (const c of clicks) {
     if (game.invOpen && inPanel(c)) continue; // the panel owns its clicks
     if (game.corpseOpen && inCorpseWin(c)) continue; // handled above
-    if (c.b === 2) { // right-click: open your corpse, else lock what's under it
+    if (c.b === 2) { // right-click: open your corpse, else lock for attack (no follow)
       const wx = Math.floor((c.x + cam.x) / TS), wy = Math.floor((c.y + cam.y) / TS);
       const co = corpseAt(wx, wy);
       if (co && nearHero(wx, wy)) {
@@ -1718,8 +1762,12 @@ function updateMap(dt) {
       } else {
         const en = enemyAtPoint(c.x + cam.x, c.y + cam.y);
         game.lock = en || null;
+        game.follow = false;
         if (en) sfx('Cursor1');
       }
+    } else if (c.b === 0 && c.alt) { // Alt+click locks an enemy AND follows it
+      const en = enemyAtPoint(c.x + cam.x, c.y + cam.y);
+      if (en) { game.lock = en; game.follow = true; sfx('Decision1'); }
     } else if (c.b === 0 && !game.invDrag) {
       const wx = Math.floor((c.x + cam.x) / TS), wy = Math.floor((c.y + cam.y) / TS);
       const co = corpseAt(wx, wy);
@@ -1731,7 +1779,7 @@ function updateMap(dt) {
         if (c.dbl) pickupAt(wx, wy);
         else game.lootDrag = { tx: wx, ty: wy };
       } else {
-        game.lock = null; // clicking to move breaks the lock-follow
+        game.follow = false; // clicking to move cancels follow (keeps the lock)
         startPathTo(wx, wy);
       }
     }
@@ -1751,6 +1799,10 @@ function updateMap(dt) {
   }
   if (game.invFocus) { updateInvKeys(); return; } // arrows/Enter/Q work the panel
   if (pressed(['Tab'])) cycleLock();
+  if (pressed(['f', 'F'])) { // toggle follow mode on the current lock
+    if (game.lock) { game.follow = !game.follow; sfx(game.follow ? 'Decision1' : 'Cancel1'); }
+    else sfx('Buzzer1');
+  }
   if (pressed(CONFIRM)) {
     if (interact()) { queue = []; game.path = null; return; }
     if (game.atkCool <= 0) slash();
@@ -1848,6 +1900,7 @@ function drawMap() {
     ctx.fillRect(dx * TS + 6, dy * TS + 6, 4, 4);
   }
   if (game.lock) drawLockBox();
+  if (game.follow && game.lock) drawFollowBox();
   if (game.slashFx) drawSlash();
   drawProjectiles();
   drawBolts();
