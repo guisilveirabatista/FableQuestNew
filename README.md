@@ -22,9 +22,13 @@ Open `index.html` in a browser (double-click it, or `open index.html`).
 | E | Focus the inventory panel for keyboard use (cycles backpack → body → off) |
 | Esc / X | Open the game menu (Inventory, Skills, Attribs, Status, Quest, Save, Load, Music, Autoloot, To Title) |
 
-The screen is 640×400 (40×25 tiles) — each map fills it entirely. You start at
-the **spawn point** in the city plaza; dying is not the end: your body stays
-where you fell and you wake up back at the spawn with full HP, gear intact.
+The game fills the whole window, whatever its aspect ratio — the viewport is
+sized to the window at an integer pixel scale (no stretching, no black bars)
+and the camera follows the hero across the 40×25-tile maps. Unarmed attacks
+land a punch (impact burst); the slicing streak appears only with a cutting
+weapon equipped. You start at the **spawn point** in the city plaza; dying is
+not the end: your body stays where you fell and you wake up back at the spawn
+with full HP, gear intact.
 
 Skills: **Fire** (4 MP fireball, homes in on your lock), **Heal** (6 MP, +15 HP),
 **Spin** (3 MP sword sweep all around you), **Bolt** (6 MP lightning on your lock

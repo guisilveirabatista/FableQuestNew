@@ -1,19 +1,33 @@
 // Fable Quest — a mini action RPG built on the RPG Maker 2003 RTP assets.
-// 640x400 internal resolution (40x25 tiles, the whole map on screen),
-// scaled to fill the window in CSS with pixelated rendering.
+// The canvas fills the whole window at an integer pixel scale (no stretching,
+// no letterboxing): the viewport matches the window's aspect ratio and a
+// camera follows the hero across the 40x25-tile maps.
 
 'use strict';
 
 const cv = document.getElementById('screen');
 const ctx = cv.getContext('2d');
-ctx.imageSmoothingEnabled = false;
 
 const TS = 16, MW = 40, MH = 25;
+// pick the smallest integer scale that keeps the viewport within the map
+const SCALE = Math.max(1, Math.ceil(Math.max(
+  window.innerWidth / (MW * TS), window.innerHeight / (MH * TS))));
+cv.width = Math.min(MW * TS, Math.ceil(window.innerWidth / SCALE));
+cv.height = Math.min(MH * TS, Math.ceil(window.innerHeight / SCALE));
 const W = cv.width, H = cv.height;
+ctx.imageSmoothingEnabled = false;
+
+function camPos() { // camera centered on the hero, clamped to the map
+  const h = game.hero;
+  return {
+    x: Math.max(0, Math.min(MW * TS - W, Math.round(h.px) + 8 - Math.floor(W / 2))),
+    y: Math.max(0, Math.min(MH * TS - H, Math.round(h.py) + 8 - Math.floor(H / 2))),
+  };
+}
 
 // ---------------------------------------------------------------- assets
 const IMAGES = ['chipset', 'hero', 'npc', 'custom', 'knight', 'system', 'title',
-  'monsters', 'slash', 'flame',
+  'monsters', 'slash', 'flame', 'punch',
   'i_potion', 'i_bread', 'i_meat', 'i_sword1', 'i_sword2', 'i_sword3',
   'i_hat', 'i_helm', 'i_shield', 'i_armor', 'i_legs', 'i_boots', 'i_ring', 'i_amulet'];
 const img = {};
@@ -661,9 +675,17 @@ function killEnemy(en) {
 
 function slash() {
   const h = game.hero;
+  const wpn = h.equip.main && ITEMS[h.equip.main];
   game.atkCool = 1.0 / stats().aspd; // ponderous at Lv.1 — Agility speeds it up
-  game.slashFx = { t: 0, dir: h.dir };
-  sfx('Sword1');
+  // the slicing streak belongs to cutting weapons; bare fists (or anything
+  // blunt) land an impact burst instead
+  if (wpn && wpn.cut) {
+    game.slashFx = { t: 0, dir: h.dir };
+    sfx('Sword1');
+  } else {
+    game.slashFx = { t: 0, dir: h.dir, punch: true, dur: 0.24 };
+    sfx('Blow1');
+  }
   for (const en of game.enemies) {
     if (en.dying > 0 || en.dead) continue;
     if (slashReaches(h.dir, en)) meleeHit(en);
@@ -795,9 +817,9 @@ const ITEMS = {
   bread: { name: 'Bread', img: 'i_bread', w: 0.4, heal: 8, price: 10 },
   meat: { name: 'Meat', img: 'i_meat', w: 0.8, heal: 25, price: 35 },
   potion: { name: 'Potion', img: 'i_potion', w: 0.5, heal: 15, price: 25 },
-  sword1: { name: 'Bronze Sword', img: 'i_sword1', w: 3, slot: 'main', atk: 2, price: 60 },
-  sword2: { name: 'Iron Sword', img: 'i_sword2', w: 5, slot: 'main', atk: 5, price: 150 },
-  sword3: { name: 'Claymore', img: 'i_sword3', w: 8, slot: 'main', atk: 9, twoH: true, price: 340 },
+  sword1: { name: 'Bronze Sword', img: 'i_sword1', w: 3, slot: 'main', atk: 2, cut: true, price: 60 },
+  sword2: { name: 'Iron Sword', img: 'i_sword2', w: 5, slot: 'main', atk: 5, cut: true, price: 150 },
+  sword3: { name: 'Claymore', img: 'i_sword3', w: 8, slot: 'main', atk: 9, cut: true, twoH: true, price: 340 },
   shield: { name: 'Buckler', img: 'i_shield', w: 4, slot: 'off', def: 2, price: 90 },
   hat: { name: 'Felt Hat', img: 'i_hat', w: 0.5, slot: 'head', def: 1, price: 40 },
   helm: { name: 'Iron Helm', img: 'i_helm', w: 3, slot: 'head', def: 3, price: 180 },
@@ -1170,6 +1192,11 @@ function drawSlash() {
     ctx.translate(h.px + 8, h.py + 8);
     ctx.rotate(f.t / f.dur * Math.PI * 2);
     ctx.drawImage(img.slash, 2 * 96, 0, 96, 96, TS - 22, -22, 44, 44);
+  } else if (f.punch) { // unarmed: expanding impact burst on the struck tile
+    const i = Math.min(3, Math.floor(f.t / 0.06));
+    const d = DIRV[f.dir];
+    ctx.translate(h.px + 8 + d[0] * TS, h.py + 8 + d[1] * TS);
+    ctx.drawImage(img.punch, i * 96, 0, 96, 96, -16, -16, 32, 32);
   } else {
     const i = Math.min(2, Math.floor(f.t / 0.06)); // frames 0-2: growing streak
     const d = DIRV[f.dir];
@@ -1185,8 +1212,8 @@ function drawBolts() {
   for (const b of game.bolts) {
     ctx.strokeStyle = Math.floor(b.t * 30) % 2 ? '#ffe080' : '#fff';
     ctx.beginPath();
-    ctx.moveTo(b.x + rnd(9) - 4, 0);
-    for (let y = 8; y < b.y; y += 8) ctx.lineTo(b.x + rnd(9) - 4, y);
+    ctx.moveTo(b.x + rnd(9) - 4, game.camY || 0);
+    for (let y = (game.camY || 0) + 8; y < b.y; y += 8) ctx.lineTo(b.x + rnd(9) - 4, y);
     ctx.lineTo(b.x, b.y);
     ctx.stroke();
     ctx.globalAlpha = 1 - b.t / 0.25;
@@ -1436,13 +1463,16 @@ function updateMap(dt) {
   }
   if (game.invOpen) updateInvPanel();
 
+  const cam = camPos(); // screen clicks land in the scrolled world
   for (const c of clicks) {
     if (game.invOpen && inPanel(c)) continue; // the panel owns its clicks
     if (c.b === 2) { // right-click: lock what's under the cursor (or clear)
-      const en = enemyAtPoint(c.x, c.y);
+      const en = enemyAtPoint(c.x + cam.x, c.y + cam.y);
       game.lock = en || null;
       if (en) sfx('Cursor1');
-    } else if (c.b === 0 && !game.invDrag) startPathTo(Math.floor(c.x / TS), Math.floor(c.y / TS));
+    } else if (c.b === 0 && !game.invDrag) {
+      startPathTo(Math.floor((c.x + cam.x) / TS), Math.floor((c.y + cam.y) / TS));
+    }
   }
   if (pressed(CANCEL)) {
     if (game.invFocus) { game.invFocus = null; sfx('Cancel1'); return; }
@@ -1511,6 +1541,10 @@ function drawChar(sheet, cx, cy, dir, frame, px, py) {
 
 function drawMap() {
   const h = game.hero, m = cur();
+  const cam = camPos();
+  game.camY = cam.y; // drawBolts anchors lightning to the visible sky
+  ctx.save();
+  ctx.translate(-cam.x, -cam.y);
   for (let y = 0; y < MH; y++) for (let x = 0; x < MW; x++) {
     const t = GROUND_T[m.ground[y][x]];
     ctx.drawImage(img.chipset, t[0], t[1], TS, TS, x * TS, y * TS, TS, TS);
@@ -1592,6 +1626,7 @@ function drawMap() {
   drawProjectiles();
   drawBolts();
   drawPops();
+  ctx.restore(); // end of the scrolled world; UI is screen-fixed below
 
   // HUD
   drawWindow(4, 4, 126, overloaded() ? 45 : 34);
@@ -1641,15 +1676,17 @@ function wrapText(str, x, y, w) {
 
 // ---------------------------------------------------------------- title / gameover
 function drawTitle() {
-  // the 320x240 title art, doubled and cropped (sky off the top) to fill 640x400
-  ctx.drawImage(img.title, 0, 0, 320, 240, 0, -80, 640, 480);
-  drawWindow(W / 2 - 64, 240, 128, 24);
-  text('FABLE QUEST', W / 2 - 32, 248, '#ffe080');
+  // scale the 320x240 title art to cover the screen, biased to keep the castle
+  const s = Math.max(W / 320, H / 240);
+  ctx.drawImage(img.title, (W - 320 * s) / 2, Math.min(0, H - 240 * s), 320 * s, 240 * s);
+  const my = Math.floor(H / 2);
+  drawWindow(W / 2 - 64, my, 128, 24);
+  text('FABLE QUEST', W / 2 - 32, my + 8, '#ffe080');
   const hasSave = !!localStorage.getItem(SAVE_KEY);
-  drawWindow(W / 2 - 64, 270, 128, 48);
-  drawCursor(W / 2 - 58, 276 + game.titleCursor * 16, 116, 16);
-  text('New Game', W / 2 - 32, 280);
-  text('Continue', W / 2 - 32, 296, hasSave ? '#fff' : '#999');
+  drawWindow(W / 2 - 64, my + 30, 128, 48);
+  drawCursor(W / 2 - 58, my + 36 + game.titleCursor * 16, 116, 16);
+  text('New Game', W / 2 - 32, my + 40);
+  text('Continue', W / 2 - 32, my + 56, hasSave ? '#fff' : '#999');
 }
 function updateTitle() {
   if (pressed(['ArrowUp', 'ArrowDown', 'w', 's'])) { game.titleCursor ^= 1; sfx('Cursor1'); }
