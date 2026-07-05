@@ -209,6 +209,9 @@ function resetGame() {
   game.invDrag = null;
   game.itemPopup = null;
   game.tipBtn = null;
+  game.corpseOpen = null;
+  game.lootDrag = null;
+  game.talkingNpc = null;
 }
 
 // ---------------------------------------------------------------- music & save
@@ -239,6 +242,8 @@ function loadGame() {
   game.mapId = d.mapId || 'field';
   game.floor = d.floor || [];
   game.corpses = d.corpses || [];
+  game.corpses.forEach(c => { if (!c.items) c.items = {}; }); // pre-loot saves
+  game.corpseOpen = null;
   game.autoloot = d.autoloot !== false;
   game.invOpen = d.invOpen !== false;
   game.shop = null;
@@ -405,12 +410,14 @@ function switchMap(to, tx, ty) {
 function say(pages) { game.dialogue = { pages, page: 0, chars: 0 }; }
 function interact() { // returns true if something was there to talk to / read
   const h = game.hero;
-  if (!game.autoloot && pickupAt(h.tx, h.ty)) return true; // manual loot underfoot
+  const corpse = corpseNear();
+  if (corpse) { game.corpseOpen = corpse; sfx('Decision1'); return true; }
   const d = DIRV[h.dir];
   const fx = h.tx + d[0], fy = h.ty + d[1];
   const npc = npcs.find(n => n.map === game.mapId && n.tx === fx && n.ty === fy);
   if (npc) {
     npc.dir = { up: 'down', down: 'up', left: 'right', right: 'left' }[h.dir];
+    game.talkingNpc = npc; // they politely stand still for the chat
     sfx('Decision1');
     if (npc.id === 'elder') {
       if (h.kills >= 5 && !game.won) {
@@ -479,9 +486,10 @@ function interact() { // returns true if something was there to talk to / read
 // They chase the hero on sight; touching one hurts. CONFIRM slashes the faced
 // tile, FIRE lobs a fireball. The dirt path stays monster-free.
 const ENEMIES = {
-  slime: { name: 'Slime', cx: 0, cy: 0, hp: 10, atk: 4, def: 1, exp: 4, gold: 6, speed: 30, wait: [0.5, 1.1], range: 4 },
-  imp: { name: 'Imp', cx: 1, cy: 0, hp: 16, atk: 6, def: 2, exp: 7, gold: 12, speed: 45, wait: [0.25, 0.6], range: 5 },
-  ghost: { name: 'Ghost', cx: 3, cy: 0, hp: 24, atk: 8, def: 2, exp: 12, gold: 20, speed: 55, wait: [0.1, 0.4], range: 6 },
+  // flee: below this fraction of max HP the monster runs from you instead
+  slime: { name: 'Slime', cx: 0, cy: 0, hp: 10, atk: 4, def: 1, exp: 4, gold: 6, speed: 30, wait: [0.5, 1.1], range: 4, flee: 0 },
+  imp: { name: 'Imp', cx: 1, cy: 0, hp: 16, atk: 6, def: 2, exp: 7, gold: 12, speed: 45, wait: [0.25, 0.6], range: 5, flee: 0.2 },
+  ghost: { name: 'Ghost', cx: 3, cy: 0, hp: 24, atk: 8, def: 2, exp: 12, gold: 20, speed: 55, wait: [0.1, 0.4], range: 6, flee: 0.25 },
 };
 const MAX_ENEMIES = 10; // the field is big now
 function rnd(n) { return Math.floor(Math.random() * n); }
@@ -583,16 +591,22 @@ function updateEnemies(dt) {
       en.wait = e.wait[0] + Math.random() * (e.wait[1] - e.wait[0]);
       const dx = h.tx - en.tx, dy = h.ty - en.ty;
       let dirs;
+      const fleeing = e.flee > 0 && en.hp / en.maxhp <= e.flee;
       if (Math.abs(dx) + Math.abs(dy) <= e.range && Math.random() > 0.2) {
-        // chase: preferred axis first, other axis as fallback around obstacles
-        const hd = dx > 0 ? 'right' : 'left', vd = dy > 0 ? 'down' : 'up';
+        // chase (or flee: same pathing, away instead of toward)
+        const hd = (fleeing ? dx < 0 : dx > 0) ? 'right' : 'left';
+        const vd = (fleeing ? dy < 0 : dy > 0) ? 'down' : 'up';
         dirs = Math.abs(dx) > Math.abs(dy) ? [hd, vd] : [vd, hd];
         if (!dx || !dy) dirs = [dirs[0], ['up', 'down', 'left', 'right'][rnd(4)]];
       } else dirs = [['up', 'down', 'left', 'right'][rnd(4)]];
       for (const dir of dirs) {
         const d = DIRV[dir];
         const nx = en.tx + d[0], ny = en.ty + d[1];
-        if (nx === h.tx && ny === h.ty) { en.dir = dir; attackHero(en); break; } // bump = attack
+        if (nx === h.tx && ny === h.ty) { // bump = attack (unless running for its life)
+          en.dir = dir;
+          if (!fleeing) attackHero(en);
+          break;
+        }
         if (ny < 0 || ny >= MH || cur().ground[ny][nx] !== 'G') continue; // grass only: the path is safe
         if (isBlocked(nx, ny)) continue;
         if (game.enemies.some(o => o !== en && !o.dead && o.tx === nx && o.ty === ny)) continue;
@@ -629,7 +643,10 @@ function attackHero(en) {
 // at the spawn point with your gear intact
 function die() {
   const h = game.hero;
-  game.corpses.push({ map: game.mapId, tx: h.tx, ty: h.ty });
+  const items = {};
+  for (const [id, n] of Object.entries(h.bag)) if (n > 0) items[id] = n;
+  h.bag = {}; // your loot stays with the body — go get it back
+  game.corpses.push({ map: game.mapId, tx: h.tx, ty: h.ty, items });
   if (game.corpses.length > 8) game.corpses.shift(); // the field tidies itself
   sfx('Damege2');
   switchMap(SPAWN.map, SPAWN.tx, SPAWN.ty);
@@ -641,6 +658,7 @@ function die() {
   game.menu = null;
   game.shop = null;
   game.itemPopup = null;
+  game.corpseOpen = null;
   addPop('You died!', h.px + 8, h.py - 14, '#f76');
 }
 
@@ -667,8 +685,13 @@ function killEnemy(en) {
   sfx('Monster1');
   h.kills++; h.exp += e.exp; h.gold += e.gold;
   addPop(`+${e.exp}exp`, en.px + 8, en.py - 20, '#9f9');
-  if (Math.random() < 0.25) { // loot drop where it fell
-    dropFloor(Math.random() < 0.7 ? 'bread' : 'potion', 1, en.tx, en.ty);
+  if (Math.random() < 0.25) { // loot: autoloot pockets it, otherwise it falls
+    const id = Math.random() < 0.7 ? 'bread' : 'potion';
+    if (game.autoloot) {
+      addItem(id, 1);
+      addPop(`+1 ${ITEMS[id].name}`, en.px + 8, en.py - 30, '#9f9');
+      sfx('Item1');
+    } else dropFloor(id, 1, en.tx, en.ty);
   }
   if (h.exp >= h.lv * 10) {
     h.exp -= h.lv * 10; h.lv++; h.points += 3;
@@ -910,6 +933,35 @@ function bodySlotAt(px, py) {
 }
 function inPanel(p) { return p.x >= PANEL.x; }
 
+// corpse-loot window, docked just left of the inventory panel
+const CORPSE_WIN = { x: W - 260, y: 4, w: 128, h: 150, C: 4, S: 26 };
+function inCorpseWin(p) {
+  return p.x >= CORPSE_WIN.x && p.x < CORPSE_WIN.x + CORPSE_WIN.w &&
+    p.y >= CORPSE_WIN.y && p.y < CORPSE_WIN.y + CORPSE_WIN.h;
+}
+function corpseCellAt(px, py) {
+  const { x: X, y: Y, C, S } = CORPSE_WIN;
+  for (let i = 0; i < C * 4; i++) {
+    const x = X + 12 + (i % C) * S, y = Y + 30 + Math.floor(i / C) * S;
+    if (px >= x - 3 && px < x + 21 && py >= y - 3 && py < y + 21) return i;
+  }
+  return -1;
+}
+function drawCorpseWin() {
+  const c = game.corpseOpen, ids = Object.keys(c.items);
+  drawWindow(CORPSE_WIN.x, CORPSE_WIN.y, CORPSE_WIN.w, CORPSE_WIN.h);
+  text('Your remains', CORPSE_WIN.x + 12, CORPSE_WIN.y + 7, '#f76');
+  ids.forEach((id, i) => {
+    const x = CORPSE_WIN.x + 12 + (i % CORPSE_WIN.C) * CORPSE_WIN.S;
+    const y = CORPSE_WIN.y + 30 + Math.floor(i / CORPSE_WIN.C) * CORPSE_WIN.S;
+    ctx.drawImage(img[ITEMS[id].img], x, y, 18, 18);
+    text('' + c.items[id], x + 10, y + 12, '#ffe080');
+  });
+  if (!ids.length) text('Picked clean.', CORPSE_WIN.x + 12, CORPSE_WIN.y + 34, '#999');
+  text('Dbl-click: take', CORPSE_WIN.x + 10, CORPSE_WIN.y + CORPSE_WIN.h - 26, '#9cf');
+  text('Enter: take all', CORPSE_WIN.x + 10, CORPSE_WIN.y + CORPSE_WIN.h - 14, '#9cf');
+}
+
 // what item (if any) the mouse is hovering in the panel
 function panelHoverId() {
   if (!game.invOpen || game.invDrag) return null;
@@ -1135,6 +1187,21 @@ function pickupAt(tx, ty) {
     return true;
   }
   return false;
+}
+function nearHero(tx, ty) { // same tile or adjacent (loot reach)
+  return Math.abs(tx - game.hero.tx) <= 1 && Math.abs(ty - game.hero.ty) <= 1;
+}
+function corpseNear() {
+  return game.corpses.find(c => c.map === game.mapId && nearHero(c.tx, c.ty));
+}
+function corpseAt(tx, ty) {
+  return game.corpses.find(c => c.map === game.mapId && c.tx === tx && c.ty === ty);
+}
+function takeFromCorpse(c, id) {
+  addItem(id, c.items[id]);
+  addPop(`+${c.items[id]} ${ITEMS[id].name}`, game.hero.px + 8, game.hero.py - 12, '#9f9');
+  delete c.items[id];
+  sfx('Item1');
 }
 
 // ---------------------------------------------------------------- shops
@@ -1455,8 +1522,10 @@ function drawMenu() {
 
 // ---------------------------------------------------------------- map scene
 function updateNpcs(dt) {
+  if (!game.dialogue) game.talkingNpc = null;
   for (const n of npcs) {
     if (n.map !== game.mapId || !n.wander) continue;
+    if (game.talkingNpc === n && !n.moving) continue; // mid-conversation
     if (n.moving) {
       const gx = n.tx * TS, gy = n.ty * TS, sp = 40 * dt;
       n.px += Math.sign(gx - n.px) * Math.min(sp, Math.abs(gx - n.px));
@@ -1517,7 +1586,6 @@ function updateMap(dt) {
       game.steps++;
       const exit = cur().exits[h.tx + ',' + h.ty];
       if (exit) { switchMap(...exit); return; }
-      if (game.autoloot) pickupAt(h.tx, h.ty);
     }
   } else {
     const dir = captured ? null : dirHeld();
@@ -1541,13 +1609,51 @@ function updateMap(dt) {
         game.path = findPath(h.tx, h.ty, gx, gy);
       }
       if (game.path && !game.path.length) game.path = null;
+    } else if (game.lock && !game.lock.dead && game.lock.dying <= 0) {
+      // locked on: keep after the target until the sword can reach it
+      const en = game.lock;
+      const dx = en.tx - h.tx, dy = en.ty - h.ty;
+      if (Math.max(Math.abs(dx), Math.abs(dy)) > 1 || (dx !== 0 && dy !== 0)) {
+        const hd = dx > 0 ? 'right' : 'left', vd = dy > 0 ? 'down' : 'up';
+        const dirs = Math.abs(dx) > Math.abs(dy) ? [hd, vd] : [vd, hd];
+        for (const fd of dirs) {
+          const dv = DIRV[fd];
+          if (!dx && (fd === 'left' || fd === 'right')) continue;
+          if (!dy && (fd === 'up' || fd === 'down')) continue;
+          const nx = h.tx + dv[0], ny = h.ty + dv[1];
+          if (isBlocked(nx, ny) || enemyAt(nx, ny)) continue;
+          h.dir = fd;
+          h.tx = nx; h.ty = ny; h.moving = true;
+          break;
+        }
+      }
+      if (!h.moving) h.anim = 1;
     } else h.anim = 1; // standing frame
   }
+
+  // walked away from your remains: the window closes itself
+  if (game.corpseOpen && (game.corpseOpen.map !== game.mapId ||
+    !nearHero(game.corpseOpen.tx, game.corpseOpen.ty))) game.corpseOpen = null;
 
   // ------------------------------------------------- input routing
   if (game.itemPopup) { // item details popup: any confirm/click closes
     if (pressed(CANCEL) || pressed(CONFIRM) || clicked(0)) { game.itemPopup = null; sfx('Cancel1'); }
     return;
+  }
+  if (game.corpseOpen) { // corpse window: take loot; walking stays live
+    const c = game.corpseOpen;
+    if (pressed(CANCEL)) { game.corpseOpen = null; sfx('Cancel1'); return; }
+    if (pressed(CONFIRM)) { // take everything
+      Object.keys(c.items).forEach(id => takeFromCorpse(c, id));
+      queue = [];
+    }
+    clicks = clicks.filter(cl => {
+      if (cl.b !== 0 || !inCorpseWin(cl)) return true;
+      const ids = Object.keys(c.items);
+      const i = corpseCellAt(cl.x, cl.y);
+      if (cl.dbl && i >= 0 && i < ids.length) takeFromCorpse(c, ids[i]);
+      return false; // the window ate this click
+    });
   }
   if (game.invOpen) updateInvPanel(); // panel mouse works in every mode
   if (game.shop) { updateShop(); return; }
@@ -1580,14 +1686,33 @@ function updateMap(dt) {
   const cam = camPos(); // screen clicks land in the scrolled world
   for (const c of clicks) {
     if (game.invOpen && inPanel(c)) continue; // the panel owns its clicks
+    if (game.corpseOpen && inCorpseWin(c)) continue; // handled above
     if (c.b === 2) { // right-click: lock what's under the cursor (or clear)
       const en = enemyAtPoint(c.x + cam.x, c.y + cam.y);
       game.lock = en || null;
       if (en) sfx('Cursor1');
     } else if (c.b === 0 && !game.invDrag) {
-      startPathTo(Math.floor((c.x + cam.x) / TS), Math.floor((c.y + cam.y) / TS));
+      const wx = Math.floor((c.x + cam.x) / TS), wy = Math.floor((c.y + cam.y) / TS);
+      const co = corpseAt(wx, wy);
+      if (co && nearHero(wx, wy) && c.dbl) { // open your remains
+        game.corpseOpen = co;
+        sfx('Decision1');
+      } else if (floorAt(wx, wy).length && nearHero(wx, wy)) {
+        // loot in reach: double-click pockets it, a press starts a drag
+        if (c.dbl) pickupAt(wx, wy);
+        else game.lootDrag = { tx: wx, ty: wy };
+      } else {
+        startPathTo(wx, wy);
+      }
     }
   }
+  for (const r of releases) { // floor loot dragged into the backpack window
+    if (r.b !== 0 || !game.lootDrag) continue;
+    const d = game.lootDrag;
+    if (inPanel(r) && nearHero(d.tx, d.ty)) pickupAt(d.tx, d.ty);
+    game.lootDrag = null;
+  }
+  if (game.lootDrag && !mouse.down) game.lootDrag = null;
   if (pressed(CANCEL)) {
     if (game.invFocus) { game.invFocus = null; sfx('Cancel1'); return; }
     game.menu = { mode: 'root', cursor: 0 };
@@ -1714,6 +1839,15 @@ function drawMap() {
   }
 
   if (game.invOpen) drawInvPanel();
+  if (game.corpseOpen) drawCorpseWin();
+  if (game.lootDrag) { // floor loot riding the cursor toward the backpack
+    const f = floorAt(game.lootDrag.tx, game.lootDrag.ty)[0];
+    if (f) {
+      ctx.globalAlpha = 0.85;
+      ctx.drawImage(img[ITEMS[f.id].img], mouse.x - 9, mouse.y - 9, 18, 18);
+      ctx.globalAlpha = 1;
+    }
+  }
   if (game.dialogue) {
     const d = game.dialogue;
     const dw = W - 8 - (game.invOpen ? 124 : 0);

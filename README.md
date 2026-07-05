@@ -17,7 +17,7 @@ Open `index.html` in a browser (double-click it, or `open index.html`).
 | Right click | Lock on to the enemy under the cursor (right-click empty ground to unlock) |
 | Enter / Space / Z | Talk or read when facing someone, otherwise swing your sword |
 | 1–5 | Cast the skill equipped in that hotbar slot (equip via menu → Skills) |
-| Tab | Lock on to the nearest enemy (press again to cycle). While locked, your sword strikes by itself when the target is in reach, and fireballs home in on it — even diagonally |
+| Tab | Lock on to the nearest enemy (press again to cycle). While locked, your character walks after the target on his own, the sword strikes by itself in reach, and fireballs home in on it — even diagonally |
 | I | Show/hide the inventory panel (body + backpack, docked on the right) |
 | E | Focus the inventory panel for keyboard use (cycles backpack → body → off) |
 | Esc / X | Open the game menu (Inventory, Skills, Attribs, Status, Quest, Save, Load, Music, Autoloot, To Title) |
@@ -28,7 +28,11 @@ and the camera follows the hero across the 40×25-tile maps. Unarmed attacks
 land a punch (impact burst); the slicing streak appears only with a cutting
 weapon equipped. You start at the **spawn point** in the city plaza; dying is
 not the end: your body stays where you fell and you wake up back at the spawn
-with full HP, gear intact.
+with full HP and your equipment — but **your backpack stays with the body**.
+Walk up to your remains and press Enter (or double-click them) to open a loot
+window: double-click an item to take it, Enter to take everything. Wounded
+imps and ghosts turn tail once their health drops below their courage
+threshold (about 20–25%) and try to escape.
 
 **The world never pauses.** Dialogue, menus, shops and popups only capture
 your input — NPCs wander, monsters chase and hit, projectiles fly, regen ticks
@@ -67,9 +71,12 @@ with the item's stats, description, weight and value. Equip gear three ways:
 A two-handed weapon (the Claymore) needs both arms: equipping it sends your
 shield back to the bag, and vice versa. Gear bonuses (Atk, Def, MDef, Dodge,
 Crit) feed straight into your derived stats. Enter also eats food/potions, and
-**Q** drops one unit on the floor at your feet. Slain monsters sometimes drop
-loot — with **Autoloot: On** (menu toggle) you pick items up just by stepping
-on them, otherwise stand on them and press Enter.
+**Q** drops one unit on the floor at your feet.
+
+Loot on the ground is picked up by hand — walking over it does nothing. Stand
+next to (or on) an item and **double-click** it, or **drag it into the
+backpack window**. With **Autoloot: On** (menu toggle), monster drops skip the
+floor entirely and land straight in your bag.
 
 Bag contents have weight (worn gear weighs nothing — you're wearing it). Carry
 capacity is `15 + 2×level + 2×Strength` kg; go over it and the hero trudges at

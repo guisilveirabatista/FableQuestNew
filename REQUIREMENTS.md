@@ -1,3 +1,0 @@
-- When I lock in on an enemy, the health bar of the enemy should be visible.
-- I want an Attribute System, where when the character levels up, he chooses in which attribute to place points. The attributes should be:
-Agility, Inteligence, Vitality, Strength, Dexterity, Magic Power, Luck. Those attributes will influence in other attributes that are not changeable by the user, but just a result of the ones I mentioned. They will be: Attack, Magic Attack, Precision, Critical Chance in %, Endurance, Magic Endurance, Dodge, and Attack Speed.
