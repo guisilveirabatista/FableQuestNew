@@ -7,16 +7,16 @@
   html, body { margin: 0; height: 100%; background: #111; }
   body { display: flex; align-items: center; justify-content: center; }
   canvas {
-    width: 640px; height: 480px;
+    /* 640x400 internal pixels, scaled to fill the window (16:10) without cropping */
+    width: min(100vw, 160vh);
     image-rendering: pixelated;
     image-rendering: crisp-edges;
     background: #000;
   }
-  @media (max-width: 660px) { canvas { width: 320px; height: 240px; } }
 </style>
 </head>
 <body>
-<canvas id="screen" width="320" height="240"></canvas>
+<canvas id="screen" width="640" height="400"></canvas>
 <script src="assets/music.js"></script>
 <script src="midi.js"></script>
 <script src="game.js"></script>

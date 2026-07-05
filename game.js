@@ -1,5 +1,6 @@
-// Fable Quest — a mini RPG built on the RPG Maker 2003 RTP assets.
-// 320x240 internal resolution, scaled 2x in CSS.
+// Fable Quest — a mini action RPG built on the RPG Maker 2003 RTP assets.
+// 640x400 internal resolution (40x25 tiles, the whole map on screen),
+// scaled to fill the window in CSS with pixelated rendering.
 
 'use strict';
 
@@ -7,10 +8,11 @@ const cv = document.getElementById('screen');
 const ctx = cv.getContext('2d');
 ctx.imageSmoothingEnabled = false;
 
-const TS = 16, MW = 20, MH = 15;
+const TS = 16, MW = 40, MH = 25;
+const W = cv.width, H = cv.height;
 
 // ---------------------------------------------------------------- assets
-const IMAGES = ['chipset', 'hero', 'npc', 'custom', 'knight', 'system', 'title', 'gameover',
+const IMAGES = ['chipset', 'hero', 'npc', 'custom', 'knight', 'system', 'title',
   'monsters', 'slash', 'flame',
   'i_potion', 'i_bread', 'i_meat', 'i_sword1', 'i_sword2', 'i_sword3',
   'i_hat', 'i_helm', 'i_shield', 'i_armor', 'i_legs', 'i_boots', 'i_ring', 'i_amulet'];
@@ -53,7 +55,7 @@ const mouse = { x: 0, y: 0, down: false };
 let lastClick = { t: 0, x: -99, y: -99 };
 function canvasXY(e) {
   const r = cv.getBoundingClientRect();
-  return { x: (e.clientX - r.left) * 320 / r.width, y: (e.clientY - r.top) * 240 / r.height };
+  return { x: (e.clientX - r.left) * W / r.width, y: (e.clientY - r.top) * H / r.height };
 }
 cv.addEventListener('contextmenu', e => e.preventDefault());
 cv.addEventListener('mousemove', e => Object.assign(mouse, canvasXY(e)));
@@ -144,7 +146,7 @@ function stats() {
     end: Math.floor(a.vit + a.str * 0.25) + eq.def,         // halves off physical hits
     mend: Math.floor(a.int + a.vit * 0.5) + eq.mdef,        // halves off magic (ghost) hits
     dodge: Math.min(60, Math.floor(a.agi + a.luck * 0.5) + eq.dodge), // % chance to evade a hit
-    aspd: 1 + a.agi * 0.02,                                 // attack cooldown divider
+    aspd: 1 + (a.agi - 1) * 0.06,                           // attack cooldown divider
   };
 }
 function recalcMax() { // Vitality/Intelligence feed max HP/MP
@@ -157,7 +159,7 @@ function recalcMax() { // Vitality/Intelligence feed max HP/MP
 function resetGame() {
   game.scene = 'title';
   game.hero = {
-    tx: 9, ty: 8, px: 9 * TS, py: 8 * TS, dir: 'down', anim: 0, moving: false,
+    tx: SPAWN.tx, ty: SPAWN.ty, px: SPAWN.tx * TS, py: SPAWN.ty * TS, dir: 'down', anim: 0, moving: false,
     hp: 30, maxhp: 30, mp: 10, maxmp: 10, lv: 1, exp: 0, gold: 0,
     kills: 0,
     slots: ['fire', 'heal', 'spin', 'bolt', null], // skill hotbar, keys 1-5
@@ -183,10 +185,14 @@ function resetGame() {
   game.healFx = 0;
   game.lock = null;
   game.path = null;
-  game.mapId = 'field';
+  game.mapId = SPAWN.map;
   game.floor = [];
+  game.corpses = [];
   game.shop = null;
   game.autoloot = true;
+  game.invOpen = true;
+  game.invFocus = null;
+  game.invDrag = null;
 }
 
 // ---------------------------------------------------------------- music & save
@@ -204,6 +210,7 @@ function saveGame() {
   localStorage.setItem(SAVE_KEY, JSON.stringify({
     hero: game.hero, won: game.won, steps: game.steps,
     mapId: game.mapId, floor: game.floor, autoloot: game.autoloot,
+    corpses: game.corpses, invOpen: game.invOpen,
   }));
 }
 function loadGame() {
@@ -215,9 +222,15 @@ function loadGame() {
   game.steps = d.steps;
   game.mapId = d.mapId || 'field';
   game.floor = d.floor || [];
+  game.corpses = d.corpses || [];
   game.autoloot = d.autoloot !== false;
+  game.invOpen = d.invOpen !== false;
   game.shop = null;
   const h = game.hero;
+  // pre-64x40 saves may sit out of bounds on the new maps
+  if (h.tx >= MW || h.ty >= MH || cur().blocked.has(h.tx + ',' + h.ty)) {
+    game.mapId = SPAWN.map; h.tx = SPAWN.tx; h.ty = SPAWN.ty;
+  }
   h.px = h.tx * TS; h.py = h.ty * TS; h.moving = false;
   game.dialogue = null;
   game.enemies = [];
@@ -256,81 +269,87 @@ const GROUND_T = {
 };
 const SOLID_GROUND = 'WXRUO';
 
+// where everyone (re)spawns: the city plaza, by the well
+const SPAWN = { map: 'city', tx: 19, ty: 16 };
+
 const MAPS = {
   field: {
-    ground: [
-      'GGGGGGGGGGGGGGGGGGGG',
-      'GGGGGGGGGGGGGGGGGGGG',
-      'GGGGGGGGGGGGGGWWWWGG',
-      'GGGGGGGGGGGGGGWWWWGG',
-      'GGGGGGGGGGGGGGWWWWGG',
-      'GGGGGGGGGGGGGGGGGGGG',
-      'GGGGGGGGGGGGGGGGGGGG',
-      'GGGGGGGGGGGGGGGGGGGG',
-      'GGDDDDDDDDDDDDDDDDDD', // path runs off the east edge, into the city
-      'GGGGDGGGGGGGGGGGGGGG',
-      'GGGGDGGGGGGGGGGGGGGG',
-      'GGGGDGGGGGGGGGGGGGGG',
-      'GGGGDGGGGGGGGGGGGGGG',
-      'GGGGGGGGGGGGGGGGGGGG',
-      'GGGGGGGGGGGGGGGGGGGG',
-    ],
-    trees: [[2, 4], [6, 2], [9, 4], [15, 11], [11, 12], [6, 10], [12, 2]],
+    // grass with a pond; the path runs east to the city gate, with a
+    // southern branch down to the well and the Elder
+    ground: (() => {
+      const rows = [];
+      for (let y = 0; y < MH; y++) {
+        let r = '';
+        for (let x = 0; x < MW; x++) {
+          if (y >= 4 && y <= 8 && x >= 28 && x <= 33) r += 'W';
+          else if (y === 12 && x >= 2) r += 'D';
+          else if (x === 6 && y >= 13 && y <= 20) r += 'D';
+          else r += 'G';
+        }
+        rows.push(r);
+      }
+      return rows;
+    })(),
+    trees: [[3, 4], [8, 3], [14, 5], [20, 3], [25, 6], [34, 4], [3, 16],
+      [12, 17], [18, 15], [24, 18], [31, 16], [36, 18], [10, 21], [27, 21], [16, 9]],
     props: [
-      ['rock', 7, 6], ['rock', 13, 10], ['rock', 3, 7],
-      ['well', 3, 12], ['sign', 10, 7], ['palm', 13, 5], ['palm', 18, 5],
-      ['cactus', 7, 11],
+      ['rock', 4, 9], ['rock', 22, 14], ['rock', 33, 10], ['rock', 15, 19],
+      ['well', 5, 20], ['sign', 11, 11], ['palm', 30, 10], ['palm', 35, 9],
+      ['cactus', 9, 18],
     ],
     deco: [],
     hedge: true,
     spawn: true,
-    exits: { '19,8': ['city', 1, 8] },
+    exits: { '39,12': ['city', 1, 12] },
   },
   city: {
-    ground: [
-      'XXXXXXXXXXXXXXXXXXXX',
-      'XPPPPPPPPPPPPPPPPPPX',
-      'XPRRRRRPPPPPRRRRRPPX', // two shop facades
-      'XPUUOUUPPPPPUUOUUPPX',
-      'XPPPPPPPPPPPPPPPPPPX',
-      'XPPPPPPPPPPPPPPPPPPX',
-      'XPPPPPPPPPPPPPPPPPPX',
-      'XPPPPPPPPPPPPPPPPPPX',
-      'DPPPPPPPPPPPPPPPPPPX', // gate to the field
-      'XPPPPPPPPPPPPPPPPPPX',
-      'XPPPPPPPPPPPPPPPPPPX',
-      'XPPPPPPPPPPPPPPPPPPX',
-      'XPPPPPPPPPPPPPPPPPPX',
-      'XPPPPPPPPPPPPPPPPPPX',
-      'XXXXXXXXXXXXXXXXXXXX',
-    ],
+    // walled city: two shops up north, plaza with the well in the middle,
+    // gate to the field on the west wall
+    ground: (() => {
+      const rows = [];
+      for (let y = 0; y < MH; y++) {
+        let r = '';
+        for (let x = 0; x < MW; x++) {
+          const shopL = x >= 4 && x <= 10, shopR = x >= 24 && x <= 30;
+          if (y === 0 || y === MH - 1 || ((x === 0 || x === MW - 1) && !(x === 0 && y === 12))) r += 'X';
+          else if (x === 0 && y === 12) r += 'D'; // the gate
+          else if (y === 4 && (shopL || shopR)) r += 'R';
+          else if (y === 5 && (x === 7 || x === 27)) r += 'O'; // shop doors
+          else if (y === 5 && (shopL || shopR)) r += 'U';
+          else r += 'P';
+        }
+        rows.push(r);
+      }
+      return rows;
+    })(),
     trees: [],
-    props: [['well', 9, 10]],
+    props: [['well', 19, 14]],
     deco: [ // [sx, sy, w, h, x, y, solid] chipset sprites, feet at tile (x,y)
-      [432, 64, 16, 16, 6, 3, false],  // hanging sword sign (weapon shop)
-      [464, 64, 16, 16, 16, 3, false], // hanging flask sign (item shop)
-      [384, 64, 16, 16, 1, 4, true],   // torches
-      [384, 64, 16, 16, 18, 4, true],
-      [448, 128, 16, 32, 1, 12, true], // barrels
-      [448, 128, 16, 32, 2, 12, true],
-      [448, 128, 16, 32, 18, 12, true],
+      [432, 64, 16, 16, 9, 5, false],  // hanging sword sign (weapon shop)
+      [464, 64, 16, 16, 29, 5, false], // hanging flask sign (item shop)
+      [384, 64, 16, 16, 2, 6, true],   // torches
+      [384, 64, 16, 16, 37, 6, true],
+      [448, 128, 16, 32, 2, 22, true], // barrels
+      [448, 128, 16, 32, 3, 22, true],
+      [448, 128, 16, 32, 36, 22, true],
+      [448, 128, 16, 32, 37, 22, true],
     ],
     hedge: false,
     spawn: false,
-    exits: { '0,8': ['field', 18, 8] },
+    exits: { '0,12': ['field', 38, 12] },
   },
 };
 function cur() { return MAPS[game.mapId]; }
 
 const npcs = [
-  { id: 'elder', map: 'field', cx: 2, cy: 1, tx: 5, ty: 12, dir: 'down' },
-  { id: 'girl', map: 'field', cx: 3, cy: 0, tx: 15, ty: 6, dir: 'down' },
-  { id: 'pixel', map: 'field', sheet: 'custom', cx: 0, cy: 0, tx: 8, ty: 5, dir: 'down' },
-  { id: 'knight', map: 'field', sheet: 'knight', cx: 0, cy: 0, tx: 12, ty: 6, dir: 'down', wander: 2 },
-  { id: 'smith', map: 'city', cx: 0, cy: 1, tx: 4, ty: 4, dir: 'down' },
-  { id: 'grocer', map: 'city', cx: 1, cy: 1, tx: 14, ty: 4, dir: 'down' },
-  { id: 'kid', map: 'city', cx: 1, cy: 0, tx: 8, ty: 10, dir: 'down', wander: 2 },
-  { id: 'guard', map: 'city', sheet: 'knight', cx: 0, cy: 0, tx: 2, ty: 6, dir: 'down', wander: 1 },
+  { id: 'elder', map: 'field', cx: 2, cy: 1, tx: 7, ty: 20, dir: 'down' },
+  { id: 'girl', map: 'field', cx: 3, cy: 0, tx: 29, ty: 9, dir: 'down' },
+  { id: 'pixel', map: 'field', sheet: 'custom', cx: 0, cy: 0, tx: 14, ty: 7, dir: 'down' },
+  { id: 'knight', map: 'field', sheet: 'knight', cx: 0, cy: 0, tx: 20, ty: 10, dir: 'down', wander: 2 },
+  { id: 'smith', map: 'city', cx: 0, cy: 1, tx: 7, ty: 6, dir: 'down' },
+  { id: 'grocer', map: 'city', cx: 1, cy: 1, tx: 27, ty: 6, dir: 'down' },
+  { id: 'kid', map: 'city', cx: 1, cy: 0, tx: 15, ty: 16, dir: 'down', wander: 2 },
+  { id: 'guard', map: 'city', sheet: 'knight', cx: 0, cy: 0, tx: 3, ty: 12, dir: 'down', wander: 1 },
 ];
 for (const n of npcs) { n.px = n.tx * TS; n.py = n.ty * TS; n.anim = 1; n.moving = false; n.wait = 0; n.hx = n.tx; n.hy = n.ty; }
 
@@ -448,7 +467,7 @@ const ENEMIES = {
   imp: { name: 'Imp', cx: 1, cy: 0, hp: 16, atk: 6, def: 2, exp: 7, gold: 12, speed: 45, wait: [0.25, 0.6], range: 5 },
   ghost: { name: 'Ghost', cx: 3, cy: 0, hp: 24, atk: 8, def: 2, exp: 12, gold: 20, speed: 55, wait: [0.1, 0.4], range: 6 },
 };
-const MAX_ENEMIES = 5;
+const MAX_ENEMIES = 10; // the field is big now
 function rnd(n) { return Math.floor(Math.random() * n); }
 function pickEnemy() {
   const k = game.hero.kills;
@@ -587,11 +606,22 @@ function attackHero(en) {
   game.iframes = 1;
   sfx('Damege1');
   addPop('-' + dmg, h.px + 8, h.py - 12, '#f76');
-  if (h.hp <= 0) {
-    game.scene = 'gameover';
-    sfx('Damege2');
-    MidiPlayer.stop();
-  }
+  if (h.hp <= 0) die();
+}
+
+// no game-over screen: your body stays where you fell and you wake up
+// at the spawn point with your gear intact
+function die() {
+  const h = game.hero;
+  game.corpses.push({ map: game.mapId, tx: h.tx, ty: h.ty });
+  if (game.corpses.length > 8) game.corpses.shift(); // the field tidies itself
+  sfx('Damege2');
+  switchMap(SPAWN.map, SPAWN.tx, SPAWN.ty);
+  h.hp = h.maxhp;
+  h.mp = h.maxmp;
+  h.dir = 'down';
+  game.iframes = 2;
+  addPop('You died!', h.px + 8, h.py - 14, '#f76');
 }
 
 function hitEnemy(en, dmg, crit) {
@@ -631,7 +661,7 @@ function killEnemy(en) {
 
 function slash() {
   const h = game.hero;
-  game.atkCool = 0.5 / stats().aspd;
+  game.atkCool = 1.0 / stats().aspd; // ponderous at Lv.1 — Agility speeds it up
   game.slashFx = { t: 0, dir: h.dir };
   sfx('Sword1');
   for (const en of game.enemies) {
@@ -703,7 +733,7 @@ function castHeal() {
 
 function castSpin() {
   const h = game.hero;
-  game.atkCool = 0.7 / stats().aspd;
+  game.atkCool = 1.3 / stats().aspd;
   game.slashFx = { t: 0, spin: true, dur: 0.3 };
   sfx('Sword1');
   for (const en of game.enemies) {
@@ -816,11 +846,13 @@ function equipTo(id, slot) {
   return true;
 }
 
-// inventory screen geometry: backpack grid left, paper doll right
-const BAG_UI = { x: 18, y: 30, C: 6, S: 26 };
+// persistent inventory panel, docked to the right edge: paper doll on top,
+// backpack grid below. Toggled with I (or menu > Inventory).
+const PANEL = { x: W - 124, y: 4, w: 120, h: H - 8 };
+const BAG_UI = { x: PANEL.x + 12, y: 190, C: 4, S: 26 };
 const BODY_UI = {
-  head: [250, 20], main: [218, 50], torso: [250, 50], off: [282, 50],
-  legs: [250, 80], acc1: [218, 110], boots: [250, 110], acc2: [282, 110],
+  head: [PANEL.x + 48, 24], main: [PANEL.x + 16, 54], torso: [PANEL.x + 48, 54], off: [PANEL.x + 80, 54],
+  legs: [PANEL.x + 48, 84], acc1: [PANEL.x + 16, 114], boots: [PANEL.x + 48, 114], acc2: [PANEL.x + 80, 114],
 };
 const BODY_LABEL = { head: 'Hd', main: 'Wpn', off: 'Off', torso: 'Tor', legs: 'Leg', boots: 'Bt', acc1: 'Ac', acc2: 'Ac' };
 const BODY_NAV = { // keyboard moves between slots, roughly matching the doll shape
@@ -845,6 +877,133 @@ function bodySlotAt(px, py) {
   for (const [slot, [x, y]] of Object.entries(BODY_UI))
     if (px >= x && px < x + 24 && py >= y && py < y + 24) return slot;
   return null;
+}
+function inPanel(p) { return p.x >= PANEL.x; }
+
+// mouse interactions on the live panel: click selects, double-click
+// uses/equips/unequips, drag moves gear (drag out of the panel to drop/unequip)
+function updateInvPanel() {
+  const h = game.hero, ids = bagIds();
+  game.invCursor = Math.min(game.invCursor || 0, Math.max(0, ids.length - 1));
+  if (!game.invSlot) game.invSlot = 'torso';
+  for (const c of clicks) {
+    if (c.b !== 0 || !inPanel(c)) continue;
+    const bi = bagCellAt(c.x, c.y), bs = bodySlotAt(c.x, c.y);
+    if (bi >= 0) {
+      game.invFocus = 'bag';
+      game.invCursor = bi;
+      if (c.dbl) { if (!useItem(ids[bi])) sfx('Buzzer1'); }
+      else game.invDrag = { from: 'bag', id: ids[bi] };
+    } else if (bs) {
+      game.invFocus = 'body';
+      game.invSlot = bs;
+      if (c.dbl) {
+        if (h.equip[bs]) { unequipSlot(bs); sfx('Cancel1'); } else sfx('Buzzer1');
+      } else if (h.equip[bs]) game.invDrag = { from: 'body', slot: bs, id: h.equip[bs] };
+    }
+  }
+  for (const r of releases) {
+    if (r.b !== 0 || !game.invDrag) continue;
+    const d = game.invDrag, bs = bodySlotAt(r.x, r.y);
+    if (d.from === 'bag') {
+      if (bs) { if (!equipTo(d.id, bs)) sfx('Buzzer1'); }
+      else if (!inPanel(r)) { // dragged onto the map: drop at your feet
+        removeItem(d.id, 1);
+        dropFloor(d.id, 1, h.tx, h.ty);
+        sfx('Cancel1');
+      }
+    } else if (bs && bs !== d.slot && canPlace(d.id, bs)) {
+      unequipSlot(d.slot); // move between slots (ring to the other finger)
+      equipTo(d.id, bs);
+    } else if (!bs) {
+      unequipSlot(d.slot); // dragged off the body: back to the bag
+      sfx('Cancel1');
+    }
+    game.invDrag = null;
+  }
+  if (game.invDrag && !mouse.down) game.invDrag = null;
+}
+
+// keyboard mode: E focuses the panel (arrows navigate it instead of walking)
+function updateInvKeys() {
+  const h = game.hero, ids = bagIds(), C = BAG_UI.C;
+  if (game.invFocus === 'bag') {
+    if (ids.length) {
+      if (pressed(['ArrowLeft', 'a'])) { game.invCursor = (game.invCursor + ids.length - 1) % ids.length; sfx('Cursor1'); }
+      if (pressed(['ArrowRight', 'd'])) { game.invCursor = (game.invCursor + 1) % ids.length; sfx('Cursor1'); }
+      if (pressed(['ArrowUp', 'w']) && game.invCursor >= C) { game.invCursor -= C; sfx('Cursor1'); }
+      if (pressed(['ArrowDown', 's']) && game.invCursor + C < ids.length) { game.invCursor += C; sfx('Cursor1'); }
+      if (pressed(CONFIRM)) { if (!useItem(ids[game.invCursor])) sfx('Buzzer1'); }
+      if (pressed(['q', 'Q'])) {
+        const id = ids[game.invCursor];
+        removeItem(id, 1);
+        dropFloor(id, 1, h.tx, h.ty);
+        sfx('Cancel1');
+      }
+    }
+  } else { // body
+    if (!game.invSlot) game.invSlot = 'torso';
+    for (const [keys, dir] of [[['ArrowUp', 'w'], 'up'], [['ArrowDown', 's'], 'down'],
+      [['ArrowLeft', 'a'], 'left'], [['ArrowRight', 'd'], 'right']]) {
+      if (pressed(keys) && BODY_NAV[game.invSlot][dir]) { game.invSlot = BODY_NAV[game.invSlot][dir]; sfx('Cursor1'); }
+    }
+    if (pressed(CONFIRM) || pressed(['q', 'Q'])) {
+      if (h.equip[game.invSlot]) { unequipSlot(game.invSlot); sfx('Cancel1'); }
+      else sfx('Buzzer1');
+    }
+  }
+}
+
+function drawInvPanel() {
+  const h = game.hero, ids = bagIds();
+  game.invCursor = Math.min(game.invCursor || 0, Math.max(0, ids.length - 1));
+  drawWindow(PANEL.x, PANEL.y, PANEL.w, PANEL.h);
+  text('Body', PANEL.x + 46, 12, '#bcd');
+  const mainTwoH = h.equip.main && ITEMS[h.equip.main].twoH;
+  for (const [slot, [x, y]] of Object.entries(BODY_UI)) {
+    ctx.fillStyle = 'rgba(10,20,30,.5)';
+    ctx.fillRect(x, y, 24, 24);
+    const droppable = game.invDrag && canPlace(game.invDrag.id, slot);
+    ctx.strokeStyle = droppable ? '#7f7' : '#56718a';
+    ctx.strokeRect(x + 0.5, y + 0.5, 23, 23);
+    const id = h.equip[slot];
+    if (id && !(game.invDrag && game.invDrag.from === 'body' && game.invDrag.slot === slot)) {
+      ctx.drawImage(img[ITEMS[id].img], x + 3, y + 3, 18, 18);
+    } else if (!id && slot === 'off' && mainTwoH) {
+      ctx.globalAlpha = 0.3; // both hands are busy with the two-hander
+      ctx.drawImage(img[ITEMS[h.equip.main].img], x + 3, y + 3, 18, 18);
+      ctx.globalAlpha = 1;
+    } else if (!id) {
+      text(BODY_LABEL[slot], x + 4, y + 8, '#4a6076');
+    }
+    if (game.invFocus === 'body' && game.invSlot === slot) drawCursor(x - 2, y - 2, 28, 28);
+  }
+
+  text('Backpack', PANEL.x + 12, 156, '#bcd');
+  text(`${bagWeight().toFixed(1)}/${capacity()}kg`, PANEL.x + 12, 168,
+    overloaded() ? '#f76' : '#bcd');
+  ids.forEach((id, i) => {
+    const x = BAG_UI.x + (i % BAG_UI.C) * BAG_UI.S, y = BAG_UI.y + Math.floor(i / BAG_UI.C) * BAG_UI.S;
+    if (game.invFocus === 'bag' && game.invCursor === i) drawCursor(x - 4, y - 4, BAG_UI.S - 2, BAG_UI.S - 2);
+    ctx.drawImage(img[ITEMS[id].img], x, y, 18, 18);
+    text('' + h.bag[id], x + 10, y + 12, '#ffe080');
+  });
+  if (!ids.length) text('Empty...', BAG_UI.x, BAG_UI.y + 4, '#999');
+
+  const selId = game.invDrag ? game.invDrag.id
+    : game.invFocus === 'body' ? h.equip[game.invSlot] : ids[game.invCursor];
+  if (selId) {
+    const it = ITEMS[selId];
+    text(it.name, PANEL.x + 10, H - 46);
+    wrapText(itemInfo(it) + `  ${it.w}kg`, PANEL.x + 10, H - 34, PANEL.w - 20);
+  }
+  text('I:hide E:keys Q:drop', PANEL.x + 10, H - 14, '#9cf');
+
+  if (game.invDrag) { // ghost icon rides the cursor
+    ctx.globalAlpha = 0.85;
+    ctx.drawImage(img[ITEMS[game.invDrag.id].img], mouse.x - 9, mouse.y - 9, 18, 18);
+    ctx.globalAlpha = 1;
+  }
 }
 function bagIds() { return Object.keys(ITEMS).filter(id => game.hero.bag[id] > 0); }
 function bagWeight() {
@@ -933,20 +1092,21 @@ function updateShop() {
 }
 function drawShop() {
   const s = game.shop, h = game.hero, shop = SHOPS[s.who], stock = shop.stock;
-  drawWindow(40, 8, 240, stock.length * 18 + 74);
-  text(`${shop.name} — Gold ${h.gold}`, 52, 16, '#ffe080');
+  const SX = (W - 240) / 2, SY = (H - stock.length * 18 - 74) / 2;
+  drawWindow(SX, SY, 240, stock.length * 18 + 74);
+  text(`${shop.name} — Gold ${h.gold}`, SX + 12, SY + 8, '#ffe080');
   stock.forEach((id, i) => {
     const it = ITEMS[id];
-    if (s.cursor === i) drawCursor(46, 28 + i * 18, 228, 18);
-    ctx.drawImage(img[it.img], 52, 29 + i * 18, 16, 16);
-    text(it.name, 72, 33 + i * 18, h.gold >= it.price ? '#fff' : '#999');
-    text(it.price + 'g', 192, 33 + i * 18, '#ffe080');
-    text('x' + (h.bag[id] || 0), 236, 33 + i * 18, '#bcd');
+    if (s.cursor === i) drawCursor(SX + 6, SY + 20 + i * 18, 228, 18);
+    ctx.drawImage(img[it.img], SX + 12, SY + 21 + i * 18, 16, 16);
+    text(it.name, SX + 32, SY + 25 + i * 18, h.gold >= it.price ? '#fff' : '#999');
+    text(it.price + 'g', SX + 152, SY + 25 + i * 18, '#ffe080');
+    text('x' + (h.bag[id] || 0), SX + 196, SY + 25 + i * 18, '#bcd');
   });
   const it = ITEMS[stock[s.cursor]];
-  text(itemInfo(it), 52, stock.length * 18 + 34, '#bcd');
-  text(`Weight ${it.w}   (carrying ${bagWeight().toFixed(1)}/${capacity()})`, 52, stock.length * 18 + 48, '#bcd');
-  text('Enter: buy   Esc: leave', 52, stock.length * 18 + 64, '#9cf');
+  text(itemInfo(it), SX + 12, SY + stock.length * 18 + 26, '#bcd');
+  text(`Weight ${it.w}   (carrying ${bagWeight().toFixed(1)}/${capacity()})`, SX + 12, SY + stock.length * 18 + 40, '#bcd');
+  text('Enter: buy   Esc: leave', SX + 12, SY + stock.length * 18 + 56, '#9cf');
 }
 
 // tint buffer for colored hit-flashes on 24x32 charas
@@ -1059,7 +1219,7 @@ function drawPops() {
 }
 
 // ---------------------------------------------------------------- game menu
-const ROOT_MENU = ['Items', 'Skills', 'Attribs', 'Status', 'Quest', 'Save', 'Load', 'Music', 'Autoloot', 'To Title'];
+const ROOT_MENU = ['Inventory', 'Skills', 'Attribs', 'Status', 'Quest', 'Save', 'Load', 'Music', 'Autoloot', 'To Title'];
 function updateMenu(dt) {
   const m = game.menu, h = game.hero;
   if (m.msg) {
@@ -1073,7 +1233,7 @@ function updateMenu(dt) {
     if (pressed(CANCEL)) { game.menu = null; sfx('Cancel1'); return; }
     if (!pressed(CONFIRM)) return;
     const sel = ROOT_MENU[m.cursor];
-    if (sel === 'Items') { m.mode = 'items'; m.cursor2 = 0; sfx('Decision1'); }
+    if (sel === 'Inventory') { game.invOpen = !game.invOpen; game.menu = null; sfx('Decision1'); }
     else if (sel === 'Skills') { m.mode = 'skills'; m.cursor2 = 0; m.assign = false; sfx('Decision1'); }
     else if (sel === 'Attribs') { m.mode = 'attribs'; m.cursor2 = 0; sfx('Decision1'); }
     else if (sel === 'Status' || sel === 'Quest') { m.mode = sel.toLowerCase(); sfx('Decision1'); }
@@ -1094,72 +1254,6 @@ function updateMenu(dt) {
       game.scene = 'title';
       game.titleCursor = 0;
       syncMusic();
-    }
-  } else if (m.mode === 'items') {
-    const ids = bagIds(), C = BAG_UI.C;
-    m.cursor2 = Math.min(m.cursor2 || 0, Math.max(0, ids.length - 1));
-    if (!m.focus) m.focus = 'bag';
-    if (!m.bodySlot) m.bodySlot = 'torso';
-
-    // mouse: click selects, double-click uses/equips/unequips, drag moves gear
-    for (const c of clicks) {
-      if (c.b !== 0) continue;
-      const bi = bagCellAt(c.x, c.y), bs = bodySlotAt(c.x, c.y);
-      if (bi >= 0) {
-        m.focus = 'bag';
-        m.cursor2 = bi;
-        if (c.dbl) { if (!useItem(ids[bi])) sfx('Buzzer1'); }
-        else m.drag = { from: 'bag', id: ids[bi] };
-      } else if (bs) {
-        m.focus = 'body';
-        m.bodySlot = bs;
-        if (c.dbl) {
-          if (h.equip[bs]) { unequipSlot(bs); sfx('Cancel1'); } else sfx('Buzzer1');
-        } else if (h.equip[bs]) m.drag = { from: 'body', slot: bs, id: h.equip[bs] };
-      }
-    }
-    for (const r of releases) {
-      if (r.b !== 0 || !m.drag) continue;
-      const bs = bodySlotAt(r.x, r.y);
-      if (m.drag.from === 'bag') {
-        if (bs && !equipTo(m.drag.id, bs)) sfx('Buzzer1');
-      } else if (bs && bs !== m.drag.slot && canPlace(m.drag.id, bs)) {
-        unequipSlot(m.drag.slot); // move between slots (ring to the other finger)
-        equipTo(m.drag.id, bs);
-      } else if (!bs) {
-        unequipSlot(m.drag.slot); // dragged off the body: back to the bag
-        sfx('Cancel1');
-      }
-      m.drag = null;
-    }
-    if (m.drag && !mouse.down) m.drag = null;
-
-    if (pressed(CANCEL)) { m.mode = 'root'; m.drag = null; sfx('Cancel1'); return; }
-    if (pressed(['Tab'])) { m.focus = m.focus === 'bag' ? 'body' : 'bag'; sfx('Cursor1'); }
-    if (m.focus === 'bag') {
-      if (!ids.length) return;
-      if (pressed(['ArrowLeft', 'a'])) { m.cursor2 = (m.cursor2 + ids.length - 1) % ids.length; sfx('Cursor1'); }
-      if (pressed(['ArrowRight', 'd'])) { m.cursor2 = (m.cursor2 + 1) % ids.length; sfx('Cursor1'); }
-      if (pressed(['ArrowUp', 'w']) && m.cursor2 >= C) { m.cursor2 -= C; sfx('Cursor1'); }
-      if (pressed(['ArrowDown', 's']) && m.cursor2 + C < ids.length) { m.cursor2 += C; sfx('Cursor1'); }
-      if (pressed(CONFIRM)) { // eat food / snap gear into its slot
-        if (!useItem(ids[m.cursor2])) sfx('Buzzer1');
-      }
-      if (pressed(['q', 'Q'])) { // drop one on the floor at your feet
-        const id = ids[m.cursor2];
-        removeItem(id, 1);
-        dropFloor(id, 1, h.tx, h.ty);
-        sfx('Cancel1');
-      }
-    } else { // body focus
-      for (const [keys, dir] of [[['ArrowUp', 'w'], 'up'], [['ArrowDown', 's'], 'down'],
-        [['ArrowLeft', 'a'], 'left'], [['ArrowRight', 'd'], 'right']]) {
-        if (pressed(keys) && BODY_NAV[m.bodySlot][dir]) { m.bodySlot = BODY_NAV[m.bodySlot][dir]; sfx('Cursor1'); }
-      }
-      if (pressed(CONFIRM) || pressed(['q', 'Q'])) {
-        if (h.equip[m.bodySlot]) { unequipSlot(m.bodySlot); sfx('Cancel1'); }
-        else sfx('Buzzer1');
-      }
     }
   } else if (m.mode === 'skills') {
     const ids = Object.keys(SKILLS);
@@ -1200,114 +1294,55 @@ function updateMenu(dt) {
     if (pressed(CONFIRM) || pressed(CANCEL)) { m.mode = 'root'; sfx('Cancel1'); }
   }
 }
+const MRX = (W - 112) / 2; // root menu, centered
 function drawMenu() {
   const m = game.menu, h = game.hero;
-  if (m.mode !== 'items') { // the inventory takes the whole screen
-    drawWindow(202, 8, 112, ROOT_MENU.length * 16 + 12);
-    ROOT_MENU.forEach((s, i) => {
-      if (m.mode === 'root' && m.cursor === i) drawCursor(208, 14 + i * 16, 100, 16);
-      const label = s === 'Music' ? 'Music: ' + (MidiPlayer.isEnabled() ? 'On' : 'Off')
-        : s === 'Autoloot' ? 'Autoloot: ' + (game.autoloot ? 'On' : 'Off') : s;
-      text(label, 216, 18 + i * 16);
-    });
-    drawWindow(202, ROOT_MENU.length * 16 + 24, 112, 24);
-    text(`Gold ${h.gold}`, 216, ROOT_MENU.length * 16 + 32);
-  }
-  if (m.mode === 'items') {
-    const ids = bagIds(), { x: BX, y: BY, C, S } = BAG_UI;
-    m.cursor2 = Math.min(m.cursor2 || 0, Math.max(0, ids.length - 1));
-
-    // backpack (left)
-    drawWindow(4, 4, 192, 152);
-    text(`Backpack  ${bagWeight().toFixed(1)}/${capacity()}kg`, 14, 12,
-      overloaded() ? '#f76' : '#bcd');
-    ids.forEach((id, i) => {
-      const x = BX + (i % C) * S, y = BY + Math.floor(i / C) * S;
-      if (m.focus === 'bag' && m.cursor2 === i) drawCursor(x - 4, y - 4, S - 2, S - 2);
-      ctx.drawImage(img[ITEMS[id].img], x, y, 18, 18);
-      text('' + h.bag[id], x + 10, y + 12, '#ffe080');
-    });
-    if (!ids.length) text('Empty...', BX, BY + 4, '#999');
-
-    // paper doll (right)
-    drawWindow(200, 4, 116, 152);
-    text('Body', 246, 10, '#bcd');
-    const mainTwoH = h.equip.main && ITEMS[h.equip.main].twoH;
-    for (const [slot, [x, y]] of Object.entries(BODY_UI)) {
-      ctx.fillStyle = 'rgba(10,20,30,.5)';
-      ctx.fillRect(x, y, 24, 24);
-      const droppable = m.drag && canPlace(m.drag.id, slot);
-      ctx.strokeStyle = droppable ? '#7f7' : '#56718a';
-      ctx.strokeRect(x + 0.5, y + 0.5, 23, 23);
-      const id = h.equip[slot];
-      if (id && !(m.drag && m.drag.from === 'body' && m.drag.slot === slot)) {
-        ctx.drawImage(img[ITEMS[id].img], x + 3, y + 3, 18, 18);
-      } else if (!id && slot === 'off' && mainTwoH) {
-        ctx.globalAlpha = 0.3; // both hands are busy with the two-hander
-        ctx.drawImage(img[ITEMS[h.equip.main].img], x + 3, y + 3, 18, 18);
-        ctx.globalAlpha = 1;
-      } else if (!id) {
-        text(BODY_LABEL[slot], x + 4, y + 8, '#4a6076');
-      }
-      if (m.focus === 'body' && m.bodySlot === slot) drawCursor(x - 2, y - 2, 28, 28);
-    }
-
-    // info bar (bottom)
-    drawWindow(4, 160, 312, 76);
-    const selId = m.drag ? m.drag.id
-      : m.focus === 'bag' ? ids[m.cursor2] : h.equip[m.bodySlot];
-    if (selId) {
-      const it = ITEMS[selId];
-      text(`${it.name} — ${itemInfo(it)}  (${it.w}kg)`, 14, 168);
-    } else text(m.focus === 'body' ? `${BODY_LABEL[m.bodySlot]}: empty slot` : ' ', 14, 168, '#999');
-    text(m.focus === 'bag'
-      ? 'Enter/dbl-click: use or equip   Q: drop   Tab: body'
-      : 'Enter/dbl-click: unequip   Tab: backpack', 14, 182, '#9cf');
-    text('Drag items between backpack and body with the mouse.', 14, 194, '#9cf');
-    if (overloaded()) text('Too heavy! You walk slowly.', 14, 208, '#f76');
-    text(`Gold ${h.gold}`, 14, 222, '#ffe080');
-
-    // drag ghost rides the cursor
-    if (m.drag) {
-      ctx.globalAlpha = 0.85;
-      ctx.drawImage(img[ITEMS[m.drag.id].img], mouse.x - 9, mouse.y - 9, 18, 18);
-      ctx.globalAlpha = 1;
-    }
-  } else if (m.mode === 'skills') {
+  drawWindow(MRX, 8, 112, ROOT_MENU.length * 16 + 12);
+  ROOT_MENU.forEach((s, i) => {
+    if (m.mode === 'root' && m.cursor === i) drawCursor(MRX + 6, 14 + i * 16, 100, 16);
+    const label = s === 'Music' ? 'Music: ' + (MidiPlayer.isEnabled() ? 'On' : 'Off')
+      : s === 'Autoloot' ? 'Autoloot: ' + (game.autoloot ? 'On' : 'Off')
+      : s === 'Inventory' ? 'Inventory: ' + (game.invOpen ? 'On' : 'Off') : s;
+    text(label, MRX + 14, 18 + i * 16);
+  });
+  drawWindow(MRX, ROOT_MENU.length * 16 + 24, 112, 24);
+  text(`Gold ${h.gold}`, MRX + 14, ROOT_MENU.length * 16 + 32);
+  const LX = MRX - 200; // sub-screens open just left of the menu column
+  if (m.mode === 'skills') {
     const ids = Object.keys(SKILLS);
-    drawWindow(8, 8, 188, ids.length * 16 + 48);
+    drawWindow(LX, 8, 188, ids.length * 16 + 48);
     ids.forEach((id, i) => {
       const sk = SKILLS[id], slot = h.slots.indexOf(id);
-      if (m.cursor2 === i) drawCursor(14, 14 + i * 16, 176, 16);
-      text(sk.name, 24, 18 + i * 16);
-      text(sk.mp + 'MP', 88, 18 + i * 16, '#bcd');
-      if (slot >= 0) text(`[${slot + 1}]`, 128, 18 + i * 16, '#ffe080');
+      if (m.cursor2 === i) drawCursor(LX + 6, 14 + i * 16, 176, 16);
+      text(sk.name, LX + 16, 18 + i * 16);
+      text(sk.mp + 'MP', LX + 80, 18 + i * 16, '#bcd');
+      if (slot >= 0) text(`[${slot + 1}]`, LX + 120, 18 + i * 16, '#ffe080');
     });
-    wrapText(SKILLS[ids[m.cursor2]].desc, 20, ids.length * 16 + 22, 164);
-    text(m.assign ? 'Press 1-5 (same slot clears)' : 'Enter: pick a slot', 20, ids.length * 16 + 44,
+    wrapText(SKILLS[ids[m.cursor2]].desc, LX + 12, ids.length * 16 + 22, 164);
+    text(m.assign ? 'Press 1-5 (same slot clears)' : 'Enter: pick a slot', LX + 12, ids.length * 16 + 44,
       m.assign ? '#ffe080' : '#9cf');
   } else if (m.mode === 'attribs') {
     const st = stats();
-    drawWindow(4, 8, 100, ATTRS.length * 15 + 34);
-    text(`Points: ${h.points}`, 12, 15, h.points > 0 ? '#ffe080' : '#bcd');
+    drawWindow(LX, 8, 100, ATTRS.length * 15 + 34);
+    text(`Points: ${h.points}`, LX + 8, 15, h.points > 0 ? '#ffe080' : '#bcd');
     ATTRS.forEach(([k, label], i) => {
-      if (m.cursor2 === i) drawCursor(8, 27 + i * 15, 92, 15);
-      text(label, 14, 31 + i * 15);
-      text('' + h.attr[k], 86, 31 + i * 15, '#ffe080');
+      if (m.cursor2 === i) drawCursor(LX + 4, 27 + i * 15, 92, 15);
+      text(label, LX + 10, 31 + i * 15);
+      text('' + h.attr[k], LX + 82, 31 + i * 15, '#ffe080');
     });
-    text(h.points > 0 ? 'Enter: +1' : 'No points', 12, ATTRS.length * 15 + 28, '#9cf');
-    drawWindow(106, 8, 94, 132);
+    text(h.points > 0 ? 'Enter: +1' : 'No points', LX + 8, ATTRS.length * 15 + 28, '#9cf');
+    drawWindow(LX + 102, 8, 94, 132);
     const dv = [
       ['Attack', st.atk], ['Magic Atk', st.matk], ['Precision', st.prec + '%'],
       ['Crit', st.crit + '%'], ['Endurance', st.end], ['Magic End', st.mend],
       ['Dodge', st.dodge + '%'], ['Atk Spd', st.aspd.toFixed(2)],
     ];
     dv.forEach(([label, v], i) => {
-      text(label, 114, 16 + i * 15, '#bcd');
-      text('' + v, 168, 16 + i * 15);
+      text(label, LX + 110, 16 + i * 15, '#bcd');
+      text('' + v, LX + 164, 16 + i * 15);
     });
   } else if (m.mode === 'status') {
-    drawWindow(8, 8, 188, 124);
+    drawWindow(LX, 8, 188, 124);
     const lines = [
       `Hero  Lv.${h.lv}`,
       `HP  ${Math.floor(h.hp)}/${h.maxhp}`,
@@ -1317,18 +1352,18 @@ function drawMenu() {
       `Attr points  ${h.points}`,
       `Monsters slain  ${h.kills}`,
     ];
-    lines.forEach((l, i) => text(l, 20, 18 + i * 15));
+    lines.forEach((l, i) => text(l, LX + 12, 18 + i * 15));
   } else if (m.mode === 'quest') {
-    drawWindow(8, 8, 188, 76);
-    text('QUEST', 20, 16, '#ffe080');
+    drawWindow(LX, 8, 188, 76);
+    text('QUEST', LX + 12, 16, '#ffe080');
     wrapText(
       game.won ? 'Complete! You are the hero of the valley.'
         : `The Elder asked you to slay 5 monsters in the grass. (${h.kills}/5)`,
-      20, 32, 164);
+      LX + 12, 32, 164);
   }
   if (m.msg) {
-    drawWindow(90, 104, 140, 30);
-    text(m.msg, 104, 115, '#ffe080');
+    drawWindow((W - 140) / 2, (H - 30) / 2, 140, 30);
+    text(m.msg, (W - 140) / 2 + 14, (H - 30) / 2 + 11, '#ffe080');
   }
 }
 
@@ -1382,20 +1417,40 @@ function updateMap(dt) {
   h.hp = Math.min(h.maxhp, h.hp + dt * 0.4);
   updateNpcs(dt);
   updateEnemies(dt);
-  if (game.scene !== 'map') return; // fell in battle
+  if (game.scene !== 'map') return;
   updateProjectiles(dt);
   game.bolts.forEach(b => b.t += dt);
   game.bolts = game.bolts.filter(b => b.t < 0.25);
 
   if (game.lock && (game.lock.dead || game.lock.dying > 0)) game.lock = null;
+
+  // inventory panel: I toggles it, E cycles keyboard focus into it
+  if (pressed(['i', 'I'])) {
+    game.invOpen = !game.invOpen;
+    if (!game.invOpen) { game.invFocus = null; game.invDrag = null; }
+    sfx('Decision1');
+  }
+  if (game.invOpen && pressed(['e', 'E'])) {
+    game.invFocus = game.invFocus === null ? 'bag' : game.invFocus === 'bag' ? 'body' : null;
+    sfx('Cursor1');
+  }
+  if (game.invOpen) updateInvPanel();
+
   for (const c of clicks) {
+    if (game.invOpen && inPanel(c)) continue; // the panel owns its clicks
     if (c.b === 2) { // right-click: lock what's under the cursor (or clear)
       const en = enemyAtPoint(c.x, c.y);
       game.lock = en || null;
       if (en) sfx('Cursor1');
-    } else if (c.b === 0) startPathTo(Math.floor(c.x / TS), Math.floor(c.y / TS));
+    } else if (c.b === 0 && !game.invDrag) startPathTo(Math.floor(c.x / TS), Math.floor(c.y / TS));
   }
-  if (pressed(CANCEL)) { game.menu = { mode: 'root', cursor: 0 }; sfx('Decision1'); return; }
+  if (pressed(CANCEL)) {
+    if (game.invFocus) { game.invFocus = null; sfx('Cancel1'); return; }
+    game.menu = { mode: 'root', cursor: 0 };
+    sfx('Decision1');
+    return;
+  }
+  if (game.invFocus) { updateInvKeys(); return; } // arrows/Enter/Q work the panel
   if (pressed(['Tab'])) cycleLock();
   if (pressed(CONFIRM)) {
     if (interact()) { queue = []; game.path = null; return; }
@@ -1477,6 +1532,21 @@ function drawMap() {
     base: (y + 1) * TS,
     draw: () => ctx.drawImage(img.chipset, TREE[0], TREE[1], TREE[2], TREE[3], x * TS, y * TS - 16, TREE[2], TREE[3]),
   });
+  for (const c of game.corpses) {
+    if (c.map !== game.mapId) continue;
+    drawables.push({
+      base: c.ty * TS + 4, // under the living
+      draw: () => {
+        ctx.save();
+        ctx.translate(c.tx * TS + 8, c.ty * TS + 8);
+        ctx.rotate(Math.PI / 2);
+        ctx.globalAlpha = 0.85;
+        ctx.drawImage(img.hero, 24, 64, 24, 32, -12, -16, 24, 32); // lying on his side
+        ctx.globalAlpha = 1;
+        ctx.restore();
+      },
+    });
+  }
   for (const f of game.floor) {
     if (f.map !== game.mapId) continue;
     drawables.push({
@@ -1524,29 +1594,29 @@ function drawMap() {
   drawPops();
 
   // HUD
-  const hudExtra = (h.points > 0 ? 1 : 0) + (overloaded() ? 1 : 0);
-  drawWindow(4, 4, 126, 34 + hudExtra * 11);
+  drawWindow(4, 4, 126, overloaded() ? 45 : 34);
   text(`HP ${Math.floor(h.hp)}/${h.maxhp}  Lv.${h.lv}`, 12, 10);
   text(`MP ${Math.floor(h.mp)}/${h.maxmp}  Kills ${h.kills}/5`, 12, 21);
-  if (h.points > 0) text(`+${h.points}pts: Esc>Attribs`, 12, 32, '#ffe080');
-  if (overloaded()) text('OVERWEIGHT', 12, h.points > 0 ? 43 : 32, '#f76');
+  if (overloaded()) text('OVERWEIGHT', 12, 32, '#f76');
   if (!game.dialogue) { // skill hotbar
     h.slots.forEach((id, i) => {
-      const x = 4 + i * 21, y = 216;
+      const x = 4 + i * 21, y = H - 24;
       drawWindow(x, y, 20, 20);
       text(String(i + 1), x + 3, y + 2, '#9cf');
       if (id) text(SKILLS[id].name[0], x + 9, y + 9, h.mp >= SKILLS[id].mp ? '#fff' : '#999');
     });
   }
 
+  if (game.invOpen) drawInvPanel();
   if (game.dialogue) {
     const d = game.dialogue;
-    drawWindow(4, 178, 312, 58);
+    const dw = W - 8 - (game.invOpen ? PANEL.w + 4 : 0);
+    drawWindow(4, H - 62, dw, 58);
     const full = d.pages[d.page];
     const shown = full.slice(0, Math.floor(d.chars));
-    wrapText(shown, 14, 188, 292);
+    wrapText(shown, 14, H - 52, dw - 24);
     if (d.chars >= full.length && Math.floor(performance.now() / 400) % 2)
-      text('▼', 300, 222);
+      text('▼', dw - 16, H - 18);
   }
   if (game.menu) drawMenu();
   if (game.shop) drawShop();
@@ -1571,14 +1641,15 @@ function wrapText(str, x, y, w) {
 
 // ---------------------------------------------------------------- title / gameover
 function drawTitle() {
-  ctx.drawImage(img.title, 0, 0);
-  drawWindow(96, 150, 128, 24);
-  text('FABLE QUEST', 128, 158, '#ffe080');
+  // the 320x240 title art, doubled and cropped (sky off the top) to fill 640x400
+  ctx.drawImage(img.title, 0, 0, 320, 240, 0, -80, 640, 480);
+  drawWindow(W / 2 - 64, 240, 128, 24);
+  text('FABLE QUEST', W / 2 - 32, 248, '#ffe080');
   const hasSave = !!localStorage.getItem(SAVE_KEY);
-  drawWindow(96, 180, 128, 48);
-  drawCursor(102, 186 + game.titleCursor * 16, 116, 16);
-  text('New Game', 128, 190);
-  text('Continue', 128, 206, hasSave ? '#fff' : '#999');
+  drawWindow(W / 2 - 64, 270, 128, 48);
+  drawCursor(W / 2 - 58, 276 + game.titleCursor * 16, 116, 16);
+  text('New Game', W / 2 - 32, 280);
+  text('Continue', W / 2 - 32, 296, hasSave ? '#fff' : '#999');
 }
 function updateTitle() {
   if (pressed(['ArrowUp', 'ArrowDown', 'w', 's'])) { game.titleCursor ^= 1; sfx('Cursor1'); }
@@ -1609,9 +1680,6 @@ function loop(ts) {
   } else if (game.scene === 'map') {
     updateMap(dt);
     if (game.scene === 'map') drawMap();
-  } else if (game.scene === 'gameover') {
-    ctx.drawImage(img.gameover, 0, 0);
-    if (pressed(CONFIRM) || clicked(0)) { resetGame(); syncMusic(); }
   }
 
   queue = [];
@@ -1631,12 +1699,13 @@ Promise.all(IMAGES.map(n => new Promise((res, rej) => {
   const p = new URLSearchParams(location.search);
   if (p.get('scene') === 'map') game.scene = 'map';
   if (p.get('gamemenu')) { game.scene = 'map'; game.menu = { mode: p.get('gamemenu') === '1' ? 'root' : p.get('gamemenu'), cursor: 0 }; }
-  if (p.get('enemy')) { // spawn one next to the hero for testing
+  if (p.get('enemy')) { // put the hero on the field with one enemy for testing
     game.scene = 'map';
+    switchMap('field', 9, 12);
     game.enemies.push({
-      kind: p.get('enemy'), tx: 11, ty: 8, px: 11 * TS, py: 8 * TS, dir: 'left',
+      kind: p.get('enemy'), tx: 11, ty: 12, px: 11 * TS, py: 12 * TS, dir: 'left',
       anim: 1, moving: false, wait: 0.5, hp: ENEMIES[p.get('enemy')].hp,
-      maxhp: ENEMIES[p.get('enemy')].hp, flash: 0, dying: 0, stun: 0, hurtT: 9,
+      maxhp: ENEMIES[p.get('enemy')].hp, flash: 0, dying: 0, stun: 0, hurtT: 9, lunge: 0,
     });
   }
   requestAnimationFrame(loop);

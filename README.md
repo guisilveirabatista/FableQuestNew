@@ -18,7 +18,13 @@ Open `index.html` in a browser (double-click it, or `open index.html`).
 | Enter / Space / Z | Talk or read when facing someone, otherwise swing your sword |
 | 1–5 | Cast the skill equipped in that hotbar slot (equip via menu → Skills) |
 | Tab | Lock on to the nearest enemy (press again to cycle). While locked, your sword strikes by itself when the target is in reach, and fireballs home in on it — even diagonally |
-| Esc / X | Open the game menu (Items, Skills, Attribs, Status, Quest, Save, Load, Music, Autoloot, To Title) |
+| I | Show/hide the inventory panel (body + backpack, docked on the right) |
+| E | Focus the inventory panel for keyboard use (cycles backpack → body → off) |
+| Esc / X | Open the game menu (Inventory, Skills, Attribs, Status, Quest, Save, Load, Music, Autoloot, To Title) |
+
+The screen is 640×400 (40×25 tiles) — each map fills it entirely. You start at
+the **spawn point** in the city plaza; dying is not the end: your body stays
+where you fell and you wake up back at the spawn with full HP, gear intact.
 
 Skills: **Fire** (4 MP fireball, homes in on your lock), **Heal** (6 MP, +15 HP),
 **Spin** (3 MP sword sweep all around you), **Bolt** (6 MP lightning on your lock
@@ -33,15 +39,18 @@ Talk to a keeper to browse; Enter buys.
 
 ## Backpack, equipment & weight
 
-Menu → Items opens the inventory: your backpack as an icon grid (counts in the
-corner) beside a **paper doll** with body slots — head, weapon hand, off-hand
-(shield), torso, legs, boots and two accessory slots. Equip gear three ways:
+Press **I** (or menu → Inventory) to toggle the always-on inventory panel,
+docked to the right edge of the screen: a **paper doll** with body slots —
+head, weapon hand, off-hand (shield), torso, legs, boots and two accessory
+slots — with your backpack (icon grid, counts in the corner) below it. The
+game keeps running while it's open. Equip gear three ways:
 
 - **Drag** an item from the backpack onto a body slot with the mouse (valid
-  slots light up green); drag gear off the body to unequip, or between the two
-  accessory slots.
-- **Keyboard**: arrows move the cursor, Tab switches between backpack and
-  body, Enter snaps gear into its natural slot (or unequips on the body side).
+  slots light up green); drag gear off the body to unequip, between the two
+  accessory slots to swap fingers, or out onto the map to drop it at your feet.
+- **Keyboard**: press E to focus the panel (backpack → body → off), arrows
+  move the cursor, Enter snaps gear into its natural slot (or unequips on the
+  body side). The hero stands still while the panel has keyboard focus.
 - **Double-click** an item to equip it (or a body slot to unequip).
 
 A two-handed weapon (the Claymore) needs both arms: equipping it sends your
