@@ -11,7 +11,9 @@ const TS = 16, MW = 20, MH = 15;
 
 // ---------------------------------------------------------------- assets
 const IMAGES = ['chipset', 'hero', 'npc', 'custom', 'knight', 'system', 'title', 'gameover',
-  'monsters', 'slash', 'flame'];
+  'monsters', 'slash', 'flame',
+  'i_potion', 'i_bread', 'i_meat', 'i_sword1', 'i_sword2', 'i_sword3',
+  'i_hat', 'i_helm', 'i_shield', 'i_armor', 'i_legs', 'i_boots', 'i_ring', 'i_amulet'];
 const img = {};
 let audioOk = false;
 function sfx(name) {
@@ -44,14 +46,32 @@ addEventListener('keydown', e => {
 addEventListener('keyup', e => { held[e.key] = false; });
 function pressed(keys) { return queue.some(k => keys.includes(k)); }
 
-// mouse: button 0 walks (click-to-move), button 2 locks a target
-let clicks = [];
+// mouse: button 0 walks (click-to-move), button 2 locks a target.
+// In menus the same events drive the inventory: click, double-click, drag.
+let clicks = [], releases = [];
+const mouse = { x: 0, y: 0, down: false };
+let lastClick = { t: 0, x: -99, y: -99 };
+function canvasXY(e) {
+  const r = cv.getBoundingClientRect();
+  return { x: (e.clientX - r.left) * 320 / r.width, y: (e.clientY - r.top) * 240 / r.height };
+}
 cv.addEventListener('contextmenu', e => e.preventDefault());
+cv.addEventListener('mousemove', e => Object.assign(mouse, canvasXY(e)));
 cv.addEventListener('mousedown', e => {
   e.preventDefault();
-  const r = cv.getBoundingClientRect();
-  clicks.push({ b: e.button, x: (e.clientX - r.left) * 320 / r.width, y: (e.clientY - r.top) * 240 / r.height });
+  const p = canvasXY(e);
+  Object.assign(mouse, p);
+  if (e.button === 0) mouse.down = true;
+  const now = performance.now();
+  const dbl = e.button === 0 && now - lastClick.t < 400 &&
+    Math.abs(p.x - lastClick.x) < 8 && Math.abs(p.y - lastClick.y) < 8;
+  if (e.button === 0) lastClick = { t: dbl ? 0 : now, x: p.x, y: p.y };
+  clicks.push({ b: e.button, x: p.x, y: p.y, dbl });
   if (!audioOk) { audioOk = true; syncMusic(); }
+});
+addEventListener('mouseup', e => {
+  if (e.button === 0) mouse.down = false;
+  releases.push({ b: e.button, x: mouse.x, y: mouse.y });
 });
 function clicked(button) { return clicks.some(c => c.b === button); }
 function dirHeld() {
@@ -59,6 +79,11 @@ function dirHeld() {
   if (held['ArrowDown'] || held['s']) return 'down';
   if (held['ArrowLeft'] || held['a']) return 'left';
   if (held['ArrowRight'] || held['d']) return 'right';
+  // a tap quicker than one frame still turns/steps the hero
+  if (pressed(['ArrowUp', 'w'])) return 'up';
+  if (pressed(['ArrowDown', 's'])) return 'down';
+  if (pressed(['ArrowLeft', 'a'])) return 'left';
+  if (pressed(['ArrowRight', 'd'])) return 'right';
   return null;
 }
 
@@ -104,15 +129,21 @@ const ATTRS = [
 const BASE_ATTR = { agi: 1, int: 1, vit: 2, str: 2, dex: 1, mag: 1, luck: 1 };
 function stats() {
   const a = game.hero.attr;
-  const wpn = game.hero.weapon ? ITEMS[game.hero.weapon].atk : 0;
+  const eq = { atk: 0, def: 0, mdef: 0, dodge: 0, crit: 0 }; // worn gear bonuses
+  for (const id of Object.values(game.hero.equip)) {
+    if (!id) continue;
+    const it = ITEMS[id];
+    eq.atk += it.atk || 0; eq.def += it.def || 0; eq.mdef += it.mdef || 0;
+    eq.dodge += it.dodge || 0; eq.crit += it.crit || 0;
+  }
   return {
-    atk: Math.floor(1 + a.str * 2 + a.dex * 0.5) + wpn,     // physical damage
+    atk: Math.floor(1 + a.str * 2 + a.dex * 0.5) + eq.atk,  // physical damage
     matk: Math.floor(2 + a.mag * 2 + a.int),                // fire/bolt damage
     prec: Math.min(100, 80 + a.dex + Math.floor(a.luck * 0.5)), // % chance melee connects
-    crit: Math.min(80, Math.floor(2 + a.luck + a.dex * 0.5)),   // % chance of double damage
-    end: Math.floor(a.vit + a.str * 0.25),                  // halves off physical hits
-    mend: Math.floor(a.int + a.vit * 0.5),                  // halves off magic (ghost) hits
-    dodge: Math.min(60, Math.floor(a.agi + a.luck * 0.5)),  // % chance to evade a hit
+    crit: Math.min(80, Math.floor(2 + a.luck + a.dex * 0.5) + eq.crit), // % chance of double damage
+    end: Math.floor(a.vit + a.str * 0.25) + eq.def,         // halves off physical hits
+    mend: Math.floor(a.int + a.vit * 0.5) + eq.mdef,        // halves off magic (ghost) hits
+    dodge: Math.min(60, Math.floor(a.agi + a.luck * 0.5) + eq.dodge), // % chance to evade a hit
     aspd: 1 + a.agi * 0.02,                                 // attack cooldown divider
   };
 }
@@ -128,12 +159,12 @@ function resetGame() {
   game.hero = {
     tx: 9, ty: 8, px: 9 * TS, py: 8 * TS, dir: 'down', anim: 0, moving: false,
     hp: 30, maxhp: 30, mp: 10, maxmp: 10, lv: 1, exp: 0, gold: 0,
-    potions: 3, kills: 0,
+    kills: 0,
     slots: ['fire', 'heal', 'spin', 'bolt', null], // skill hotbar, keys 1-5
     attr: { ...BASE_ATTR },
     points: 0, // attribute points to spend (3 per level-up)
     bag: { potion: 3 },
-    weapon: null,
+    equip: { head: null, main: null, off: null, torso: null, legs: null, boots: null, acc1: null, acc2: null },
   };
   recalcMax();
   game.steps = 0;
@@ -204,7 +235,14 @@ function loadGame() {
   }
   if (!h.bag) { // pre-inventory save: h.potions was a bare counter
     h.bag = { potion: h.potions || 0 };
-    h.weapon = null;
+  }
+  if (!h.equip) { // pre-paper-doll save: h.weapon was equipped straight from the bag
+    h.equip = { head: null, main: null, off: null, torso: null, legs: null, boots: null, acc1: null, acc2: null };
+    if (h.weapon && h.bag[h.weapon] > 0) {
+      h.bag[h.weapon]--;
+      h.equip.main = h.weapon;
+    }
+    delete h.weapon;
   }
   return true;
 }
@@ -213,8 +251,8 @@ function loadGame() {
 // ground chars: G grass, D dirt, W water (blocked), P pavement,
 // X city wall, R shop brick, U shop stucco, O shop door (all blocked)
 const GROUND_T = {
-  G: [304, 48], D: [352, 48], W: [0, 64], P: [208, 96],
-  X: [224, 80], R: [224, 32], U: [224, 48], O: [208, 48],
+  G: [304, 48], D: [352, 48], W: [0, 64], P: [192, 80],
+  X: [224, 0], R: [224, 32], U: [224, 48], O: [208, 32],
 };
 const SOLID_GROUND = 'WXRUO';
 
@@ -237,7 +275,7 @@ const MAPS = {
       'GGGGGGGGGGGGGGGGGGGG',
       'GGGGGGGGGGGGGGGGGGGG',
     ],
-    trees: [[2, 4], [6, 2], [9, 4], [15, 11], [11, 12], [17, 9], [12, 2]],
+    trees: [[2, 4], [6, 2], [9, 4], [15, 11], [11, 12], [6, 10], [12, 2]],
     props: [
       ['rock', 7, 6], ['rock', 13, 10], ['rock', 3, 7],
       ['well', 3, 12], ['sign', 10, 7], ['palm', 13, 5], ['palm', 18, 5],
@@ -268,14 +306,14 @@ const MAPS = {
     ],
     trees: [],
     props: [['well', 9, 10]],
-    deco: [ // [sx, sy, x, y, solid] 16x32 chipset sprites, feet at (x,y)
-      [432, 64, 6, 3, false],  // hanging sword sign (weapon shop)
-      [464, 64, 16, 3, false], // hanging flask sign (item shop)
-      [384, 64, 1, 4, true],   // torches
-      [384, 64, 18, 4, true],
-      [400, 128, 1, 12, true], // barrels
-      [400, 128, 2, 12, true],
-      [400, 128, 18, 12, true],
+    deco: [ // [sx, sy, w, h, x, y, solid] chipset sprites, feet at tile (x,y)
+      [432, 64, 16, 16, 6, 3, false],  // hanging sword sign (weapon shop)
+      [464, 64, 16, 16, 16, 3, false], // hanging flask sign (item shop)
+      [384, 64, 16, 16, 1, 4, true],   // torches
+      [384, 64, 16, 16, 18, 4, true],
+      [448, 128, 16, 32, 1, 12, true], // barrels
+      [448, 128, 16, 32, 2, 12, true],
+      [448, 128, 16, 32, 18, 12, true],
     ],
     hedge: false,
     spawn: false,
@@ -306,7 +344,7 @@ for (const [id, m] of Object.entries(MAPS)) {
   for (const [x, y] of m.trees) for (const [dx, dy] of [[0, 0], [1, 0], [0, -1], [1, -1]])
     b.add((x + dx) + ',' + (y + dy));
   for (const [, x, y] of m.props) b.add(x + ',' + y);
-  for (const [, , x, y, solid] of m.deco) if (solid) b.add(x + ',' + y);
+  for (const [, , , , x, y, solid] of m.deco) if (solid) b.add(x + ',' + y);
 }
 
 function isBlocked(x, y) {
@@ -319,6 +357,8 @@ function switchMap(to, tx, ty) {
   const h = game.hero;
   game.mapId = to;
   h.tx = tx; h.ty = ty; h.px = tx * TS; h.py = ty * TS; h.moving = false;
+  game.enemies = [];
+  game.spawnT = 1;
   game.lock = null;
   game.path = null;
   game.projectiles = [];
@@ -577,6 +617,9 @@ function killEnemy(en) {
   sfx('Monster1');
   h.kills++; h.exp += e.exp; h.gold += e.gold;
   addPop(`+${e.exp}exp`, en.px + 8, en.py - 20, '#9f9');
+  if (Math.random() < 0.25) { // loot drop where it fell
+    dropFloor(Math.random() < 0.7 ? 'bread' : 'potion', 1, en.tx, en.ty);
+  }
   if (h.exp >= h.lv * 10) {
     h.exp -= h.lv * 10; h.lv++; h.points += 3;
     recalcMax();
@@ -715,16 +758,94 @@ function updateProjectiles(dt) {
 }
 
 // ---------------------------------------------------------------- items & inventory
-// use-items heal; weapons add Attack while equipped. Everything weighs you down:
-// past capacity (level + Strength) the hero trudges at half speed.
+// use-items heal; equipment goes on the body (slot field) and its bonuses feed
+// stats(). Bag contents weigh you down: past capacity (level + Strength) the
+// hero trudges at half speed. Worn gear weighs nothing — you're wearing it.
 const ITEMS = {
   bread: { name: 'Bread', img: 'i_bread', w: 0.4, heal: 8, price: 10 },
   meat: { name: 'Meat', img: 'i_meat', w: 0.8, heal: 25, price: 35 },
   potion: { name: 'Potion', img: 'i_potion', w: 0.5, heal: 15, price: 25 },
-  sword1: { name: 'Bronze Sword', img: 'i_sword1', w: 3, atk: 2, price: 60 },
-  sword2: { name: 'Iron Sword', img: 'i_sword2', w: 5, atk: 5, price: 150 },
-  sword3: { name: 'Claymore', img: 'i_sword3', w: 8, atk: 9, price: 340 },
+  sword1: { name: 'Bronze Sword', img: 'i_sword1', w: 3, slot: 'main', atk: 2, price: 60 },
+  sword2: { name: 'Iron Sword', img: 'i_sword2', w: 5, slot: 'main', atk: 5, price: 150 },
+  sword3: { name: 'Claymore', img: 'i_sword3', w: 8, slot: 'main', atk: 9, twoH: true, price: 340 },
+  shield: { name: 'Buckler', img: 'i_shield', w: 4, slot: 'off', def: 2, price: 90 },
+  hat: { name: 'Felt Hat', img: 'i_hat', w: 0.5, slot: 'head', def: 1, price: 40 },
+  helm: { name: 'Iron Helm', img: 'i_helm', w: 3, slot: 'head', def: 3, price: 180 },
+  armor: { name: 'Breastplate', img: 'i_armor', w: 7, slot: 'torso', def: 4, price: 260 },
+  legs: { name: 'Greaves', img: 'i_legs', w: 4, slot: 'legs', def: 2, price: 120 },
+  boots: { name: 'Swift Boots', img: 'i_boots', w: 1.5, slot: 'boots', dodge: 3, price: 110 },
+  ring: { name: 'Lucky Ring', img: 'i_ring', w: 0.1, slot: 'acc', crit: 5, price: 200 },
+  amulet: { name: 'Ward Amulet', img: 'i_amulet', w: 0.2, slot: 'acc', mdef: 3, price: 200 },
 };
+
+// body slots: what the hero wears. 'acc' items fit either accessory slot;
+// a two-handed weapon needs both arms, so it kicks out (and blocks) the shield.
+const BODY_SLOTS = ['head', 'main', 'torso', 'off', 'legs', 'acc1', 'boots', 'acc2'];
+const BODY_GRID = [ // keyboard navigation layout (rows of the paper doll)
+  [null, 'head', null],
+  ['main', 'torso', 'off'],
+  [null, 'legs', null],
+  ['acc1', 'boots', 'acc2'],
+];
+function canPlace(id, slot) {
+  const want = ITEMS[id].slot;
+  if (!want) return false;
+  if (want === 'acc') return slot === 'acc1' || slot === 'acc2';
+  return want === slot;
+}
+function slotFor(id) { // natural slot for keyboard/double-click equip
+  const want = ITEMS[id].slot;
+  if (want === 'acc') return !game.hero.equip.acc1 ? 'acc1' : 'acc2';
+  return want;
+}
+function unequipSlot(slot) {
+  const h = game.hero, id = h.equip[slot];
+  if (!id) return;
+  h.equip[slot] = null;
+  h.bag[id] = (h.bag[id] || 0) + 1;
+}
+function equipTo(id, slot) {
+  const h = game.hero;
+  if (!canPlace(id, slot) || !(h.bag[id] > 0)) return false;
+  if (ITEMS[id].twoH) unequipSlot('off'); // both hands on the claymore
+  if (slot === 'off' && h.equip.main && ITEMS[h.equip.main].twoH) unequipSlot('main');
+  unequipSlot(slot);
+  h.bag[id]--;
+  h.equip[slot] = id;
+  sfx('Decision1');
+  return true;
+}
+
+// inventory screen geometry: backpack grid left, paper doll right
+const BAG_UI = { x: 18, y: 30, C: 6, S: 26 };
+const BODY_UI = {
+  head: [250, 20], main: [218, 50], torso: [250, 50], off: [282, 50],
+  legs: [250, 80], acc1: [218, 110], boots: [250, 110], acc2: [282, 110],
+};
+const BODY_LABEL = { head: 'Hd', main: 'Wpn', off: 'Off', torso: 'Tor', legs: 'Leg', boots: 'Bt', acc1: 'Ac', acc2: 'Ac' };
+const BODY_NAV = { // keyboard moves between slots, roughly matching the doll shape
+  head: { down: 'torso' },
+  main: { right: 'torso', down: 'acc1' },
+  torso: { up: 'head', left: 'main', right: 'off', down: 'legs' },
+  off: { left: 'torso', down: 'acc2' },
+  legs: { up: 'torso', down: 'boots', left: 'main', right: 'off' },
+  acc1: { right: 'boots', up: 'main' },
+  boots: { up: 'legs', left: 'acc1', right: 'acc2' },
+  acc2: { left: 'boots', up: 'off' },
+};
+function bagCellAt(px, py) { // bag index under a canvas point, or -1
+  const n = bagIds().length;
+  for (let i = 0; i < n; i++) {
+    const x = BAG_UI.x + (i % BAG_UI.C) * BAG_UI.S, y = BAG_UI.y + Math.floor(i / BAG_UI.C) * BAG_UI.S;
+    if (px >= x - 3 && px < x + 21 && py >= y - 3 && py < y + 21) return i;
+  }
+  return -1;
+}
+function bodySlotAt(px, py) {
+  for (const [slot, [x, y]] of Object.entries(BODY_UI))
+    if (px >= x && px < x + 24 && py >= y && py < y + 24) return slot;
+  return null;
+}
 function bagIds() { return Object.keys(ITEMS).filter(id => game.hero.bag[id] > 0); }
 function bagWeight() {
   return Object.entries(game.hero.bag).reduce((s, [id, n]) => s + ITEMS[id].w * n, 0);
@@ -737,9 +858,8 @@ function addItem(id, n) {
 function removeItem(id, n) {
   const h = game.hero;
   h.bag[id] = Math.max(0, (h.bag[id] || 0) - n);
-  if (!h.bag[id] && h.weapon === id) h.weapon = null; // dropped your blade
 }
-function useItem(id) { // returns true if consumed/toggled
+function useItem(id) { // returns true if consumed/equipped
   const h = game.hero, it = ITEMS[id];
   if (it.heal) {
     if (h.hp >= h.maxhp) return false;
@@ -749,11 +869,7 @@ function useItem(id) { // returns true if consumed/toggled
     sfx('Recovery1');
     return true;
   }
-  if (it.atk) {
-    h.weapon = h.weapon === id ? null : id;
-    sfx('Decision1');
-    return true;
-  }
+  if (it.slot) return equipTo(id, slotFor(id));
   return false;
 }
 
@@ -783,9 +899,20 @@ function pickupAt(tx, ty) {
 
 // ---------------------------------------------------------------- shops
 const SHOPS = {
-  smith: { name: 'Blacksmith', stock: ['sword1', 'sword2', 'sword3'] },
-  grocer: { name: 'Grocer', stock: ['bread', 'meat', 'potion'] },
+  smith: { name: 'Blacksmith', stock: ['sword1', 'sword2', 'sword3', 'shield', 'hat', 'helm', 'armor', 'legs'] },
+  grocer: { name: 'Grocer', stock: ['bread', 'meat', 'potion', 'boots', 'ring', 'amulet'] },
 };
+function itemInfo(it) {
+  if (it.heal) return `Heals ${it.heal} HP`;
+  const parts = [];
+  if (it.atk) parts.push(`Atk+${it.atk}`);
+  if (it.def) parts.push(`Def+${it.def}`);
+  if (it.mdef) parts.push(`MDef+${it.mdef}`);
+  if (it.dodge) parts.push(`Dodge+${it.dodge}%`);
+  if (it.crit) parts.push(`Crit+${it.crit}%`);
+  if (it.twoH) parts.push('2-handed');
+  return parts.join('  ');
+}
 function openShop(who) {
   game.shop = { who, cursor: 0 };
   sfx('Decision1');
@@ -806,20 +933,20 @@ function updateShop() {
 }
 function drawShop() {
   const s = game.shop, h = game.hero, shop = SHOPS[s.who], stock = shop.stock;
-  drawWindow(40, 40, 240, stock.length * 18 + 74);
-  text(`${shop.name} — Gold ${h.gold}`, 52, 48, '#ffe080');
+  drawWindow(40, 8, 240, stock.length * 18 + 74);
+  text(`${shop.name} — Gold ${h.gold}`, 52, 16, '#ffe080');
   stock.forEach((id, i) => {
     const it = ITEMS[id];
-    if (s.cursor === i) drawCursor(46, 60 + i * 18, 228, 18);
-    ctx.drawImage(img[it.img], 52, 61 + i * 18, 16, 16);
-    text(it.name, 72, 65 + i * 18, h.gold >= it.price ? '#fff' : '#999');
-    text(it.price + 'g', 192, 65 + i * 18, '#ffe080');
-    text('x' + (h.bag[id] || 0), 236, 65 + i * 18, '#bcd');
+    if (s.cursor === i) drawCursor(46, 28 + i * 18, 228, 18);
+    ctx.drawImage(img[it.img], 52, 29 + i * 18, 16, 16);
+    text(it.name, 72, 33 + i * 18, h.gold >= it.price ? '#fff' : '#999');
+    text(it.price + 'g', 192, 33 + i * 18, '#ffe080');
+    text('x' + (h.bag[id] || 0), 236, 33 + i * 18, '#bcd');
   });
   const it = ITEMS[stock[s.cursor]];
-  text(it.atk ? `Attack +${it.atk}` : `Heals ${it.heal} HP`, 52, stock.length * 18 + 66, '#bcd');
-  text(`Weight ${it.w}   (carrying ${bagWeight().toFixed(1)}/${capacity()})`, 52, stock.length * 18 + 80, '#bcd');
-  text('Enter: buy   Esc: leave', 52, stock.length * 18 + 96, '#9cf');
+  text(itemInfo(it), 52, stock.length * 18 + 34, '#bcd');
+  text(`Weight ${it.w}   (carrying ${bagWeight().toFixed(1)}/${capacity()})`, 52, stock.length * 18 + 48, '#bcd');
+  text('Enter: buy   Esc: leave', 52, stock.length * 18 + 64, '#9cf');
 }
 
 // tint buffer for colored hit-flashes on 24x32 charas
@@ -932,7 +1059,7 @@ function drawPops() {
 }
 
 // ---------------------------------------------------------------- game menu
-const ROOT_MENU = ['Items', 'Skills', 'Attribs', 'Status', 'Quest', 'Save', 'Load', 'Music', 'To Title'];
+const ROOT_MENU = ['Items', 'Skills', 'Attribs', 'Status', 'Quest', 'Save', 'Load', 'Music', 'Autoloot', 'To Title'];
 function updateMenu(dt) {
   const m = game.menu, h = game.hero;
   if (m.msg) {
@@ -946,7 +1073,7 @@ function updateMenu(dt) {
     if (pressed(CANCEL)) { game.menu = null; sfx('Cancel1'); return; }
     if (!pressed(CONFIRM)) return;
     const sel = ROOT_MENU[m.cursor];
-    if (sel === 'Items') { m.mode = 'items'; sfx('Decision1'); }
+    if (sel === 'Items') { m.mode = 'items'; m.cursor2 = 0; sfx('Decision1'); }
     else if (sel === 'Skills') { m.mode = 'skills'; m.cursor2 = 0; m.assign = false; sfx('Decision1'); }
     else if (sel === 'Attribs') { m.mode = 'attribs'; m.cursor2 = 0; sfx('Decision1'); }
     else if (sel === 'Status' || sel === 'Quest') { m.mode = sel.toLowerCase(); sfx('Decision1'); }
@@ -958,6 +1085,9 @@ function updateMenu(dt) {
       MidiPlayer.setEnabled(!MidiPlayer.isEnabled());
       if (MidiPlayer.isEnabled()) syncMusic();
       sfx('Decision1');
+    } else if (sel === 'Autoloot') {
+      game.autoloot = !game.autoloot;
+      sfx('Decision1');
     } else { // To Title
       sfx('Decision1');
       game.menu = null;
@@ -966,13 +1096,70 @@ function updateMenu(dt) {
       syncMusic();
     }
   } else if (m.mode === 'items') {
-    if (pressed(CANCEL)) { m.mode = 'root'; sfx('Cancel1'); return; }
-    if (pressed(CONFIRM)) {
-      if (h.potions > 0 && h.hp < h.maxhp) {
-        h.potions--;
-        h.hp = Math.min(h.maxhp, h.hp + 15);
-        sfx('Recovery1');
-      } else sfx('Buzzer1');
+    const ids = bagIds(), C = BAG_UI.C;
+    m.cursor2 = Math.min(m.cursor2 || 0, Math.max(0, ids.length - 1));
+    if (!m.focus) m.focus = 'bag';
+    if (!m.bodySlot) m.bodySlot = 'torso';
+
+    // mouse: click selects, double-click uses/equips/unequips, drag moves gear
+    for (const c of clicks) {
+      if (c.b !== 0) continue;
+      const bi = bagCellAt(c.x, c.y), bs = bodySlotAt(c.x, c.y);
+      if (bi >= 0) {
+        m.focus = 'bag';
+        m.cursor2 = bi;
+        if (c.dbl) { if (!useItem(ids[bi])) sfx('Buzzer1'); }
+        else m.drag = { from: 'bag', id: ids[bi] };
+      } else if (bs) {
+        m.focus = 'body';
+        m.bodySlot = bs;
+        if (c.dbl) {
+          if (h.equip[bs]) { unequipSlot(bs); sfx('Cancel1'); } else sfx('Buzzer1');
+        } else if (h.equip[bs]) m.drag = { from: 'body', slot: bs, id: h.equip[bs] };
+      }
+    }
+    for (const r of releases) {
+      if (r.b !== 0 || !m.drag) continue;
+      const bs = bodySlotAt(r.x, r.y);
+      if (m.drag.from === 'bag') {
+        if (bs && !equipTo(m.drag.id, bs)) sfx('Buzzer1');
+      } else if (bs && bs !== m.drag.slot && canPlace(m.drag.id, bs)) {
+        unequipSlot(m.drag.slot); // move between slots (ring to the other finger)
+        equipTo(m.drag.id, bs);
+      } else if (!bs) {
+        unequipSlot(m.drag.slot); // dragged off the body: back to the bag
+        sfx('Cancel1');
+      }
+      m.drag = null;
+    }
+    if (m.drag && !mouse.down) m.drag = null;
+
+    if (pressed(CANCEL)) { m.mode = 'root'; m.drag = null; sfx('Cancel1'); return; }
+    if (pressed(['Tab'])) { m.focus = m.focus === 'bag' ? 'body' : 'bag'; sfx('Cursor1'); }
+    if (m.focus === 'bag') {
+      if (!ids.length) return;
+      if (pressed(['ArrowLeft', 'a'])) { m.cursor2 = (m.cursor2 + ids.length - 1) % ids.length; sfx('Cursor1'); }
+      if (pressed(['ArrowRight', 'd'])) { m.cursor2 = (m.cursor2 + 1) % ids.length; sfx('Cursor1'); }
+      if (pressed(['ArrowUp', 'w']) && m.cursor2 >= C) { m.cursor2 -= C; sfx('Cursor1'); }
+      if (pressed(['ArrowDown', 's']) && m.cursor2 + C < ids.length) { m.cursor2 += C; sfx('Cursor1'); }
+      if (pressed(CONFIRM)) { // eat food / snap gear into its slot
+        if (!useItem(ids[m.cursor2])) sfx('Buzzer1');
+      }
+      if (pressed(['q', 'Q'])) { // drop one on the floor at your feet
+        const id = ids[m.cursor2];
+        removeItem(id, 1);
+        dropFloor(id, 1, h.tx, h.ty);
+        sfx('Cancel1');
+      }
+    } else { // body focus
+      for (const [keys, dir] of [[['ArrowUp', 'w'], 'up'], [['ArrowDown', 's'], 'down'],
+        [['ArrowLeft', 'a'], 'left'], [['ArrowRight', 'd'], 'right']]) {
+        if (pressed(keys) && BODY_NAV[m.bodySlot][dir]) { m.bodySlot = BODY_NAV[m.bodySlot][dir]; sfx('Cursor1'); }
+      }
+      if (pressed(CONFIRM) || pressed(['q', 'Q'])) {
+        if (h.equip[m.bodySlot]) { unequipSlot(m.bodySlot); sfx('Cancel1'); }
+        else sfx('Buzzer1');
+      }
     }
   } else if (m.mode === 'skills') {
     const ids = Object.keys(SKILLS);
@@ -1015,19 +1202,77 @@ function updateMenu(dt) {
 }
 function drawMenu() {
   const m = game.menu, h = game.hero;
-  drawWindow(202, 8, 112, ROOT_MENU.length * 16 + 12);
-  ROOT_MENU.forEach((s, i) => {
-    if (m.mode === 'root' && m.cursor === i) drawCursor(208, 14 + i * 16, 100, 16);
-    const label = s === 'Music' ? 'Music: ' + (MidiPlayer.isEnabled() ? 'On' : 'Off') : s;
-    text(label, 216, 18 + i * 16);
-  });
-  drawWindow(202, ROOT_MENU.length * 16 + 24, 112, 24);
-  text(`Gold ${h.gold}`, 216, ROOT_MENU.length * 16 + 32);
+  if (m.mode !== 'items') { // the inventory takes the whole screen
+    drawWindow(202, 8, 112, ROOT_MENU.length * 16 + 12);
+    ROOT_MENU.forEach((s, i) => {
+      if (m.mode === 'root' && m.cursor === i) drawCursor(208, 14 + i * 16, 100, 16);
+      const label = s === 'Music' ? 'Music: ' + (MidiPlayer.isEnabled() ? 'On' : 'Off')
+        : s === 'Autoloot' ? 'Autoloot: ' + (game.autoloot ? 'On' : 'Off') : s;
+      text(label, 216, 18 + i * 16);
+    });
+    drawWindow(202, ROOT_MENU.length * 16 + 24, 112, 24);
+    text(`Gold ${h.gold}`, 216, ROOT_MENU.length * 16 + 32);
+  }
   if (m.mode === 'items') {
-    drawWindow(8, 8, 188, 46);
-    drawCursor(14, 14, 176, 16);
-    text(`Potion  x${h.potions}`, 24, 18, h.potions > 0 ? '#fff' : '#999');
-    text('Restores 15 HP.', 24, 34, '#bcd');
+    const ids = bagIds(), { x: BX, y: BY, C, S } = BAG_UI;
+    m.cursor2 = Math.min(m.cursor2 || 0, Math.max(0, ids.length - 1));
+
+    // backpack (left)
+    drawWindow(4, 4, 192, 152);
+    text(`Backpack  ${bagWeight().toFixed(1)}/${capacity()}kg`, 14, 12,
+      overloaded() ? '#f76' : '#bcd');
+    ids.forEach((id, i) => {
+      const x = BX + (i % C) * S, y = BY + Math.floor(i / C) * S;
+      if (m.focus === 'bag' && m.cursor2 === i) drawCursor(x - 4, y - 4, S - 2, S - 2);
+      ctx.drawImage(img[ITEMS[id].img], x, y, 18, 18);
+      text('' + h.bag[id], x + 10, y + 12, '#ffe080');
+    });
+    if (!ids.length) text('Empty...', BX, BY + 4, '#999');
+
+    // paper doll (right)
+    drawWindow(200, 4, 116, 152);
+    text('Body', 246, 10, '#bcd');
+    const mainTwoH = h.equip.main && ITEMS[h.equip.main].twoH;
+    for (const [slot, [x, y]] of Object.entries(BODY_UI)) {
+      ctx.fillStyle = 'rgba(10,20,30,.5)';
+      ctx.fillRect(x, y, 24, 24);
+      const droppable = m.drag && canPlace(m.drag.id, slot);
+      ctx.strokeStyle = droppable ? '#7f7' : '#56718a';
+      ctx.strokeRect(x + 0.5, y + 0.5, 23, 23);
+      const id = h.equip[slot];
+      if (id && !(m.drag && m.drag.from === 'body' && m.drag.slot === slot)) {
+        ctx.drawImage(img[ITEMS[id].img], x + 3, y + 3, 18, 18);
+      } else if (!id && slot === 'off' && mainTwoH) {
+        ctx.globalAlpha = 0.3; // both hands are busy with the two-hander
+        ctx.drawImage(img[ITEMS[h.equip.main].img], x + 3, y + 3, 18, 18);
+        ctx.globalAlpha = 1;
+      } else if (!id) {
+        text(BODY_LABEL[slot], x + 4, y + 8, '#4a6076');
+      }
+      if (m.focus === 'body' && m.bodySlot === slot) drawCursor(x - 2, y - 2, 28, 28);
+    }
+
+    // info bar (bottom)
+    drawWindow(4, 160, 312, 76);
+    const selId = m.drag ? m.drag.id
+      : m.focus === 'bag' ? ids[m.cursor2] : h.equip[m.bodySlot];
+    if (selId) {
+      const it = ITEMS[selId];
+      text(`${it.name} — ${itemInfo(it)}  (${it.w}kg)`, 14, 168);
+    } else text(m.focus === 'body' ? `${BODY_LABEL[m.bodySlot]}: empty slot` : ' ', 14, 168, '#999');
+    text(m.focus === 'bag'
+      ? 'Enter/dbl-click: use or equip   Q: drop   Tab: body'
+      : 'Enter/dbl-click: unequip   Tab: backpack', 14, 182, '#9cf');
+    text('Drag items between backpack and body with the mouse.', 14, 194, '#9cf');
+    if (overloaded()) text('Too heavy! You walk slowly.', 14, 208, '#f76');
+    text(`Gold ${h.gold}`, 14, 222, '#ffe080');
+
+    // drag ghost rides the cursor
+    if (m.drag) {
+      ctx.globalAlpha = 0.85;
+      ctx.drawImage(img[ITEMS[m.drag.id].img], mouse.x - 9, mouse.y - 9, 18, 18);
+      ctx.globalAlpha = 1;
+    }
   } else if (m.mode === 'skills') {
     const ids = Object.keys(SKILLS);
     drawWindow(8, 8, 188, ids.length * 16 + 48);
@@ -1114,6 +1359,9 @@ function updateNpcs(dt) {
 
 function updateMap(dt) {
   const h = game.hero;
+  for (const p of game.pops) p.t += dt;
+  game.pops = game.pops.filter(p => p.t < 0.8);
+  if (game.shop) { updateShop(); return; }
   if (game.menu) { updateMenu(dt); return; }
   if (game.dialogue) {
     const d = game.dialogue;
@@ -1138,8 +1386,6 @@ function updateMap(dt) {
   updateProjectiles(dt);
   game.bolts.forEach(b => b.t += dt);
   game.bolts = game.bolts.filter(b => b.t < 0.25);
-  for (const p of game.pops) p.t += dt;
-  game.pops = game.pops.filter(p => p.t < 0.8);
 
   if (game.lock && (game.lock.dead || game.lock.dying > 0)) game.lock = null;
   for (const c of clicks) {
@@ -1163,14 +1409,17 @@ function updateMap(dt) {
   }
 
   if (h.moving) {
-    const speed = 70 * dt;
+    const speed = (overloaded() ? 32 : 70) * dt; // trudge when the pack is too heavy
     const gx = h.tx * TS, gy = h.ty * TS;
     h.px += Math.sign(gx - h.px) * Math.min(speed, Math.abs(gx - h.px));
     h.py += Math.sign(gy - h.py) * Math.min(speed, Math.abs(gy - h.py));
-    h.anim += dt * 8.75; // 2 anim units per tile: half a 4-step cycle
+    h.anim += dt * (overloaded() ? 4 : 8.75); // 2 anim units per tile: half a 4-step cycle
     if (h.px === gx && h.py === gy) {
       h.moving = false;
       game.steps++;
+      const exit = cur().exits[h.tx + ',' + h.ty];
+      if (exit) { switchMap(...exit); return; }
+      if (game.autoloot) pickupAt(h.tx, h.ty);
     }
   } else {
     const dir = dirHeld();
@@ -1206,26 +1455,46 @@ function drawChar(sheet, cx, cy, dir, frame, px, py) {
 }
 
 function drawMap() {
-  const h = game.hero;
+  const h = game.hero, m = cur();
   for (let y = 0; y < MH; y++) for (let x = 0; x < MW; x++) {
-    const g = GROUND[y][x];
-    const t = g === 'W' ? T.water : g === 'D' ? T.dirt : T.grass;
+    const t = GROUND_T[m.ground[y][x]];
     ctx.drawImage(img.chipset, t[0], t[1], TS, TS, x * TS, y * TS, TS, TS);
   }
-  // border hedge
   const drawables = [];
-  for (let x = 0; x < MW; x++) { drawables.push(prop('bush', x, 0)); drawables.push(prop('bush', x, MH - 1)); }
-  for (let y = 1; y < MH - 1; y++) { drawables.push(prop('bush', 0, y)); drawables.push(prop('bush', MW - 1, y)); }
-  for (const [t, x, y] of props) drawables.push(prop(t, x, y));
-  for (const [x, y] of trees) drawables.push({
+  if (m.hedge) { // border hedge (skip exit tiles)
+    for (let x = 0; x < MW; x++) { drawables.push(prop('bush', x, 0)); drawables.push(prop('bush', x, MH - 1)); }
+    for (let y = 1; y < MH - 1; y++) {
+      if (!m.exits['0,' + y]) drawables.push(prop('bush', 0, y));
+      if (!m.exits[(MW - 1) + ',' + y]) drawables.push(prop('bush', MW - 1, y));
+    }
+  }
+  for (const [t, x, y] of m.props) drawables.push(prop(t, x, y));
+  for (const [sx, sy, w, hh, x, y] of m.deco) drawables.push({
+    base: (y + 1) * TS,
+    draw: () => ctx.drawImage(img.chipset, sx, sy, w, hh, x * TS, (y + 1) * TS - hh, w, hh),
+  });
+  for (const [x, y] of m.trees) drawables.push({
     base: (y + 1) * TS,
     draw: () => ctx.drawImage(img.chipset, TREE[0], TREE[1], TREE[2], TREE[3], x * TS, y * TS - 16, TREE[2], TREE[3]),
   });
-  for (const n of npcs) drawables.push({
-    base: n.py + TS,
-    draw: () => drawChar(img[n.sheet || 'npc'], n.cx, n.cy, n.dir,
-      n.moving ? [0, 1, 2, 1][Math.floor(n.anim) % 4] : 1, n.px, n.py),
-  });
+  for (const f of game.floor) {
+    if (f.map !== game.mapId) continue;
+    drawables.push({
+      base: f.ty * TS + 2, // under actors on the same tile
+      draw: () => {
+        ctx.drawImage(img[ITEMS[f.id].img], f.tx * TS + 2, f.ty * TS + 2, 12, 12);
+        if (f.n > 1) text('' + f.n, f.tx * TS + 10, f.ty * TS + 8, '#ffe080');
+      },
+    });
+  }
+  for (const n of npcs) {
+    if (n.map !== game.mapId) continue;
+    drawables.push({
+      base: n.py + TS,
+      draw: () => drawChar(img[n.sheet || 'npc'], n.cx, n.cy, n.dir,
+        n.moving ? [0, 1, 2, 1][Math.floor(n.anim) % 4] : 1, n.px, n.py),
+    });
+  }
   for (const en of game.enemies) drawables.push({
     base: en.py + TS,
     draw: () => drawEnemy(en),
@@ -1255,10 +1524,12 @@ function drawMap() {
   drawPops();
 
   // HUD
-  drawWindow(4, 4, 126, h.points > 0 ? 45 : 34);
+  const hudExtra = (h.points > 0 ? 1 : 0) + (overloaded() ? 1 : 0);
+  drawWindow(4, 4, 126, 34 + hudExtra * 11);
   text(`HP ${Math.floor(h.hp)}/${h.maxhp}  Lv.${h.lv}`, 12, 10);
   text(`MP ${Math.floor(h.mp)}/${h.maxmp}  Kills ${h.kills}/5`, 12, 21);
   if (h.points > 0) text(`+${h.points}pts: Esc>Attribs`, 12, 32, '#ffe080');
+  if (overloaded()) text('OVERWEIGHT', 12, h.points > 0 ? 43 : 32, '#f76');
   if (!game.dialogue) { // skill hotbar
     h.slots.forEach((id, i) => {
       const x = 4 + i * 21, y = 216;
@@ -1278,6 +1549,7 @@ function drawMap() {
       text('▼', 300, 222);
   }
   if (game.menu) drawMenu();
+  if (game.shop) drawShop();
 }
 function prop(t, x, y) {
   return {
@@ -1344,6 +1616,7 @@ function loop(ts) {
 
   queue = [];
   clicks = [];
+  releases = [];
   requestAnimationFrame(loop);
 }
 
