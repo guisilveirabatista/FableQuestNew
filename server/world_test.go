@@ -33,16 +33,18 @@ func TestBlocked(t *testing.T) {
 // hop steps one tile in dir, then coasts (no input) until the player settles —
 // a single deliberate tile move, the way the client walks when you tap a key.
 func hop(p *Player, dir string) {
-	stepPlayer(p, dir, 1.0/tickHz) // the step that begins the hop
+	h := newHub()
+	h.stepPlayer(p, dir, 1.0/tickHz) // the step that begins the hop
 	for i := 0; i < 20 && p.moving; i++ {
-		stepPlayer(p, "", 1.0/tickHz) // coast to the tile boundary
+		h.stepPlayer(p, "", 1.0/tickHz) // coast to the tile boundary
 	}
 }
 
 // hold walks continuously in dir for n ticks (a held key).
 func hold(p *Player, dir string, n int) {
+	h := newHub()
 	for i := 0; i < n; i++ {
-		stepPlayer(p, dir, 1.0/tickHz)
+		h.stepPlayer(p, dir, 1.0/tickHz)
 	}
 }
 
@@ -73,6 +75,28 @@ func TestCollisionStopsAtWell(t *testing.T) {
 	}
 	if p.dir != "up" {
 		t.Fatalf("expected to still be facing up after bumping the well, got %q", p.dir)
+	}
+}
+
+func TestPlayersAreSolid(t *testing.T) {
+	h := newHub()
+	a := &Player{id: "a", mapID: "city", tx: 19, ty: 16, px: 19 * TS, py: 16 * TS, dir: "down"}
+	b := &Player{id: "b", mapID: "city", tx: 20, ty: 16, px: 20 * TS, py: 16 * TS, dir: "down"}
+	h.players["a"], h.players["b"] = a, b
+	h.stepPlayer(a, "right", 1.0/tickHz) // (20,16) is occupied by player B
+	if a.moving || a.tx != 19 {
+		t.Fatalf("a player should not walk through another player (tx=%d moving=%v)", a.tx, a.moving)
+	}
+}
+
+func TestEnemiesAreSolid(t *testing.T) {
+	h := newHub()
+	p := heroAt("field", 15, 10)
+	h.players[p.id] = p
+	h.enemies["field"] = []*enemy{{id: 1, kind: "slime", tx: 16, ty: 10, px: 16 * TS, py: 10 * TS, hp: 10, maxhp: 10, hurtT: 9}}
+	h.stepPlayer(p, "right", 1.0/tickHz) // (16,10) is occupied by a slime
+	if p.moving || p.tx != 15 {
+		t.Fatalf("a player should not walk through an enemy (tx=%d moving=%v)", p.tx, p.moving)
 	}
 }
 

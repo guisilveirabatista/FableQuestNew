@@ -193,9 +193,11 @@ function netFrame(frameDt) {
     }
   }
 
-  // 2) predict our own hero at the fixed 20 Hz tick, using the server's rules
+  // 2) predict our own hero at the fixed 20 Hz tick, using the server's rules.
+  //    Keep game.follow/game.lock (set from the snapshot) so the chase is
+  //    predicted locally AND the blue follow marker renders.
   game.moveDir = dir || null;
-  game.path = null; game.follow = false;
+  game.path = null;
   net.acc += frameDt;
   let ticks = 0;
   while (net.acc >= FIXED && ticks < 5) { snapshotPrev(); stepHero(FIXED); net.acc -= FIXED; ticks++; }

@@ -189,7 +189,7 @@ func (h *Hub) followDir(p *Player) string {
 		}
 		d := dirVec[fd]
 		nx, ny := p.tx+d[0], p.ty+d[1]
-		if blocked(p.mapID, nx, ny) || enemyAt(h.enemies[p.mapID], nx, ny, nil) {
+		if blocked(p.mapID, nx, ny) || h.occupied(p.mapID, nx, ny, p) {
 			continue
 		}
 		return fd
@@ -197,10 +197,26 @@ func (h *Hub) followDir(p *Player) string {
 	return ""
 }
 
+// playerAt reports whether another player occupies tile (x,y) on mapID.
+func (h *Hub) playerAt(mapID string, x, y int, self *Player) bool {
+	for _, o := range h.players {
+		if o != self && o.mapID == mapID && o.tx == x && o.ty == y {
+			return true
+		}
+	}
+	return false
+}
+
+// occupied: is tile (x,y) held by another player or a living enemy? Characters
+// are solid — nobody may step onto an occupied tile.
+func (h *Hub) occupied(mapID string, x, y int, self *Player) bool {
+	return h.playerAt(mapID, x, y, self) || enemyAt(h.enemies[mapID], x, y, nil)
+}
+
 // stepPlayer advances one player by dt, matching sim.js advanceWorld()'s hero
 // block: integrate toward the target tile while moving, else step to the next
-// tile in the desired direction if it isn't blocked (and honor map exits).
-func stepPlayer(p *Player, moveDir string, dt float64) {
+// tile in the desired direction if it isn't blocked or occupied (honoring exits).
+func (h *Hub) stepPlayer(p *Player, moveDir string, dt float64) {
 	base := 70.0
 	if overloaded(p) { // an over-stuffed pack halves your pace
 		base = 32
@@ -225,7 +241,7 @@ func stepPlayer(p *Player, moveDir string, dt float64) {
 		p.dir = moveDir
 		d := dirVec[moveDir]
 		nx, ny := p.tx+d[0], p.ty+d[1]
-		if !blocked(p.mapID, nx, ny) {
+		if !blocked(p.mapID, nx, ny) && !h.occupied(p.mapID, nx, ny, p) {
 			p.tx, p.ty = nx, ny
 			p.moving = true
 			p.anim += dt * 8.75

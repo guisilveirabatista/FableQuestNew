@@ -106,7 +106,7 @@ func TestFollowChasesLockedEnemy(t *testing.T) {
 		if dir == "" && p.follow {
 			dir = h.followDir(p)
 		}
-		stepPlayer(p, dir, 1.0/tickHz)
+		h.stepPlayer(p, dir, 1.0/tickHz)
 	}
 	if d := abs(p.tx-en.tx) + abs(p.ty-en.ty); d > 1 {
 		t.Fatalf("follow should have chased the enemy to within reach (start %d, ended %d away)", start, d)

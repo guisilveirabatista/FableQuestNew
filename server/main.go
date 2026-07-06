@@ -257,7 +257,7 @@ func (h *Hub) run() {
 			if dir == "" && p.follow { // no manual input: chase the locked target
 				dir = h.followDir(p)
 			}
-			stepPlayer(p, dir, dt)
+			h.stepPlayer(p, dir, dt)
 		}
 		// 3) advance shared enemies against post-move player positions
 		playersByMap := map[string][]*Player{}

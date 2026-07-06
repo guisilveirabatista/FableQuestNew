@@ -214,8 +214,9 @@ func (h *Hub) stepEnemy(mapID string, en *enemy, players []*Player, dt float64) 
 			}
 			break
 		}
-		if !isGrass(mapID, nx, ny) || blocked(mapID, nx, ny) || enemyAt(h.enemies[mapID], nx, ny, en) {
-			continue
+		if !isGrass(mapID, nx, ny) || blocked(mapID, nx, ny) ||
+			enemyAt(h.enemies[mapID], nx, ny, en) || h.playerAt(mapID, nx, ny, nil) {
+			continue // grass only; don't stack on walls, other monsters, or players
 		}
 		en.dir = dir
 		en.tx, en.ty = nx, ny
