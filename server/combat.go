@@ -246,6 +246,7 @@ func (h *Hub) playerDie(p *Player) {
 	p.dir = "down"
 	p.iframes = 2
 	p.lockID = 0
+	p.follow = false
 }
 
 // ---- lock-on ---------------------------------------------------------------

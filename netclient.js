@@ -107,6 +107,7 @@ function onSnapshot(m) {
   for (const id in net.eById) if (!eSeen[id]) delete net.eById[id];
   game.enemies = Object.values(net.eById);
   game.lock = you.lock ? net.eById[you.lock] : null; // yellow lock marker
+  game.follow = !!you.follow;                          // blue follow marker
 
   // fireballs and lightning are shared world entities; render them straight from
   // the server (boom < 0 means still flying, >= 0 means the impact burst)
@@ -168,6 +169,7 @@ function netFrame(frameDt) {
       }
     }
     if (pressed(['Tab'])) netSend(net, { t: 'cycleLock' });
+    if (pressed(['f', 'F'])) netSend(net, { t: 'toggleFollow' }); // toggle Follow on the lock
     for (let i = 0; i < 5; i++) if (pressed([String(i + 1)])) { // cast hotbar skill
       netSend(net, { t: 'cast', slot: i });
       const sk = h.slots && h.slots[i]; // optimistic local effect; damage is server-side
@@ -183,6 +185,8 @@ function netFrame(frameDt) {
       if (c.b === 2) { // right-click: loot your corpse if next to it, else lock a target
         if (corpseAt(wx, wy) && nearHero(wx, wy)) netSend(net, { t: 'takeCorpse', tx: wx, ty: wy });
         else netSend(net, { t: 'lockAt', x: c.x + cam.x, y: c.y + cam.y });
+      } else if (c.b === 0 && c.alt) { // Alt+left-click: lock the enemy AND follow it
+        netSend(net, { t: 'followAt', x: c.x + cam.x, y: c.y + cam.y });
       } else if (c.b === 0 && c.dbl && floorAt(wx, wy).length && nearHero(wx, wy)) {
         netSend(net, { t: 'takeLoot', tx: wx, ty: wy }); // double-click floor loot in reach
       }

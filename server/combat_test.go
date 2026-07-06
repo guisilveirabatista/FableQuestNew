@@ -88,3 +88,27 @@ func TestDeathRespawnsInCity(t *testing.T) {
 		t.Fatalf("should respawn at full HP, got %v", p.hp)
 	}
 }
+
+func TestFollowChasesLockedEnemy(t *testing.T) {
+	h := newHub()
+	p := heroAt("field", 10, 12)
+	en := &enemy{id: 1, kind: "slime", tx: 16, ty: 12, px: 16 * TS, py: 12 * TS, dir: "left", anim: 1, hp: 10, maxhp: 10, hurtT: 9}
+	h.enemies["field"] = []*enemy{en}
+	h.players[p.id] = p
+	// Alt+click far enough to the right to sit over the slime's sprite box
+	h.applyIntent(p, inMsg{T: "followAt", X: en.px + 8, Y: en.py + 4})
+	if p.lockID != en.id || !p.follow {
+		t.Fatalf("followAt should lock the enemy and turn on follow (lock=%d follow=%v)", p.lockID, p.follow)
+	}
+	start := abs(p.tx - en.tx)
+	for i := 0; i < 400; i++ { // no manual input: the follow logic should close in
+		dir := p.moveDir
+		if dir == "" && p.follow {
+			dir = h.followDir(p)
+		}
+		stepPlayer(p, dir, 1.0/tickHz)
+	}
+	if d := abs(p.tx-en.tx) + abs(p.ty-en.ty); d > 1 {
+		t.Fatalf("follow should have chased the enemy to within reach (start %d, ended %d away)", start, d)
+	}
+}

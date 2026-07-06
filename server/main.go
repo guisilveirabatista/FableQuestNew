@@ -57,6 +57,7 @@ type playerView struct {
 	Kills  int      `json:"kills"`
 	Lock   int      `json:"lock"`
 	Slots  []string `json:"slots"`
+	Follow bool     `json:"follow"`
 }
 type projView struct {
 	X    float64 `json:"x"`
@@ -154,11 +155,12 @@ type Player struct {
 	autoloot         bool
 	atkCool, iframes float64
 	lockID           int
+	follow           bool // Alt+click / F: chase the locked target
 }
 
 func (p *Player) view() playerView {
 	return playerView{p.id, p.tx, p.ty, p.px, p.py, p.dir, p.moving, p.anim,
-		p.hp, p.maxhp, p.mp, p.maxmp, p.lv, p.exp, p.gold, p.kills, p.lockID, p.slots}
+		p.hp, p.maxhp, p.mp, p.maxmp, p.lv, p.exp, p.gold, p.kills, p.lockID, p.slots, p.follow}
 }
 
 // ---- hub -------------------------------------------------------------------
@@ -245,7 +247,17 @@ func (h *Hub) run() {
 			p.iframes = max(0, p.iframes-dt)
 			p.mp = math.Min(float64(p.maxmp), p.mp+dt*0.35)
 			p.hp = math.Min(float64(p.maxhp), p.hp+dt*0.4)
-			stepPlayer(p, p.moveDir, dt)
+			// drop a stale lock/follow (target died or left the map)
+			if p.lockID != 0 {
+				if en := h.enemyByID(p.mapID, p.lockID); en == nil || en.dead || en.dying > 0 {
+					p.lockID, p.follow = 0, false
+				}
+			}
+			dir := p.moveDir
+			if dir == "" && p.follow { // no manual input: chase the locked target
+				dir = h.followDir(p)
+			}
+			stepPlayer(p, dir, dt)
 		}
 		// 3) advance shared enemies against post-move player positions
 		playersByMap := map[string][]*Player{}
@@ -343,10 +355,21 @@ func (h *Hub) applyIntent(p *Player, m inMsg) {
 		}
 	case "lockAt":
 		p.lockID = h.enemyAtPoint(p.mapID, m.X, m.Y)
+		p.follow = false // right-click locks for attack only, no chasing
+	case "followAt":
+		if en := h.enemyAtPoint(p.mapID, m.X, m.Y); en != 0 { // Alt+click: lock AND follow
+			p.lockID = en
+			p.follow = true
+		}
+	case "toggleFollow":
+		if p.lockID != 0 {
+			p.follow = !p.follow
+		}
 	case "cycleLock":
 		h.cycleLock(p)
 	case "unlock":
 		p.lockID = 0
+		p.follow = false
 	case "cast":
 		h.castSlot(p, m.Slot)
 	case "useItem":
