@@ -24,10 +24,13 @@ const tickHz = 20
 type inMsg struct {
 	T    string  `json:"t"`   // "move" | "attack" | "lockAt" | "cycleLock" | "unlock"
 	Seq  int     `json:"seq"` // client input sequence, echoed back for reconciliation
-	Dir  string  `json:"dir"`  // "up"|"down"|"left"|"right"|"" (stop)
-	X    float64 `json:"x"`    // world point for lockAt
-	Y    float64 `json:"y"`
-	Slot int     `json:"slot"` // hotbar slot for cast
+	Dir   string  `json:"dir"`   // "up"|"down"|"left"|"right"|"" (stop)
+	X     float64 `json:"x"`     // world point for lockAt
+	Y     float64 `json:"y"`
+	Slot  int     `json:"slot"`  // hotbar slot for cast
+	Id    string  `json:"id"`    // item id for useItem/equip/dropItem
+	Bslot string  `json:"bslot"` // body slot for equip/unequip
+	V     bool    `json:"v"`     // toggle value (e.g. autoloot)
 }
 
 // server -> client
@@ -91,6 +94,11 @@ type snapMsg struct {
 	Enemies     []enemyView  `json:"enemies"`
 	Projectiles []projView   `json:"projectiles"`
 	Bolts       []boltView   `json:"bolts"`
+	// the receiving player's own private inventory
+	Bag      map[string]int    `json:"bag"`
+	Equip    map[string]string `json:"equip"`
+	Points   int               `json:"points"`
+	Autoloot bool              `json:"autoloot"`
 }
 
 func (e *enemy) view() enemyView {
@@ -123,6 +131,9 @@ type Player struct {
 	kills, points    int
 	attr             AttrSet
 	slots            []string
+	bag              map[string]int
+	equip            map[string]string
+	autoloot         bool
 	atkCool, iframes float64
 	lockID           int
 }
@@ -270,6 +281,7 @@ func (h *Hub) run() {
 				T: "snap", Map: p.mapID, Ack: ack, You: p.view(),
 				Players: others, Enemies: eViews[p.mapID],
 				Projectiles: prViews[p.mapID], Bolts: blViews[p.mapID],
+				Bag: p.bag, Equip: p.equip, Points: p.points, Autoloot: p.autoloot,
 			})
 			outs = append(outs, outbound{p, data})
 		}
@@ -302,6 +314,16 @@ func (h *Hub) applyIntent(p *Player, m inMsg) {
 		p.lockID = 0
 	case "cast":
 		h.castSlot(p, m.Slot)
+	case "useItem":
+		useItem(p, m.Id)
+	case "equip":
+		equipTo(p, m.Id, m.Bslot)
+	case "unequip":
+		unequipSlot(p, m.Bslot)
+	case "dropItem":
+		removeItem(p, m.Id, 1) // floor drops arrive with the loot/corpse step
+	case "setAutoloot":
+		p.autoloot = m.V
 	}
 }
 

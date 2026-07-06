@@ -830,7 +830,12 @@ function updateNpcs(dt) {
 // server will consume: one queue of validated player actions per tick. Every
 // rule check (cooldowns, MP, range, gold, carry) already lives in the callees,
 // so nothing here trusts the client beyond "the player asked to do X".
-function pushIntent(it) { game.intents.push(it); }
+// In single-player, intents queue for the local sim. In netplay, the same UI
+// code runs but its intents are forwarded to the authoritative server instead.
+function pushIntent(it) {
+  if (game.net) { if (typeof netSend === 'function') netSend(game.net, it); return; }
+  game.intents.push(it);
+}
 function applyIntent(it) {
   const h = game.hero;
   switch (it.t) {
@@ -860,9 +865,9 @@ function applyIntent(it) {
       else sfx('Buzzer1');
       break;
     case 'useItem': if (!useItem(it.id)) sfx('Buzzer1'); break;
-    case 'equip': if (!equipTo(it.id, it.slot)) sfx('Buzzer1'); break;
+    case 'equip': if (!equipTo(it.id, it.bslot)) sfx('Buzzer1'); break;
     case 'unequip':
-      if (h.equip[it.slot]) { unequipSlot(it.slot); sfx('Cancel1'); } else sfx('Buzzer1'); break;
+      if (h.equip[it.bslot]) { unequipSlot(it.bslot); sfx('Cancel1'); } else sfx('Buzzer1'); break;
     case 'dropItem':
       if (h.bag[it.id] > 0) { removeItem(it.id, 1); dropFloor(it.id, 1, h.tx, h.ty); sfx('Cancel1'); } break;
     case 'takeLoot': pickupAt(it.tx, it.ty); break;

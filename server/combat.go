@@ -25,14 +25,15 @@ type derived struct {
 
 func statsOf(p *Player) derived {
 	a := p.attr
+	eq := equipBonus(p) // worn gear bonuses
 	return derived{
-		atk:   1 + a.Str*2 + a.Dex/2,
+		atk:   1 + a.Str*2 + a.Dex/2 + eq.atk,
 		matk:  2 + a.Mag*2 + a.Int,
 		prec:  min(100, 80+a.Dex+a.Luck/2),
-		crit:  min(80, 2+a.Luck+a.Dex/2),
-		end:   a.Vit + a.Str/4,
-		mend:  a.Int + a.Vit/2,
-		dodge: min(60, a.Agi+a.Luck/2),
+		crit:  min(80, 2+a.Luck+a.Dex/2+eq.crit),
+		end:   a.Vit + a.Str/4 + eq.end,
+		mend:  a.Int + a.Vit/2 + eq.mend,
+		dodge: min(60, a.Agi+a.Luck/2+eq.dodge),
 		aspd:  1 + float64(a.Agi-1)*0.06,
 	}
 }
@@ -48,6 +49,9 @@ func initHero(p *Player) {
 	p.lv = 1
 	p.attr = baseAttr
 	p.slots = []string{"fire", "heal", "spin", "bolt", ""} // skill hotbar (keys 1-5)
+	p.bag = map[string]int{"potion": 3}
+	p.equip = map[string]string{}
+	p.autoloot = true
 	recalcMax(p)
 	p.hp = float64(p.maxhp)
 	p.mp = float64(p.maxmp)
@@ -123,7 +127,13 @@ func (h *Hub) killEnemy(p *Player, en *enemy) {
 	p.kills++
 	p.exp += k.exp
 	p.gold += k.gold
-	// loot drops arrive in Phase 2d
+	if rand.Float64() < 0.25 { // loot: straight into the killer's bag (autoloot)
+		id := "bread"
+		if rand.Float64() >= 0.7 {
+			id = "potion"
+		}
+		addItem(p, id, 1)
+	}
 	if p.exp >= p.lv*10 { // level up
 		p.exp -= p.lv * 10
 		p.lv++

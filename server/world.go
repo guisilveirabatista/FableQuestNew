@@ -161,7 +161,11 @@ func sign(v float64) float64 {
 // block: integrate toward the target tile while moving, else step to the next
 // tile in the desired direction if it isn't blocked (and honor map exits).
 func stepPlayer(p *Player, moveDir string, dt float64) {
-	speed := 70.0 * dt
+	base := 70.0
+	if overloaded(p) { // an over-stuffed pack halves your pace
+		base = 32
+	}
+	speed := base * dt
 	switch {
 	case p.moving:
 		gx, gy := float64(p.tx*TS), float64(p.ty*TS)

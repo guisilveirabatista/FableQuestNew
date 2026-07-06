@@ -69,7 +69,7 @@ check(target.hp < hpBefore || target.dying > 0, `sword hit resolved in the sim (
 resetGame();
 game.hero.gold = 1000;
 game.hero.bag = { sword1: 1 };
-pushIntent({ t: 'equip', id: 'sword1', slot: 'main' }); stepWorld(FIXED);
+pushIntent({ t: 'equip', id: 'sword1', bslot: 'main' }); stepWorld(FIXED);
 check(game.hero.equip.main === 'sword1', 'equip intent moved the sword onto the body');
 check(!game.hero.bag.sword1, 'equip intent removed the sword from the bag');
 

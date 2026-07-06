@@ -326,7 +326,7 @@ function updateInvPanel() {
     } else if (bs) {
       game.invFocus = 'body';
       game.invSlot = bs;
-      if (c.dbl) pushIntent({ t: 'unequip', slot: bs });
+      if (c.dbl) pushIntent({ t: 'unequip', bslot: bs });
       else if (h.equip[bs]) game.invDrag = { from: 'body', slot: bs, id: h.equip[bs] };
     }
   }
@@ -334,13 +334,13 @@ function updateInvPanel() {
     if (r.b !== 0 || !game.invDrag) continue;
     const d = game.invDrag, bs = bodySlotAt(r.x, r.y);
     if (d.from === 'bag') {
-      if (bs) pushIntent({ t: 'equip', id: d.id, slot: bs });
+      if (bs) pushIntent({ t: 'equip', id: d.id, bslot: bs });
       else if (!inPanel(r)) pushIntent({ t: 'dropItem', id: d.id }); // dragged onto the map
     } else if (bs && bs !== d.slot && canPlace(d.id, bs)) {
-      pushIntent({ t: 'unequip', slot: d.slot }); // move between slots (ring to the other finger)
-      pushIntent({ t: 'equip', id: d.id, slot: bs });
+      pushIntent({ t: 'unequip', bslot: d.slot }); // move between slots (ring to the other finger)
+      pushIntent({ t: 'equip', id: d.id, bslot: bs });
     } else if (!bs) {
-      pushIntent({ t: 'unequip', slot: d.slot }); // dragged off the body: back to the bag
+      pushIntent({ t: 'unequip', bslot: d.slot }); // dragged off the body: back to the bag
     }
     game.invDrag = null;
   }
@@ -365,7 +365,7 @@ function updateInvKeys() {
       [['ArrowLeft', 'a'], 'left'], [['ArrowRight', 'd'], 'right']]) {
       if (pressed(keys) && BODY_NAV[game.invSlot][dir]) { game.invSlot = BODY_NAV[game.invSlot][dir]; sfx('Cursor1'); }
     }
-    if (pressed(CONFIRM) || pressed(['q', 'Q'])) pushIntent({ t: 'unequip', slot: game.invSlot });
+    if (pressed(CONFIRM) || pressed(['q', 'Q'])) pushIntent({ t: 'unequip', bslot: game.invSlot });
   }
 }
 

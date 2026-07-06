@@ -17,7 +17,7 @@ function netStart(url) {
   game.net = net;
   game.players = [];
   game.enemies = [];
-  game.invOpen = false; // declutter: no inventory panel in the movement demo
+  game.invOpen = false; // hidden by default; press I to open (bag comes from the server)
   game.logOpen = false;
   game.menu = null;
   game.scene = 'map';
@@ -73,6 +73,10 @@ function onSnapshot(m) {
   h.hp = you.hp; h.maxhp = you.maxhp; h.mp = you.mp; h.maxmp = you.maxmp;
   h.lv = you.lv; h.exp = you.exp; h.gold = you.gold; h.kills = you.kills;
   if (you.slots) h.slots = you.slots;
+  h.bag = m.bag || {};          // authoritative inventory drives the panel
+  h.equip = m.equip || {};
+  h.points = m.points || 0;
+  game.autoloot = !!m.autoloot;
 
   // remote players
   const seen = {};
@@ -115,31 +119,51 @@ function onSnapshot(m) {
 function netFrame(frameDt) {
   const net = game.net, h = game.hero;
 
-  // 1) input -> intents. Movement is a held direction (sent on change); attack,
-  //    lock-cycle, and right-click lock are discrete actions.
-  const dir = dirHeld() || '';
+  // 1) input -> intents. The inventory panel reuses the single-player UI code:
+  //    its pushIntent() calls are forwarded to the server (see sim.js pushIntent).
+  if (pressed(['i', 'I'])) {
+    game.invOpen = !game.invOpen;
+    if (!game.invOpen) { game.invFocus = null; game.invDrag = null; }
+    sfx('Decision1');
+  }
+  if (game.invOpen && pressed(['e', 'E'])) {
+    game.invFocus = game.invFocus === null ? 'bag' : game.invFocus === 'bag' ? 'body' : null;
+    sfx('Cursor1');
+  }
+  if (game.itemPopup && (pressed(CANCEL) || pressed(CONFIRM) || clicked(0))) { game.itemPopup = null; sfx('Cancel1'); }
+  if (game.invOpen && !game.itemPopup) updateInvPanel(); // mouse drag/click -> item intents
+
+  // movement is blocked while a panel owns the keyboard
+  const captured = game.invFocus || game.itemPopup;
+  const dir = captured ? '' : (dirHeld() || '');
   if (dir !== net.lastDir) {
     net.lastDir = dir;
     net.seq++;
     netSend(net, { t: 'move', seq: net.seq, dir });
   }
-  if (pressed(CONFIRM)) { // swing (optimistic local animation; the hit is server-side)
-    netSend(net, { t: 'attack' });
-    game.slashFx = { t: 0, dir: h.dir, punch: true, dur: 0.24 };
-    sfx('Blow1');
-  }
-  if (pressed(['Tab'])) netSend(net, { t: 'cycleLock' });
-  for (let i = 0; i < 5; i++) if (pressed([String(i + 1)])) { // cast hotbar skill
-    netSend(net, { t: 'cast', slot: i });
-    const sk = h.slots && h.slots[i]; // optimistic local effect; damage is server-side
-    if (sk === 'spin') { game.slashFx = { t: 0, spin: true, dur: 0.3 }; sfx('Sword1'); }
-    else if (sk === 'heal') { game.healFx = 0.5; sfx('Recovery1'); }
-    else if (sk === 'fire') sfx('Flame1');
-    else if (sk === 'bolt') sfx('Thunder4');
-  }
-  const cam = camPos();
-  for (const c of clicks) {
-    if (c.b === 2) netSend(net, { t: 'lockAt', x: c.x + cam.x, y: c.y + cam.y });
+
+  if (captured) {
+    if (game.invFocus) updateInvKeys(); // arrows/Enter/Q drive the focused panel
+  } else {
+    if (pressed(CONFIRM)) { // swing (optimistic local animation; the hit is server-side)
+      netSend(net, { t: 'attack' });
+      game.slashFx = { t: 0, dir: h.dir, punch: true, dur: 0.24 };
+      sfx('Blow1');
+    }
+    if (pressed(['Tab'])) netSend(net, { t: 'cycleLock' });
+    for (let i = 0; i < 5; i++) if (pressed([String(i + 1)])) { // cast hotbar skill
+      netSend(net, { t: 'cast', slot: i });
+      const sk = h.slots && h.slots[i]; // optimistic local effect; damage is server-side
+      if (sk === 'spin') { game.slashFx = { t: 0, spin: true, dur: 0.3 }; sfx('Sword1'); }
+      else if (sk === 'heal') { game.healFx = 0.5; sfx('Recovery1'); }
+      else if (sk === 'fire') sfx('Flame1');
+      else if (sk === 'bolt') sfx('Thunder4');
+    }
+    const cam = camPos();
+    for (const c of clicks) {
+      if (game.invOpen && inPanel(c)) continue; // the panel owns its own clicks
+      if (c.b === 2) netSend(net, { t: 'lockAt', x: c.x + cam.x, y: c.y + cam.y });
+    }
   }
 
   // 2) predict our own hero at the fixed 20 Hz tick, using the server's rules
