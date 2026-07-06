@@ -137,9 +137,11 @@ type snapMsg struct {
 	Attr     AttrSet           `json:"attr"`
 	Log      []string          `json:"log,omitempty"`
 	// social (Phase 6): private to the receiving player
-	Chat  []chatLine `json:"chat,omitempty"`
-	Party *partyView `json:"party,omitempty"`
-	Trade *tradeView `json:"trade,omitempty"`
+	Chat     []chatLine `json:"chat,omitempty"`
+	Party    *partyView `json:"party,omitempty"`
+	Trade    *tradeView `json:"trade,omitempty"`
+	Invite   bool       `json:"invite,omitempty"`   // has a pending party invite
+	TradeReq string     `json:"tradeReq,omitempty"` // username asking to trade
 }
 type floorView struct {
 	Id string `json:"id"`
@@ -524,10 +526,12 @@ func (h *Hub) run() {
 				Players: others, Enemies: enemies, Projectiles: proj, Bolts: bolts,
 				Floor: fl, Corpses: cp,
 				Bag: p.bag, Equip: p.equip, Points: p.points, Autoloot: p.autoloot, Attr: p.attr,
-				Log:   p.drainLog(),
-				Chat:  p.drainChat(),
-				Party: h.buildPartyView(p),
-				Trade: h.buildTradeView(p),
+				Log:      p.drainLog(),
+				Chat:     p.drainChat(),
+				Party:    h.buildPartyView(p),
+				Trade:    h.buildTradeView(p),
+				Invite:   p.partyID == 0 && p.partyInvite != 0 && h.parties[p.partyInvite] != nil,
+				TradeReq: p.tradeReq,
 			})
 			outs = append(outs, outbound{p, data})
 		}
