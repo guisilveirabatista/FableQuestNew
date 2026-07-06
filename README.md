@@ -130,26 +130,35 @@ The engine is split into an authoritative **simulation** and a thin **client**
   walk sprites and the slash/flame effects are ripped from the RTP by
   `tools/rip.js` (it injects a tRNS chunk so palette 0 becomes transparent).
 
-## Multiplayer server (experimental — MMORPG Phase 1)
+## Multiplayer server (MMORPG)
 
-An authoritative Go server (`server/`, stdlib only) that owns **player movement**
-for many clients sharing one world. Clients send only a desired direction; the
-server validates it, moves everyone at a fixed 20 Hz, and streams snapshots back,
-so positions can't be spoofed. Enemies/combat are still client-side for now
-(they move server-side in Phase 2).
+An **authoritative Go server** (`server/`) owns the entire world for many clients
+sharing it — movement, enemies, combat, skills, inventory, loot, shops, and
+character progression. Clients send only *intents* (never positions or damage),
+so nothing can be spoofed; the server ticks at 20 Hz and streams each client just
+the entities inside its viewport (area-of-interest). Accounts and character state
+(level, gold, gear, inventory, position) persist across restarts.
 
 ```
 cd server
 go run .            # serves the game + WebSocket on http://localhost:8080
-go test ./...       # movement / collision / map-exit tests
+go test ./...       # world / combat / items / persistence tests
 ```
 
-Then open **http://localhost:8080/index.html?net=1** in two browser windows —
-each is a player, and you'll see the others move around the city and field. The
-client predicts your own hero locally (using the same rules the server runs, in
-`sim.js`'s `stepHero`) and interpolates everyone else. `netclient.js` is the thin
+Open **http://localhost:8080/index.html?net=1** in one or more browser windows.
+You'll get a **login screen** — pick any name and password (new names are
+registered automatically), and you're in. Two windows = two players who see each
+other. The client predicts your own hero with the same rules the server runs
+(`sim.js`'s `stepHero`) and interpolates everyone else. `netclient.js` is the
 netplay layer; `?net=1` opts into it (plain `index.html` still runs the full
 single-player game).
+
+Persistence defaults to a JSON file (`-db file:PATH`, zero setup). For
+PostgreSQL, build with the tag and point `-db` at your database:
+
+```
+go build -tags postgres && ./server -db postgres://user:pass@localhost/fablequest
+```
 
 ## Asset license
 
