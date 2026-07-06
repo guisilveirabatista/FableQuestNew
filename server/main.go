@@ -34,6 +34,7 @@ type inMsg struct {
 	Tx    int     `json:"tx"`    // tile for takeLoot/takeCorpse
 	Ty    int     `json:"ty"`
 	Key   string  `json:"key"` // attribute key for spendAttr
+	Who   string  `json:"who"` // shop id for buy
 }
 
 // server -> client
@@ -367,6 +368,8 @@ func (h *Hub) applyIntent(p *Player, m inMsg) {
 		spendAttr(p, m.Key)
 	case "assignSkill":
 		assignSkill(p, m.Id, m.Slot)
+	case "buy":
+		shopBuy(p, m.Who, m.Id)
 	case "setAutoloot":
 		p.autoloot = m.V
 	}

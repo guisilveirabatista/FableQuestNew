@@ -77,3 +77,20 @@ func TestOverloadedHalvesSpeed(t *testing.T) {
 		t.Fatalf("a stuffed pack (%vkg / %vkg) should overload", bagWeight(p), capacity(p))
 	}
 }
+
+func TestShopBuy(t *testing.T) {
+	p := heroAt("city", 19, 16)
+	p.gold = 100
+	shopBuy(p, "smith", "sword1") // 60g
+	if p.gold != 40 || p.bag["sword1"] != 1 {
+		t.Fatalf("buying a sword should cost 60g and add it (gold=%d, sword=%d)", p.gold, p.bag["sword1"])
+	}
+	shopBuy(p, "smith", "sword2") // 150g — can't afford
+	if p.gold != 40 || p.bag["sword2"] != 0 {
+		t.Fatalf("should not be able to buy what you can't afford (gold=%d)", p.gold)
+	}
+	shopBuy(p, "grocer", "sword1") // not in the grocer's stock
+	if p.gold != 40 {
+		t.Fatal("should not be able to buy an item a shop doesn't stock")
+	}
+}

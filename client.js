@@ -469,13 +469,13 @@ function updateShop() {
     for (let i = 0; i < stock.length; i++)
       if (hit(c, SX + 6, SY + 20 + i * 18, 228, 18)) { // click selects, dbl-click buys
         s.cursor = i;
-        if (c.dbl) pushIntent({ t: 'buy' }); else sfx('Cursor1');
+        if (c.dbl) pushIntent({ t: 'buy', who: s.who, id: stock[s.cursor] }); else sfx('Cursor1');
       }
   }
   if (pressed(CANCEL)) { game.shop = null; sfx('Cancel1'); return; }
   if (pressed(['ArrowUp', 'w'])) { s.cursor = (s.cursor + stock.length - 1) % stock.length; sfx('Cursor1'); }
   if (pressed(['ArrowDown', 's'])) { s.cursor = (s.cursor + 1) % stock.length; sfx('Cursor1'); }
-  if (pressed(CONFIRM)) pushIntent({ t: 'buy' });
+  if (pressed(CONFIRM)) pushIntent({ t: 'buy', who: s.who, id: stock[s.cursor] });
 }
 function drawShop() {
   const s = game.shop, h = game.hero, shop = SHOPS[s.who], stock = shop.stock;

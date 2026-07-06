@@ -129,6 +129,8 @@ function netFrame(frameDt) {
   //    UI code: their pushIntent() calls forward to the server (sim.js pushIntent).
   if (game.menu) {
     updateMenu(frameDt); // navigate; spend attrs / reassign skills -> server
+  } else if (game.shop) {
+    updateShop(); // browse the shop; buys are validated by the server
   } else {
     if (pressed(['i', 'I'])) {
       game.invOpen = !game.invOpen;
@@ -147,7 +149,7 @@ function netFrame(frameDt) {
   }
 
   // movement is blocked while a panel owns the keyboard
-  const captured = game.menu || game.invFocus || game.itemPopup;
+  const captured = game.menu || game.shop || game.invFocus || game.itemPopup;
   const dir = captured ? '' : (dirHeld() || '');
   if (dir !== net.lastDir) {
     net.lastDir = dir;
@@ -158,10 +160,12 @@ function netFrame(frameDt) {
   if (captured) {
     if (game.invFocus) updateInvKeys(); // arrows/Enter/Q drive the focused panel
   } else {
-    if (pressed(CONFIRM)) { // swing (optimistic local animation; the hit is server-side)
-      netSend(net, { t: 'attack' });
-      game.slashFx = { t: 0, dir: h.dir, punch: true, dur: 0.24 };
-      sfx('Blow1');
+    if (pressed(CONFIRM)) { // talk to a shopkeeper if facing one, else swing
+      if (!netInteract()) {
+        netSend(net, { t: 'attack' });
+        game.slashFx = { t: 0, dir: h.dir, punch: true, dur: 0.24 };
+        sfx('Blow1');
+      }
     }
     if (pressed(['Tab'])) netSend(net, { t: 'cycleLock' });
     for (let i = 0; i < 5; i++) if (pressed([String(i + 1)])) { // cast hotbar skill
@@ -216,6 +220,16 @@ function netFrame(frameDt) {
 
 function netSend(net, obj) {
   if (net.ws && net.ws.readyState === 1) net.ws.send(JSON.stringify(obj));
+}
+
+// Facing a shopkeeper opens their shop locally (the shop UI is cosmetic; the
+// server validates each purchase). Returns true if it handled the interaction.
+function netInteract() {
+  const h = game.hero, d = DIRV[h.dir];
+  const fx = h.tx + d[0], fy = h.ty + d[1];
+  const npc = npcs.find(n => n.map === game.mapId && n.tx === fx && n.ty === fy);
+  if (npc && (npc.id === 'smith' || npc.id === 'grocer')) { openShop(npc.id); return true; }
+  return false;
 }
 
 // tiny connection/roster banner so the demo is legible

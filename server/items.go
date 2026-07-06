@@ -33,6 +33,33 @@ var items = map[string]item{
 
 var bodySlots = []string{"head", "main", "off", "torso", "legs", "acc1", "boots", "acc2"}
 
+// shop stock (the client opens the shop UI; the server validates the purchase).
+var shops = map[string][]string{
+	"smith":  {"sword1", "sword2", "sword3", "shield", "hat", "helm", "armor", "legs"},
+	"grocer": {"bread", "meat", "potion", "boots", "ring", "amulet"},
+}
+
+// shopBuy sells one item id from shop `who` if the player can afford it and it's
+// actually in that shop's stock — so gold and inventory can't be forged.
+func shopBuy(p *Player, who, id string) {
+	inStock := false
+	for _, s := range shops[who] {
+		if s == id {
+			inStock = true
+			break
+		}
+	}
+	if !inStock {
+		return
+	}
+	price := items[id].price
+	if p.gold < price {
+		return
+	}
+	p.gold -= price
+	addItem(p, id, 1)
+}
+
 func addItem(p *Player, id string, n int) { p.bag[id] += n }
 
 func removeItem(p *Player, id string, n int) {
