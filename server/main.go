@@ -33,6 +33,7 @@ type inMsg struct {
 	V     bool    `json:"v"`     // toggle value (e.g. autoloot)
 	Tx    int     `json:"tx"`    // tile for takeLoot/takeCorpse
 	Ty    int     `json:"ty"`
+	Key   string  `json:"key"` // attribute key for spendAttr
 }
 
 // server -> client
@@ -98,11 +99,12 @@ type snapMsg struct {
 	Bolts       []boltView   `json:"bolts"`
 	Floor       []floorView  `json:"floor"`
 	Corpses     []corpseView `json:"corpses"`
-	// the receiving player's own private inventory
+	// the receiving player's own private inventory + character sheet
 	Bag      map[string]int    `json:"bag"`
 	Equip    map[string]string `json:"equip"`
 	Points   int               `json:"points"`
 	Autoloot bool              `json:"autoloot"`
+	Attr     AttrSet           `json:"attr"`
 }
 type floorView struct {
 	Id string `json:"id"`
@@ -313,7 +315,7 @@ func (h *Hub) run() {
 				Players: others, Enemies: eViews[p.mapID],
 				Projectiles: prViews[p.mapID], Bolts: blViews[p.mapID],
 				Floor: fViews[p.mapID], Corpses: cViews[p.mapID],
-				Bag: p.bag, Equip: p.equip, Points: p.points, Autoloot: p.autoloot,
+				Bag: p.bag, Equip: p.equip, Points: p.points, Autoloot: p.autoloot, Attr: p.attr,
 			})
 			outs = append(outs, outbound{p, data})
 		}
@@ -361,6 +363,10 @@ func (h *Hub) applyIntent(p *Player, m inMsg) {
 		h.pickupAt(p, m.Tx, m.Ty)
 	case "takeCorpse":
 		h.takeCorpse(p, m.Tx, m.Ty)
+	case "spendAttr":
+		spendAttr(p, m.Key)
+	case "assignSkill":
+		assignSkill(p, m.Id, m.Slot)
 	case "setAutoloot":
 		p.autoloot = m.V
 	}

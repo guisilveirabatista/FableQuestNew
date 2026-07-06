@@ -76,6 +76,7 @@ function onSnapshot(m) {
   h.bag = m.bag || {};          // authoritative inventory drives the panel
   h.equip = m.equip || {};
   h.points = m.points || 0;
+  if (m.attr) h.attr = m.attr;  // character sheet (Attribs/Status screens)
   game.autoloot = !!m.autoloot;
 
   // remote players
@@ -124,22 +125,29 @@ function onSnapshot(m) {
 function netFrame(frameDt) {
   const net = game.net, h = game.hero;
 
-  // 1) input -> intents. The inventory panel reuses the single-player UI code:
-  //    its pushIntent() calls are forwarded to the server (see sim.js pushIntent).
-  if (pressed(['i', 'I'])) {
-    game.invOpen = !game.invOpen;
-    if (!game.invOpen) { game.invFocus = null; game.invDrag = null; }
-    sfx('Decision1');
+  // 1) input -> intents. The menu and inventory panels reuse the single-player
+  //    UI code: their pushIntent() calls forward to the server (sim.js pushIntent).
+  if (game.menu) {
+    updateMenu(frameDt); // navigate; spend attrs / reassign skills -> server
+  } else {
+    if (pressed(['i', 'I'])) {
+      game.invOpen = !game.invOpen;
+      if (!game.invOpen) { game.invFocus = null; game.invDrag = null; }
+      sfx('Decision1');
+    }
+    if (game.invOpen && pressed(['e', 'E'])) {
+      game.invFocus = game.invFocus === null ? 'bag' : game.invFocus === 'bag' ? 'body' : null;
+      sfx('Cursor1');
+    }
+    if (game.itemPopup && (pressed(CANCEL) || pressed(CONFIRM) || clicked(0))) { game.itemPopup = null; sfx('Cancel1'); }
+    if (game.invOpen && !game.itemPopup) updateInvPanel(); // mouse drag/click -> item intents
+    if (!game.invOpen && !game.invFocus && !game.itemPopup && pressed(CANCEL)) {
+      game.menu = { mode: 'root', cursor: 0 }; sfx('Decision1'); // Esc opens the menu
+    }
   }
-  if (game.invOpen && pressed(['e', 'E'])) {
-    game.invFocus = game.invFocus === null ? 'bag' : game.invFocus === 'bag' ? 'body' : null;
-    sfx('Cursor1');
-  }
-  if (game.itemPopup && (pressed(CANCEL) || pressed(CONFIRM) || clicked(0))) { game.itemPopup = null; sfx('Cancel1'); }
-  if (game.invOpen && !game.itemPopup) updateInvPanel(); // mouse drag/click -> item intents
 
   // movement is blocked while a panel owns the keyboard
-  const captured = game.invFocus || game.itemPopup;
+  const captured = game.menu || game.invFocus || game.itemPopup;
   const dir = captured ? '' : (dirHeld() || '');
   if (dir !== net.lastDir) {
     net.lastDir = dir;

@@ -627,9 +627,12 @@ function rootMenuSelect(sel) {
   else if (sel === 'Skills') { m.mode = 'skills'; m.cursor2 = 0; m.assign = false; sfx('Decision1'); }
   else if (sel === 'Attribs') { m.mode = 'attribs'; m.cursor2 = 0; sfx('Decision1'); }
   else if (sel === 'Status' || sel === 'Quest') { m.mode = sel.toLowerCase(); sfx('Decision1'); }
-  else if (sel === 'Save') { saveGame(); m.msg = 'Game saved!'; m.msgT = 0; sfx('Recovery1'); }
-  else if (sel === 'Load') {
-    if (loadGame()) { m.msg = 'Game loaded!'; m.msgT = 0; sfx('Recovery1'); }
+  else if (sel === 'Save') {
+    if (game.net) { m.msg = 'Saved on the server'; m.msgT = 0; sfx('Buzzer1'); } // persistence is Phase 4
+    else { saveGame(); m.msg = 'Game saved!'; m.msgT = 0; sfx('Recovery1'); }
+  } else if (sel === 'Load') {
+    if (game.net) { m.msg = 'Not available online'; m.msgT = 0; sfx('Buzzer1'); }
+    else if (loadGame()) { m.msg = 'Game loaded!'; m.msgT = 0; sfx('Recovery1'); }
     else { m.msg = 'No saved game.'; m.msgT = 0; sfx('Buzzer1'); }
   } else if (sel === 'Music') {
     MidiPlayer.setEnabled(!MidiPlayer.isEnabled());
@@ -639,6 +642,7 @@ function rootMenuSelect(sel) {
   else if (sel === 'Log') { game.logOpen = !game.logOpen; sfx('Decision1'); }
   else { // To Title
     sfx('Decision1');
+    if (game.net) { location.href = location.pathname; return; } // leave netplay -> reload to title
     game.menu = null;
     game.scene = 'title';
     game.titleCursor = 0;

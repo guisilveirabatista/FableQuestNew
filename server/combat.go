@@ -11,8 +11,17 @@ import (
 	"math/rand"
 )
 
-// AttrSet holds the 7 primary attributes a player raises on level-up.
-type AttrSet struct{ Agi, Int, Vit, Str, Dex, Mag, Luck int }
+// AttrSet holds the 7 primary attributes a player raises on level-up. The lower-
+// case json tags match the client's hero.attr keys (sim.js).
+type AttrSet struct {
+	Agi  int `json:"agi"`
+	Int  int `json:"int"`
+	Vit  int `json:"vit"`
+	Str  int `json:"str"`
+	Dex  int `json:"dex"`
+	Mag  int `json:"mag"`
+	Luck int `json:"luck"`
+}
 
 var baseAttr = AttrSet{Agi: 1, Int: 1, Vit: 2, Str: 2, Dex: 1, Mag: 1, Luck: 1}
 
@@ -36,6 +45,54 @@ func statsOf(p *Player) derived {
 		dodge: min(60, a.Agi+a.Luck/2+eq.dodge),
 		aspd:  1 + float64(a.Agi-1)*0.06,
 	}
+}
+
+// spendAttr raises one primary attribute if the player has a point to spend.
+func spendAttr(p *Player, key string) {
+	if p.points <= 0 {
+		return
+	}
+	switch key {
+	case "agi":
+		p.attr.Agi++
+	case "int":
+		p.attr.Int++
+	case "vit":
+		p.attr.Vit++
+	case "str":
+		p.attr.Str++
+	case "dex":
+		p.attr.Dex++
+	case "mag":
+		p.attr.Mag++
+	case "luck":
+		p.attr.Luck++
+	default:
+		return
+	}
+	p.points--
+	recalcMax(p)
+}
+
+// assignSkill moves a skill onto hotbar slot i (or clears it if it's already there).
+func assignSkill(p *Player, id string, i int) {
+	if i < 0 || i >= len(p.slots) {
+		return
+	}
+	old := -1
+	for s := range p.slots {
+		if p.slots[s] == id {
+			old = s
+		}
+	}
+	if old == i {
+		p.slots[i] = "" // same slot again: unequip
+		return
+	}
+	if old >= 0 {
+		p.slots[old] = ""
+	}
+	p.slots[i] = id
 }
 
 func recalcMax(p *Player) {
