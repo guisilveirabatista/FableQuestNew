@@ -24,7 +24,12 @@ function netStart(url) {
 
   const ws = new WebSocket(url);
   net.ws = ws;
-  ws.onopen = () => { net.connected = true; net.status = 'connected'; };
+  ws.onopen = () => {
+    net.connected = true; net.status = 'connected';
+    // tell the server our area of interest (half-viewport in tiles + margin) so
+    // it only streams entities we could actually see
+    netSend(net, { t: 'view', vw: Math.ceil(W / TS / 2) + 6, vh: Math.ceil(H / TS / 2) + 6 });
+  };
   ws.onclose = () => { net.connected = false; net.status = 'disconnected'; };
   ws.onerror = () => { net.status = 'connection error'; };
   ws.onmessage = e => {

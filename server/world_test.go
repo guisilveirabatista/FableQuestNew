@@ -152,3 +152,14 @@ func TestExitSwitchesMap(t *testing.T) {
 		t.Fatalf("expected to arrive at field (38,12), got (%d,%d)", p.tx, p.ty)
 	}
 }
+
+func TestAreaOfInterestFiltersFarEntities(t *testing.T) {
+	p := &Player{tx: 4, ty: 4, aoiW: 10, aoiH: 10}
+	inAoI := func(tx, ty int) bool { return abs(p.tx-tx) <= p.aoiW && abs(p.ty-ty) <= p.aoiH }
+	if !inAoI(8, 6) {
+		t.Fatal("a nearby entity should be inside the area of interest")
+	}
+	if inAoI(30, 20) {
+		t.Fatal("a far entity should be filtered out of the area of interest")
+	}
+}

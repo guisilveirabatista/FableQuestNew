@@ -8,13 +8,26 @@ import (
 	"flag"
 	"log"
 	"math"
+	"math/rand"
 	"net/http"
 	"strconv"
 	"sync"
 	"time"
 )
 
+var spawnSpread bool // dev: scatter players across the field (load-testing AoI)
+
 const tickHz = 20
+
+func clampInt(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
+}
 
 // ---- wire protocol (JSON) --------------------------------------------------
 
@@ -31,8 +44,10 @@ type inMsg struct {
 	V     bool    `json:"v"`     // toggle value (e.g. autoloot)
 	Tx    int     `json:"tx"`    // tile for takeLoot/takeCorpse
 	Ty    int     `json:"ty"`
-	Key   string  `json:"key"` // attribute key for spendAttr
-	Who   string  `json:"who"` // shop id for buy
+	Key string `json:"key"` // attribute key for spendAttr
+	Who string `json:"who"` // shop id for buy
+	Vw  int    `json:"vw"`  // viewport half-extents in tiles (area-of-interest)
+	Vh  int    `json:"vh"`
 }
 
 // server -> client
@@ -164,6 +179,7 @@ type Player struct {
 	log              []string
 	dead             bool
 	deathCause       string
+	aoiW, aoiH       int // area-of-interest half-extents in tiles (from the client viewport)
 }
 
 func (p *Player) view() playerView {
@@ -224,6 +240,17 @@ func (h *Hub) add(c *wsConn) *Player {
 		id: "p" + strconv.Itoa(h.nextID), conn: c,
 		mapID: spawn.mapID, tx: spawn.tx, ty: spawn.ty,
 		px: float64(spawn.tx * TS), py: float64(spawn.ty * TS), dir: "down",
+		aoiW: 22, aoiH: 16, // generous default until the client reports its viewport
+	}
+	if spawnSpread { // dev/load-test: scatter across the field so AoI has an effect
+		for tries := 0; tries < 60; tries++ {
+			x, y := 1+rand.Intn(MW-2), 1+rand.Intn(MH-2)
+			if !blocked("field", x, y) {
+				p.mapID, p.tx, p.ty = "field", x, y
+				p.px, p.py = float64(x*TS), float64(y*TS)
+				break
+			}
+		}
 	}
 	initHero(p)
 	h.players[p.id] = p
@@ -247,7 +274,11 @@ func (h *Hub) run() {
 	dt := 1.0 / float64(tickHz)
 	ticker := time.NewTicker(time.Second / tickHz)
 	defer ticker.Stop()
+	var mSum, mMax time.Duration // tick-time metrics
+	var mBytes, mCount int
+	lastLog := time.Now()
 	for range ticker.C {
+		tickStart := time.Now()
 		type outbound struct {
 			p    *Player
 			data []byte
@@ -343,12 +374,48 @@ func (h *Hub) run() {
 				cViews[mapID] = append(cViews[mapID], corpseView{c.tx, c.ty, c.items, c.decayed})
 			}
 		}
-		// 4) snapshot each player its own map
+		// 4) snapshot each player — only the entities inside its area of interest
+		//    (its viewport + a margin), so bandwidth scales with what you can see
+		//    rather than with the whole map's population.
 		for _, p := range h.players {
-			others := make([]playerView, 0, len(pViews[p.mapID]))
+			aw, ah := float64(p.aoiW*TS), float64(p.aoiH*TS)
+			near := func(ex, ey float64) bool { return math.Abs(p.px-ex) <= aw && math.Abs(p.py-ey) <= ah }
+			nearT := func(tx, ty int) bool { return abs(p.tx-tx) <= p.aoiW && abs(p.ty-ty) <= p.aoiH }
+
+			others := make([]playerView, 0)
 			for _, v := range pViews[p.mapID] {
-				if v.ID != p.id {
+				if v.ID != p.id && near(v.Px, v.Py) {
 					others = append(others, v)
+				}
+			}
+			enemies := make([]enemyView, 0)
+			for _, v := range eViews[p.mapID] {
+				if near(v.Px, v.Py) {
+					enemies = append(enemies, v)
+				}
+			}
+			proj := make([]projView, 0)
+			for _, v := range prViews[p.mapID] {
+				if near(v.X, v.Y) {
+					proj = append(proj, v)
+				}
+			}
+			bolts := make([]boltView, 0)
+			for _, v := range blViews[p.mapID] {
+				if near(v.X, v.Y) {
+					bolts = append(bolts, v)
+				}
+			}
+			fl := make([]floorView, 0)
+			for _, v := range fViews[p.mapID] {
+				if nearT(v.Tx, v.Ty) {
+					fl = append(fl, v)
+				}
+			}
+			cp := make([]corpseView, 0)
+			for _, v := range cViews[p.mapID] {
+				if nearT(v.Tx, v.Ty) {
+					cp = append(cp, v)
 				}
 			}
 			p.mu.Lock()
@@ -356,9 +423,8 @@ func (h *Hub) run() {
 			p.mu.Unlock()
 			data, _ := json.Marshal(snapMsg{
 				T: "snap", Map: p.mapID, Ack: ack, You: p.view(),
-				Players: others, Enemies: eViews[p.mapID],
-				Projectiles: prViews[p.mapID], Bolts: blViews[p.mapID],
-				Floor: fViews[p.mapID], Corpses: cViews[p.mapID],
+				Players: others, Enemies: enemies, Projectiles: proj, Bolts: bolts,
+				Floor: fl, Corpses: cp,
 				Bag: p.bag, Equip: p.equip, Points: p.points, Autoloot: p.autoloot, Attr: p.attr,
 				Log: p.drainLog(),
 			})
@@ -367,9 +433,31 @@ func (h *Hub) run() {
 		h.mu.Unlock()
 
 		for _, o := range outs {
+			mBytes += len(o.data)
 			if err := o.p.conn.WriteText(o.data); err != nil {
 				h.remove(o.p)
 			}
+		}
+
+		// tick-time / bandwidth metrics, logged every 5s while anyone is online
+		d := time.Since(tickStart)
+		mSum += d
+		mCount++
+		if d > mMax {
+			mMax = d
+		}
+		if now := time.Now(); now.Sub(lastLog) >= 5*time.Second {
+			h.mu.Lock()
+			n := len(h.players)
+			h.mu.Unlock()
+			if n > 0 && mCount > 0 {
+				log.Printf("load: %d players | tick avg %.2fms max %.2fms | %.0f KB/s out",
+					n, float64(mSum.Microseconds())/float64(mCount)/1000,
+					float64(mMax.Microseconds())/1000,
+					float64(mBytes)/now.Sub(lastLog).Seconds()/1024)
+			}
+			mSum, mMax, mBytes, mCount = 0, 0, 0, 0
+			lastLog = now
 		}
 	}
 }
@@ -442,6 +530,9 @@ func (h *Hub) applyIntent(p *Player, m inMsg) {
 		shopBuy(p, m.Who, m.Id)
 	case "setAutoloot":
 		p.autoloot = m.V
+	case "view": // client reports its viewport; clamp to a sane area of interest
+		p.aoiW = clampInt(m.Vw, 8, 60)
+		p.aoiH = clampInt(m.Vh, 6, 40)
 	}
 }
 
@@ -488,7 +579,9 @@ func main() {
 	addr := flag.String("addr", ":8080", "listen address")
 	webRoot := flag.String("web", "..", "directory to serve the game client from")
 	spawnAt := flag.String("spawn", "city", "player spawn map: city (safe plaza) or field (among monsters, for testing)")
+	spread := flag.Bool("spread", false, "scatter players across the field (for load-testing area-of-interest)")
 	flag.Parse()
+	spawnSpread = *spread
 
 	buildMaps()
 	if *spawnAt == "field" { // dev/testing: drop players straight into monster territory
