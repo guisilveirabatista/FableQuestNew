@@ -51,6 +51,20 @@ func TestDeathDropsCorpseAndWaitsForRespawn(t *testing.T) {
 	}
 }
 
+func TestDeathWithEmptyPackStillLeavesCorpse(t *testing.T) {
+	h := newHub()
+	p := heroAt("field", 15, 10)
+	p.bag = map[string]int{}
+	h.playerDie(p, "Slime")
+	cs := h.corpses["field"]
+	if len(cs) != 1 || cs[0].tx != 15 || cs[0].ty != 10 {
+		t.Fatalf("death should leave an openable empty corpse, got %+v", cs)
+	}
+	if len(cs[0].items) != 0 {
+		t.Fatalf("empty-pack corpse should have no loot, got %+v", cs[0].items)
+	}
+}
+
 func TestTakeCorpseReturnsPack(t *testing.T) {
 	h := newHub()
 	p := heroAt("field", 15, 10)
@@ -59,8 +73,8 @@ func TestTakeCorpseReturnsPack(t *testing.T) {
 	if !h.takeCorpse(p, 15, 10, "*") {
 		t.Fatal("should be able to loot your own corpse when standing on it")
 	}
-	if p.bag["potion"] != 3 || len(h.corpses["field"]) != 0 {
-		t.Fatalf("looting the corpse should refill the bag and clear it (bag %d, corpses %d)", p.bag["potion"], len(h.corpses["field"]))
+	if p.bag["potion"] != 3 || len(h.corpses["field"]) != 1 || len(h.corpses["field"][0].items) != 0 {
+		t.Fatalf("looting the corpse should refill the bag and leave an empty body (bag %d, corpses %+v)", p.bag["potion"], h.corpses["field"])
 	}
 }
 
@@ -77,6 +91,19 @@ func TestTakeSingleCorpseItem(t *testing.T) {
 	}
 	if len(h.corpses["field"]) != 1 || h.corpses["field"][0].items["potion"] != 3 {
 		t.Fatalf("corpse should keep remaining items, got %+v", h.corpses["field"])
+	}
+}
+
+func TestTakingLastCorpseItemLeavesEmptyBody(t *testing.T) {
+	h := newHub()
+	p := heroAt("field", 15, 10)
+	p.bag = map[string]int{}
+	h.corpses["field"] = []*corpse{{tx: 15, ty: 10, items: map[string]int{"bread": 2}}}
+	if !h.takeCorpse(p, 15, 10, "bread") {
+		t.Fatal("should be able to take the last corpse item")
+	}
+	if p.bag["bread"] != 2 || len(h.corpses["field"]) != 1 || len(h.corpses["field"][0].items) != 0 {
+		t.Fatalf("taking the last item should leave an empty body, bag %+v corpses %+v", p.bag, h.corpses["field"])
 	}
 }
 

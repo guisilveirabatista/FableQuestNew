@@ -74,6 +74,7 @@ function pressed(keys) { return queue.some(k => keys.includes(k)); }
 // mouse: button 0 walks (click-to-move), button 2 locks a target.
 // In menus the same events drive the inventory: click, double-click, drag.
 let clicks = [], releases = [];
+let wheelY = 0;
 const mouse = { x: 0, y: 0, down: false };
 let lastClick = { t: 0, x: -99, y: -99 };
 function canvasXY(e) {
@@ -82,6 +83,14 @@ function canvasXY(e) {
 }
 cv.addEventListener('contextmenu', e => e.preventDefault());
 cv.addEventListener('mousemove', e => Object.assign(mouse, canvasXY(e)));
+cv.addEventListener('wheel', e => {
+  const p = canvasXY(e);
+  Object.assign(mouse, p);
+  if (inPanel(p) || game.shop) {
+    e.preventDefault();
+    wheelY += e.deltaY;
+  }
+}, { passive: false });
 cv.addEventListener('mousedown', e => {
   e.preventDefault();
   const p = canvasXY(e);
@@ -199,6 +208,7 @@ function loadGame() {
   game.corpseOpen = null;
   game.autoloot = d.autoloot !== false;
   game.invOpen = d.invOpen !== false;
+  game.bagScroll = 0;
   game.logOpen = d.logOpen !== false;
   game.mapOpen = false;
   game.minimapOpen = d.minimapOpen === true;
@@ -267,7 +277,7 @@ function itemLabel(f) {
 }
 function corpseLabel(c) { return c.decayed ? 'Decayed body' : 'Dead body'; }
 function mapName(id) { return MAP_NAME[id] || id; }
-function hudHeight() { return overloaded() ? 58 : 47; }
+function hudHeight() { return overloaded() ? 82 : 71; }
 function drawMapDot(mx, my, cell, tx, ty, color, r) {
   const x = mx + (tx + 0.5) * cell, y = my + (ty + 0.5) * cell;
   ctx.fillStyle = '#09131f';
@@ -344,12 +354,12 @@ const BODY_GRID = [ // keyboard navigation layout (rows of the paper doll)
   [null, 'legs', null],
   ['acc1', 'boots', 'acc2'],
 ];
-// persistent inventory, docked to the right edge as two separate windows:
-// the body paper-doll on top, the backpack below it. Toggled with I.
+// persistent inventory, docked as two side-by-side windows:
+// the backpack on the left, the body paper-doll on the right. Toggled with I.
 const BODY_WIN = { x: W - 124, y: 4, w: 120, h: 148 };
-const BAG_WIN = { x: W - 124, y: 156, w: 120, h: H - 160 };
-const PANEL = { x: W - 124 }; // anything right of this belongs to the panel
-const BAG_UI = { x: BAG_WIN.x + 12, y: BAG_WIN.y + 30, C: 4, S: 26 };
+const BAG_WIN = { x: Math.max(4, BODY_WIN.x - 136), y: 4, w: 132, h: H - 8 };
+const PANEL = { x: BAG_WIN.x }; // anything right of this belongs to the inventory/menu column
+const BAG_UI = { x: BAG_WIN.x + 12, y: BAG_WIN.y + 34, C: 4, S: 26 };
 const BODY_UI = {
   head: [BODY_WIN.x + 48, 20], main: [BODY_WIN.x + 16, 50], torso: [BODY_WIN.x + 48, 50], off: [BODY_WIN.x + 80, 50],
   legs: [BODY_WIN.x + 48, 80], acc1: [BODY_WIN.x + 16, 110], boots: [BODY_WIN.x + 48, 110], acc2: [BODY_WIN.x + 80, 110],
@@ -365,13 +375,33 @@ const BODY_NAV = { // keyboard moves between slots, roughly matching the doll sh
   boots: { up: 'legs', left: 'acc1', right: 'acc2' },
   acc2: { left: 'boots', up: 'off' },
 };
+function bagRows() {
+  return Math.max(1, Math.floor((BAG_WIN.y + BAG_WIN.h - 32 - BAG_UI.y) / BAG_UI.S));
+}
+function bagMaxScroll(ids = bagIds()) {
+  return Math.max(0, Math.ceil(ids.length / BAG_UI.C) - bagRows());
+}
+function clampBagScroll(ids = bagIds()) {
+  game.bagScroll = Math.max(0, Math.min(game.bagScroll || 0, bagMaxScroll(ids)));
+}
+function ensureBagCursorVisible(ids = bagIds()) {
+  if (!ids.length) { game.bagScroll = 0; return; }
+  clampBagScroll(ids);
+  const row = Math.floor((game.invCursor || 0) / BAG_UI.C);
+  const top = game.bagScroll || 0, rows = bagRows();
+  if (row < top) game.bagScroll = row;
+  else if (row >= top + rows) game.bagScroll = row - rows + 1;
+  clampBagScroll(ids);
+}
 function bagCellAt(px, py) { // bag index under a canvas point, or -1
-  const n = bagIds().length;
-  for (let i = 0; i < n; i++) {
-    const x = BAG_UI.x + (i % BAG_UI.C) * BAG_UI.S, y = BAG_UI.y + Math.floor(i / BAG_UI.C) * BAG_UI.S;
-    if (px >= x - 3 && px < x + 21 && py >= y - 3 && py < y + 21) return i;
-  }
-  return -1;
+  const ids = bagIds();
+  clampBagScroll(ids);
+  const col = Math.floor((px - BAG_UI.x + 3) / BAG_UI.S);
+  const row = Math.floor((py - BAG_UI.y + 3) / BAG_UI.S);
+  if (col < 0 || col >= BAG_UI.C || row < 0 || row >= bagRows()) return -1;
+  const i = (game.bagScroll || 0) * BAG_UI.C + row * BAG_UI.C + col;
+  const x = BAG_UI.x + col * BAG_UI.S, y = BAG_UI.y + row * BAG_UI.S;
+  return i >= 0 && i < ids.length && px >= x - 3 && px < x + 21 && py >= y - 3 && py < y + 21 ? i : -1;
 }
 function bodySlotAt(px, py) {
   for (const [slot, [x, y]] of Object.entries(BODY_UI))
@@ -379,9 +409,14 @@ function bodySlotAt(px, py) {
   return null;
 }
 function inPanel(p) { return p.x >= PANEL.x; }
+function inBagWin(p) {
+  return p.x >= BAG_WIN.x && p.x < BAG_WIN.x + BAG_WIN.w &&
+    p.y >= BAG_WIN.y && p.y < BAG_WIN.y + BAG_WIN.h;
+}
+function panelWidth() { return W - PANEL.x; }
 
 // corpse-loot window, docked just left of the inventory panel
-const CORPSE_WIN = { x: W - 260, y: 4, w: 128, h: 150, C: 4, S: 26 };
+const CORPSE_WIN = { x: Math.max(4, BAG_WIN.x - 132), y: 4, w: 128, h: 150, C: 4, S: 26 };
 function inCorpseWin(p) {
   return p.x >= CORPSE_WIN.x && p.x < CORPSE_WIN.x + CORPSE_WIN.w &&
     p.y >= CORPSE_WIN.y && p.y < CORPSE_WIN.y + CORPSE_WIN.h;
@@ -414,6 +449,15 @@ function drawCorpseWin() {
 function updateInvPanel() {
   const h = game.hero, ids = bagIds();
   game.invCursor = Math.min(game.invCursor || 0, Math.max(0, ids.length - 1));
+  clampBagScroll(ids);
+  if (wheelY) {
+    if (inBagWin(mouse)) {
+      const oldScroll = game.bagScroll || 0;
+      game.bagScroll = Math.max(0, Math.min(oldScroll + (wheelY > 0 ? 1 : -1), bagMaxScroll(ids)));
+      if (game.bagScroll !== oldScroll) sfx('Cursor1');
+    }
+    wheelY = 0;
+  }
   if (!game.invSlot) game.invSlot = 'torso';
   for (const c of clicks) {
     if (!inPanel(c)) continue;
@@ -422,6 +466,11 @@ function updateInvPanel() {
       game.invFocus = 'bag';
       game.invCursor = bi;
       game.itemPopup = ids[bi];
+      sfx('Decision1');
+    } else if (c.b === 2 && bs && h.equip[bs]) {
+      game.invFocus = 'body';
+      game.invSlot = bs;
+      game.itemPopup = h.equip[bs];
       sfx('Decision1');
     } else if (c.b === 0 && bi >= 0) {
       game.invFocus = 'bag';
@@ -461,6 +510,7 @@ function updateInvKeys() {
       if (pressed(['ArrowRight', 'd'])) { game.invCursor = (game.invCursor + 1) % ids.length; sfx('Cursor1'); }
       if (pressed(['ArrowUp', 'w']) && game.invCursor >= C) { game.invCursor -= C; sfx('Cursor1'); }
       if (pressed(['ArrowDown', 's']) && game.invCursor + C < ids.length) { game.invCursor += C; sfx('Cursor1'); }
+      ensureBagCursorVisible(ids);
       if (pressed(CONFIRM)) pushIntent({ t: 'useItem', id: ids[game.invCursor] });
       if (pressed(['q', 'Q'])) pushIntent({ t: 'dropItem', id: ids[game.invCursor] });
     }
@@ -474,9 +524,29 @@ function updateInvKeys() {
   }
 }
 
+function inventoryHoverItem() {
+  if (!game.invOpen || game.itemPopup || game.invDrag) return null;
+  const ids = bagIds();
+  const bi = bagCellAt(mouse.x, mouse.y);
+  if (bi >= 0 && ids[bi]) return ids[bi];
+  const slot = bodySlotAt(mouse.x, mouse.y);
+  return slot && game.hero.equip[slot] ? game.hero.equip[slot] : null;
+}
+function drawItemNameTip(id) {
+  const name = ITEMS[id] ? ITEMS[id].name : id;
+  const w = Math.ceil(textWidth(name)) + 14, h = 18;
+  let x = mouse.x + 10, y = mouse.y + 10;
+  if (x + w > W - 2) x = mouse.x - w - 8;
+  if (y + h > H - 2) y = mouse.y - h - 8;
+  x = Math.max(2, x); y = Math.max(2, y);
+  drawWindow(x, y, w, h);
+  text(name, x + 7, y + 6, '#ffe080');
+}
+
 function drawInvPanel() {
   const h = game.hero, ids = bagIds();
   game.invCursor = Math.min(game.invCursor || 0, Math.max(0, ids.length - 1));
+  clampBagScroll(ids);
 
   // body window
   drawWindow(BODY_WIN.x, BODY_WIN.y, BODY_WIN.w, BODY_WIN.h);
@@ -506,14 +576,31 @@ function drawInvPanel() {
   text('Backpack', BAG_WIN.x + 12, BAG_WIN.y + 7, '#bcd');
   text(`${bagWeight().toFixed(1)}/${capacity()}kg`, BAG_WIN.x + 12, BAG_WIN.y + 18,
     overloaded() ? '#f76' : '#bcd');
-  ids.forEach((id, i) => {
-    const x = BAG_UI.x + (i % BAG_UI.C) * BAG_UI.S, y = BAG_UI.y + Math.floor(i / BAG_UI.C) * BAG_UI.S;
+  const first = (game.bagScroll || 0) * BAG_UI.C;
+  const visible = ids.slice(first, first + bagRows() * BAG_UI.C);
+  visible.forEach((id, off) => {
+    const i = first + off;
+    const x = BAG_UI.x + (off % BAG_UI.C) * BAG_UI.S, y = BAG_UI.y + Math.floor(off / BAG_UI.C) * BAG_UI.S;
     if (game.invFocus === 'bag' && game.invCursor === i) drawCursor(x - 4, y - 4, BAG_UI.S - 2, BAG_UI.S - 2);
     ctx.drawImage(img[ITEMS[id].img], x, y, 18, 18);
     text('' + h.bag[id], x + 10, y + 12, '#ffe080');
   });
   if (!ids.length) text('Empty...', BAG_UI.x, BAG_UI.y + 4, '#999');
+  const maxScroll = bagMaxScroll(ids);
+  if (maxScroll > 0) {
+    const trackX = BAG_WIN.x + BAG_WIN.w - 10, trackY = BAG_UI.y;
+    const trackH = bagRows() * BAG_UI.S - 6;
+    ctx.fillStyle = 'rgba(10,20,30,.55)';
+    ctx.fillRect(trackX, trackY, 4, trackH);
+    const thumbH = Math.max(8, Math.floor(trackH * bagRows() / Math.ceil(ids.length / BAG_UI.C)));
+    const thumbY = trackY + Math.round((trackH - thumbH) * (game.bagScroll || 0) / maxScroll);
+    ctx.fillStyle = '#9fb4c8';
+    ctx.fillRect(trackX, thumbY, 4, thumbH);
+  }
   text('I:hide E:keys Q:drop', BAG_WIN.x + 10, BAG_WIN.y + BAG_WIN.h - 14, '#9cf');
+
+  const hoverItem = inventoryHoverItem();
+  if (hoverItem) drawItemNameTip(hoverItem);
 
   if (game.invDrag) { // ghost icon rides the cursor
     ctx.globalAlpha = 0.85;
@@ -545,40 +632,312 @@ function itemInfo(it) {
   if (it.twoH) parts.push('2-handed');
   return parts.join('  ');
 }
-function updateShop() {
-  const s = game.shop, stock = SHOPS[s.who].stock;
-  const SX = (W - 240) / 2, SY = (H - stock.length * 18 - 74) / 2; // matches drawShop
+const SHOP_CHOICE = [
+  { id: 'buy', label: 'Buy' },
+  { id: 'sell', label: 'Sell' },
+  { id: 'cancel', label: 'Cancel' },
+];
+function shopModeLabel(s) {
+  return s.mode === 'sell' ? 'Sell' : 'Buy';
+}
+function shopChoiceLayout() {
+  const w = 146, h = 84;
+  const x = Math.floor((W - w) / 2), y = Math.floor((H - h) / 2);
+  return { x, y, w, h, rowX: x + 10, rowY: y + 22, rowW: w - 20, rowH: 16 };
+}
+function shopItems(s = game.shop) {
+  if (!s) return [];
+  if (s.mode === 'sell') return bagIds();
+  return SHOPS[s.who] ? SHOPS[s.who].stock : [];
+}
+function normalizeShopCursor(s, ids) {
+  const last = Math.max(0, ids.length - 1);
+  s.cursor = Math.max(0, Math.min(s.cursor || 0, last));
+}
+function shopVisibleRows(ids) {
+  return Math.min(5, Math.max(1, ids.length));
+}
+function shopMaxScroll(s, ids = shopItems(s)) {
+  return Math.max(0, ids.length - shopVisibleRows(ids));
+}
+function clampShopScroll(s, ids = shopItems(s)) {
+  s.scroll = Math.max(0, Math.min(s.scroll || 0, shopMaxScroll(s, ids)));
+}
+function ensureShopCursorVisible(s, ids, visibleRows = shopVisibleRows(ids)) {
+  clampShopScroll(s, ids);
+  if (!ids.length) return;
+  if (s.cursor < s.scroll) s.scroll = s.cursor;
+  else if (s.cursor >= s.scroll + visibleRows) s.scroll = s.cursor - visibleRows + 1;
+  clampShopScroll(s, ids);
+}
+function shopLayout(s = game.shop) {
+  const ids = shopItems(s);
+  const rowH = 22, visibleRows = shopVisibleRows(ids);
+  const listH = visibleRows * rowH;
+  const w = 334, h = listH + 116;
+  const x = Math.floor((W - w) / 2), y = Math.floor((H - h) / 2);
+  return {
+    x, y, w, h, ids, rowH, visibleRows,
+    rowY: y + 24, listX: x + 6, listW: w - 24, listH,
+    footerY: y + 24 + listH + 8, btnY: y + h - 28,
+  };
+}
+function shopRowLayout(l, i) {
+  const y = l.rowY + i * l.rowH;
+  return {
+    x: l.x + 6, y, w: l.w - 24, h: l.rowH,
+    iconX: l.x + 12, nameX: l.x + 32, priceX: l.x + 142, haveX: l.x + 176,
+    minus: { x: l.x + 212, y: y + 3, w: 16, h: 16 },
+    input: { x: l.x + 231, y: y + 3, w: 38, h: 16 },
+    plus: { x: l.x + 272, y: y + 3, w: 16, h: 16 },
+  };
+}
+function shopButtons(l, s = game.shop) {
+  return [
+    { id: 'confirm', label: shopModeLabel(s), x: l.x + 12, y: l.btnY, w: 54, h: 20 },
+    { id: 'reset', label: 'Reset', x: l.x + 74, y: l.btnY, w: 58, h: 20 },
+    { id: 'cancel', label: 'Cancel', x: l.x + l.w - 74, y: l.btnY, w: 62, h: 20 },
+  ];
+}
+function shopScrollbar(l, s, ids) {
+  const max = shopMaxScroll(s, ids);
+  if (max <= 0) return null;
+  const x = l.x + l.w - 12, y = l.rowY + 2, h = l.listH - 4;
+  const thumbH = Math.max(10, Math.floor(h * l.visibleRows / ids.length));
+  const thumbY = y + Math.round((h - thumbH) * (s.scroll || 0) / max);
+  return { x, y, w: 6, h, thumbY, thumbH, max };
+}
+function shopQty(id, s = game.shop) {
+  return Math.max(0, (s.qty && s.qty[id]) || 0);
+}
+function shopMaxQty(id, s = game.shop) {
+  return s.mode === 'sell' ? (game.hero.bag[id] || 0) : 99;
+}
+function setShopQty(id, n, s = game.shop) {
+  if (!s.qty) s.qty = {};
+  const q = Math.max(0, Math.min(shopMaxQty(id, s), Math.floor(Number(n) || 0)));
+  if (q <= 0) delete s.qty[id];
+  else s.qty[id] = q;
+  s.warn = '';
+}
+function adjustShopQty(id, delta, s = game.shop) {
+  setShopQty(id, shopQty(id, s) + delta, s);
+  sfx('Cursor1');
+}
+function beginShopEdit(id, s = game.shop) {
+  s.edit = id;
+  s.editText = shopQty(id, s) ? String(shopQty(id, s)) : '';
+  sfx('Cursor1');
+}
+function finishShopEdit(s = game.shop) {
+  if (s.edit) setShopQty(s.edit, s.editText || 0, s);
+  s.edit = null;
+  s.editText = '';
+}
+function updateShopEdit(s = game.shop) {
+  for (const k of queue) {
+    if (/^[0-9]$/.test(k) && (s.editText || '').length < 3) {
+      s.editText = (s.editText || '') + k;
+      setShopQty(s.edit, s.editText, s);
+    } else if (k === 'Backspace') {
+      s.editText = (s.editText || '').slice(0, -1);
+      setShopQty(s.edit, s.editText || 0, s);
+    } else if (CONFIRM.includes(k)) {
+      finishShopEdit(s);
+    }
+  }
+}
+function resetShopQty(s = game.shop) {
+  s.qty = {};
+  s.edit = null;
+  s.editText = '';
+  s.warn = '';
+  sfx('Cancel1');
+}
+function shopLinePrice(id, s = game.shop) {
+  return shopQty(id, s) * sellValue(id);
+}
+function shopTotal(s = game.shop) {
+  return shopItems(s).reduce((sum, id) => sum + shopLinePrice(id, s), 0);
+}
+function confirmShop(s = game.shop) {
+  finishShopEdit(s);
+  const ids = shopItems(s);
+  const total = shopTotal(s);
+  if (total <= 0) { s.warn = 'Choose an amount first.'; sfx('Buzzer1'); return; }
+  if (s.mode === 'buy' && total > game.hero.gold) {
+    s.warn = "You don't have enough gold.";
+    sfx('Buzzer1');
+    return;
+  }
+  const t = s.mode === 'sell' ? 'sell' : 'buy';
+  for (const id of ids) {
+    const n = shopQty(id, s);
+    if (n > 0) pushIntent({ t, who: s.who, id, n });
+  }
+  s.qty = {};
+  s.warn = '';
+}
+function drawShopButton(b, hot = false) {
+  drawWindow(b.x, b.y, b.w, b.h);
+  if (hot) drawCursor(b.x + 3, b.y + 3, b.w - 6, b.h - 6);
+  const label = b.label || '';
+  if (label) text(label, b.x + Math.max(7, Math.floor((b.w - textWidth(label)) / 2)), b.y + 6, '#fff');
+}
+function drawShopAmountBox(b, value, editing) {
+  ctx.fillStyle = '#192330';
+  ctx.fillRect(b.x, b.y, b.w, b.h);
+  ctx.strokeStyle = editing ? '#ffe080' : '#6f879d';
+  ctx.strokeRect(b.x + 0.5, b.y + 0.5, b.w - 1, b.h - 1);
+  const label = String(value);
+  text(label, b.x + Math.max(4, Math.floor((b.w - textWidth(label)) / 2)), b.y + 4, editing ? '#ffe080' : '#fff');
+}
+function updateShopChoice() {
+  const s = game.shop, l = shopChoiceLayout();
   for (const c of clicks) {
     if (c.b !== 0) continue;
-    if (!hit(c, SX, SY, 240, stock.length * 18 + 74)) { game.shop = null; sfx('Cancel1'); return; }
-    for (let i = 0; i < stock.length; i++)
-      if (hit(c, SX + 6, SY + 20 + i * 18, 228, 18)) { // click selects, dbl-click buys
+    if (!hit(c, l.x, l.y, l.w, l.h)) { game.shop = null; sfx('Cancel1'); return; }
+    for (let i = 0; i < SHOP_CHOICE.length; i++) {
+      if (hit(c, l.rowX, l.rowY + i * l.rowH, l.rowW, l.rowH)) {
         s.cursor = i;
-        if (c.dbl) pushIntent({ t: 'buy', who: s.who, id: stock[s.cursor] }); else sfx('Cursor1');
+        const choice = SHOP_CHOICE[i].id;
+        if (choice === 'cancel') { game.shop = null; sfx('Cancel1'); }
+        else openShop(s.who, choice);
+        return;
       }
+    }
+  }
+  const hov = SHOP_CHOICE.findIndex((_, i) => hit(mouse, l.rowX, l.rowY + i * l.rowH, l.rowW, l.rowH));
+  if (hov >= 0) s.cursor = hov;
+  if (pressed(CANCEL)) { game.shop = null; sfx('Cancel1'); return; }
+  if (pressed(['ArrowUp', 'w'])) { s.cursor = (s.cursor + SHOP_CHOICE.length - 1) % SHOP_CHOICE.length; sfx('Cursor1'); }
+  if (pressed(['ArrowDown', 's'])) { s.cursor = (s.cursor + 1) % SHOP_CHOICE.length; sfx('Cursor1'); }
+  if (pressed(CONFIRM)) {
+    const choice = SHOP_CHOICE[s.cursor || 0].id;
+    if (choice === 'cancel') { game.shop = null; sfx('Cancel1'); }
+    else openShop(s.who, choice);
+  }
+}
+function updateShop() {
+  const s = game.shop;
+  if (s.mode === 'choice') { updateShopChoice(); return; }
+  if (!s.qty) s.qty = {};
+  const l = shopLayout(s), ids = l.ids;
+  normalizeShopCursor(s, ids);
+  clampShopScroll(s, ids);
+  if (wheelY && hit(mouse, l.listX, l.rowY, l.listW, l.listH)) {
+    const old = s.scroll || 0;
+    s.scroll = Math.max(0, Math.min(old + (wheelY > 0 ? 1 : -1), shopMaxScroll(s, ids)));
+    if (s.scroll !== old) sfx('Cursor1');
+    wheelY = 0;
+  }
+  const first = s.scroll || 0;
+  for (const c of clicks) {
+    if (c.b !== 0) continue;
+    if (!hit(c, l.x, l.y, l.w, l.h)) { game.shop = null; sfx('Cancel1'); return; }
+    const sb = shopScrollbar(l, s, ids);
+    if (sb && hit(c, sb.x - 2, sb.y, sb.w + 4, sb.h)) {
+      s.scroll = Math.max(0, Math.min(sb.max, Math.round((c.y - sb.y) / sb.h * sb.max)));
+      sfx('Cursor1');
+      return;
+    }
+    for (let vi = 0; vi < l.visibleRows; vi++) {
+      const i = first + vi;
+      if (i >= ids.length) break;
+      const r = shopRowLayout(l, vi);
+      if (!hit(c, r.x, r.y, r.w, r.h)) continue;
+      s.cursor = i;
+      if (hit(c, r.minus.x, r.minus.y, r.minus.w, r.minus.h)) adjustShopQty(ids[i], -1, s);
+      else if (hit(c, r.plus.x, r.plus.y, r.plus.w, r.plus.h)) adjustShopQty(ids[i], 1, s);
+      else if (hit(c, r.input.x, r.input.y, r.input.w, r.input.h)) beginShopEdit(ids[i], s);
+      else if (c.dbl) adjustShopQty(ids[i], 1, s);
+      else sfx('Cursor1');
+    }
+    for (const b of shopButtons(l, s)) {
+      if (!hit(c, b.x, b.y, b.w, b.h)) continue;
+      if (b.id === 'confirm') confirmShop(s);
+      else if (b.id === 'reset') resetShopQty(s);
+      else { game.shop = null; sfx('Cancel1'); }
+      return;
+    }
+  }
+  const hov = ids.slice(first, first + l.visibleRows).findIndex((_, vi) => {
+    const r = shopRowLayout(l, vi);
+    return hit(mouse, r.x, r.y, r.w, r.h);
+  });
+  if (hov >= 0) s.cursor = first + hov;
+  if (s.edit) {
+    if (pressed(CANCEL)) { finishShopEdit(s); sfx('Cancel1'); }
+    else updateShopEdit(s);
+    return;
   }
   if (pressed(CANCEL)) { game.shop = null; sfx('Cancel1'); return; }
-  if (pressed(['ArrowUp', 'w'])) { s.cursor = (s.cursor + stock.length - 1) % stock.length; sfx('Cursor1'); }
-  if (pressed(['ArrowDown', 's'])) { s.cursor = (s.cursor + 1) % stock.length; sfx('Cursor1'); }
-  if (pressed(CONFIRM)) pushIntent({ t: 'buy', who: s.who, id: stock[s.cursor] });
+  if (ids.length) {
+    if (pressed(['ArrowUp', 'w'])) { s.cursor = (s.cursor + ids.length - 1) % ids.length; sfx('Cursor1'); }
+    if (pressed(['ArrowDown', 's'])) { s.cursor = (s.cursor + 1) % ids.length; sfx('Cursor1'); }
+    ensureShopCursorVisible(s, ids, l.visibleRows);
+    const id = ids[s.cursor];
+    if (pressed(['ArrowLeft', 'a'])) adjustShopQty(id, -1, s);
+    if (pressed(['ArrowRight', 'd'])) adjustShopQty(id, 1, s);
+    if (pressed(CONFIRM)) confirmShop(s);
+  }
+}
+function drawShopChoice() {
+  const s = game.shop, shop = SHOPS[s.who], l = shopChoiceLayout();
+  drawWindow(l.x, l.y, l.w, l.h);
+  text(shop.name, l.x + 12, l.y + 8, '#ffe080');
+  SHOP_CHOICE.forEach((choice, i) => {
+    const y = l.rowY + i * l.rowH;
+    if ((s.cursor || 0) === i) drawCursor(l.rowX, y - 1, l.rowW, l.rowH);
+    text(choice.label, l.rowX + 10, y + 3, '#fff');
+  });
 }
 function drawShop() {
-  const s = game.shop, h = game.hero, shop = SHOPS[s.who], stock = shop.stock;
-  const SX = (W - 240) / 2, SY = (H - stock.length * 18 - 74) / 2;
-  drawWindow(SX, SY, 240, stock.length * 18 + 74);
-  text(`${shop.name} — Gold ${h.gold}`, SX + 12, SY + 8, '#ffe080');
-  stock.forEach((id, i) => {
-    const it = ITEMS[id];
-    if (s.cursor === i) drawCursor(SX + 6, SY + 20 + i * 18, 228, 18);
-    ctx.drawImage(img[it.img], SX + 12, SY + 21 + i * 18, 16, 16);
-    text(it.name, SX + 32, SY + 25 + i * 18, h.gold >= it.price ? '#fff' : '#999');
-    text(it.price + 'g', SX + 152, SY + 25 + i * 18, '#ffe080');
-    text('x' + (h.bag[id] || 0), SX + 196, SY + 25 + i * 18, '#bcd');
+  const s = game.shop;
+  if (s.mode === 'choice') { drawShopChoice(); return; }
+  const h = game.hero, shop = SHOPS[s.who], l = shopLayout(s), ids = l.ids;
+  normalizeShopCursor(s, ids);
+  clampShopScroll(s, ids);
+  drawWindow(l.x, l.y, l.w, l.h);
+  text(`${shop.name} ${shopModeLabel(s)} - Gold ${h.gold}`, l.x + 12, l.y + 8, '#ffe080');
+  if (!ids.length) {
+    text('Your backpack is empty.', l.x + 14, l.rowY + 8, '#bcd');
+  }
+  const first = s.scroll || 0;
+  ids.slice(first, first + l.visibleRows).forEach((id, vi) => {
+    const i = first + vi;
+    const it = ITEMS[id], r = shopRowLayout(l, vi), q = shopQty(id, s);
+    const muted = s.mode === 'buy' && h.gold < it.price;
+    if (s.cursor === i) drawCursor(r.x, r.y, r.w, r.h);
+    ctx.drawImage(img[it.img], r.iconX, r.y + 3, 16, 16);
+    text(it.name, r.nameX, r.y + 7, muted ? '#999' : '#fff');
+    text(sellValue(id) + 'g', r.priceX, r.y + 7, '#ffe080');
+    text('x' + (h.bag[id] || 0), r.haveX, r.y + 7, '#bcd');
+    drawShopButton(r.minus, s.cursor === i && hit(mouse, r.minus.x, r.minus.y, r.minus.w, r.minus.h));
+    text('-', r.minus.x + 6, r.minus.y + 4, q ? '#fff' : '#667');
+    drawShopAmountBox(r.input, s.edit === id ? (s.editText || '') : q, s.edit === id);
+    drawShopButton(r.plus, s.cursor === i && hit(mouse, r.plus.x, r.plus.y, r.plus.w, r.plus.h));
+    text('+', r.plus.x + 5, r.plus.y + 4, shopMaxQty(id, s) > q ? '#fff' : '#667');
   });
-  const it = ITEMS[stock[s.cursor]];
-  text(itemInfo(it), SX + 12, SY + stock.length * 18 + 26, '#bcd');
-  text(`Weight ${it.w}   (carrying ${bagWeight().toFixed(1)}/${capacity()})`, SX + 12, SY + stock.length * 18 + 40, '#bcd');
-  text('Enter / dbl-click: buy   Esc: leave', SX + 12, SY + stock.length * 18 + 56, '#9cf');
+  const maxScroll = shopMaxScroll(s, ids);
+  const sb = shopScrollbar(l, s, ids);
+  if (sb) {
+    ctx.fillStyle = 'rgba(10,20,30,.55)';
+    ctx.fillRect(sb.x, sb.y, 4, sb.h);
+    ctx.fillStyle = '#9fb4c8';
+    ctx.fillRect(sb.x, sb.thumbY, 4, sb.thumbH);
+  }
+  const selected = ids[s.cursor];
+  if (selected) {
+    const it = ITEMS[selected];
+    text(itemInfo(it) || 'Consumable item', l.x + 12, l.footerY, '#bcd');
+    text(`Weight ${it.w}   Carrying ${bagWeight().toFixed(1)}/${capacity()}`, l.x + 12, l.footerY + 12, '#bcd');
+  }
+  const total = shopTotal(s);
+  const totalColor = s.mode === 'buy' && total > h.gold ? '#f76' : '#ffe080';
+  text(`Preview: ${shopModeLabel(s)} ${total}g`, l.x + 12, l.footerY + 26, totalColor);
+  if (s.warn) text(s.warn, l.x + 12, l.footerY + 40, '#f76');
+  for (const b of shopButtons(l, s)) drawShopButton(b, hit(mouse, b.x, b.y, b.w, b.h));
 }
 
 // tint buffer for colored hit-flashes on 24x32 charas
@@ -922,29 +1281,48 @@ function drawMiniMap() {
 }
 
 // ---------------------------------------------------------------- game menu
-const ROOT_MENU = ['Inventory', 'Map', 'Mini Map', 'Skills', 'Attribs', 'Status', 'Quest', 'Music', 'Autoloot', 'Log', 'To Title'];
-function rootMenuSelect(sel) {
-  const m = game.menu;
-  if (sel === 'Inventory') { game.invOpen = !game.invOpen; game.menu = null; sfx('Decision1'); }
-  else if (sel === 'Map') openMapWindow();
-  else if (sel === 'Mini Map') { game.minimapOpen = !game.minimapOpen; sfx('Decision1'); }
-  else if (sel === 'Skills') { m.mode = 'skills'; m.cursor2 = 0; m.assign = false; sfx('Decision1'); }
-  else if (sel === 'Attribs') { m.mode = 'attribs'; m.cursor2 = 0; sfx('Decision1'); }
-  else if (sel === 'Status' || sel === 'Quest') { m.mode = sel.toLowerCase(); sfx('Decision1'); 
-  } else if (sel === 'Music') {
+const MENU_W = 120;
+const MRX = W - 124; // right column: same grid as the inventory windows
+const ROOT_MENU = ['Inventory', 'Map', 'Skills', 'Attribs', 'Status', 'Quest', 'Options', 'Log Out'];
+const OPTIONS_MENU = ['Music', 'Autoloot', 'Mini Map', 'Log'];
+function rootBox() { return { x: MRX, y: 8, w: MENU_W, h: ROOT_MENU.length * 16 + 12 }; }
+function subX(w) { return Math.max(4, MRX - w - 6); }
+function optionLabel(s) {
+  return s === 'Music' ? 'Music: ' + (MidiPlayer.isEnabled() ? 'On' : 'Off')
+    : s === 'Autoloot' ? 'Autoloot: ' + (game.autoloot ? 'On' : 'Off')
+    : s === 'Mini Map' ? 'Mini Map: ' + (game.minimapOpen ? 'On' : 'Off')
+    : s === 'Log' ? 'Log: ' + (game.logOpen ? 'On' : 'Off') : s;
+}
+function toggleOption(sel) {
+  if (sel === 'Music') {
     MidiPlayer.setEnabled(!MidiPlayer.isEnabled());
     if (MidiPlayer.isEnabled()) syncMusic();
     sfx('Decision1');
   } else if (sel === 'Autoloot') { pushIntent({ t: 'setAutoloot', v: !game.autoloot }); sfx('Decision1'); }
+  else if (sel === 'Mini Map') { game.minimapOpen = !game.minimapOpen; sfx('Decision1'); }
   else if (sel === 'Log') { game.logOpen = !game.logOpen; sfx('Decision1'); }
-  else { // To Title
-    sfx('Decision1');
-    if (game.net) { location.href = location.pathname; return; } // leave netplay -> reload to title
-    game.menu = null;
-    game.scene = 'title';
-    game.titleCursor = 0;
-    syncMusic();
+}
+function logOut() {
+  sfx('Decision1');
+  if (game.net) {
+    if (game.net.ws) game.net.ws.close();
+    location.reload();
+    return;
   }
+  game.menu = null;
+  game.scene = 'title';
+  game.titleCursor = 0;
+  syncMusic();
+}
+function rootMenuSelect(sel) {
+  const m = game.menu;
+  if (sel === 'Inventory') { game.invOpen = !game.invOpen; game.menu = null; sfx('Decision1'); }
+  else if (sel === 'Map') openMapWindow();
+  else if (sel === 'Skills') { m.mode = 'skills'; m.cursor2 = 0; m.assign = false; m.skillCarry = null; m.skillDrag = null; sfx('Decision1'); }
+  else if (sel === 'Attribs') { m.mode = 'attribs'; m.cursor2 = 0; beginAttrDraft(m); sfx('Decision1'); }
+  else if (sel === 'Status' || sel === 'Quest') { m.mode = sel.toLowerCase(); sfx('Decision1'); }
+  else if (sel === 'Options') { m.mode = 'options'; m.cursor2 = 0; sfx('Decision1'); }
+  else if (sel === 'Log Out') logOut();
 }
 function hit(c, x, y, w, hgt) { return c.x >= x && c.x < x + w && c.y >= y && c.y < y + hgt; }
 function hoverRow(x, y, w, hgt, count, step = hgt) {
@@ -952,6 +1330,62 @@ function hoverRow(x, y, w, hgt, count, step = hgt) {
   return i >= 0 && i < count && mouse.x >= x && mouse.x < x + w &&
     mouse.y >= y + i * step && mouse.y < y + i * step + hgt ? i : -1;
 }
+function copyAttr(a) { return Object.fromEntries(ATTRS.map(([k]) => [k, a[k]])); }
+function beginAttrDraft(m) {
+  m.attrBase = copyAttr(game.hero.attr);
+  m.attrDraft = copyAttr(game.hero.attr);
+  m.attrBasePoints = game.hero.points;
+  m.attrPoints = game.hero.points;
+}
+function attrPending(m, k) { return m.attrDraft && m.attrBase && m.attrDraft[k] > m.attrBase[k]; }
+function ensureAttrDraft(m) { if (!m.attrDraft || !m.attrBase) beginAttrDraft(m); }
+function addAttrDraft(m, k) {
+  ensureAttrDraft(m);
+  if (m.attrPoints <= 0) { sfx('Buzzer1'); return; }
+  m.attrDraft[k]++;
+  m.attrPoints--;
+  sfx('Cursor1');
+}
+function resetAttrDraft(m) {
+  ensureAttrDraft(m);
+  m.attrDraft = copyAttr(m.attrBase);
+  m.attrPoints = m.attrBasePoints;
+  sfx('Cancel1');
+}
+function confirmAttrDraft(m) {
+  ensureAttrDraft(m);
+  let spent = 0;
+  for (const [k] of ATTRS) {
+    for (let i = 0; i < m.attrDraft[k] - m.attrBase[k]; i++) {
+      pushIntent({ t: 'spendAttr', key: k });
+      spent++;
+    }
+  }
+  sfx(spent ? 'Decision1' : 'Cancel1');
+  m.attrBase = copyAttr(m.attrDraft);
+  m.attrBasePoints = m.attrPoints;
+}
+function skillLayout(ids = Object.keys(SKILLS)) {
+  const w = 204, rowH = 18, y = 8, rowY = y + 18;
+  const slotsY = rowY + ids.length * rowH + 26;
+  return { x: subX(w), y, w, h: ids.length * rowH + 92, rowY, rowH, slotsY, buttonY: slotsY + 24 };
+}
+function skillSlotAt(l, px, py) {
+  for (let j = 0; j < 5; j++) {
+    const x = l.x + 14 + j * 22, y = l.slotsY;
+    if (px >= x && px < x + 18 && py >= y && py < y + 18) return j;
+  }
+  return -1;
+}
+function drawSkillIcon(id, x, y, selected = false) {
+  ctx.fillStyle = selected ? '#456380' : 'rgba(10,20,30,.6)';
+  ctx.fillRect(x, y, 16, 16);
+  ctx.strokeStyle = selected ? '#ffe080' : '#56718a';
+  ctx.strokeRect(x + 0.5, y + 0.5, 15, 15);
+  text(SKILLS[id].name[0], x + 5, y + 4, selected ? '#ffe080' : '#fff');
+}
+function attrLayout() { const w = 224, h = 174; return { x: subX(w), y: 8, w, h }; }
+function optionsLayout() { const w = 132; return { x: subX(w), y: 8, w, h: OPTIONS_MENU.length * 16 + 16 }; }
 
 function updateMenu(dt) {
   const m = game.menu, h = game.hero;
@@ -960,16 +1394,17 @@ function updateMenu(dt) {
     if (m.msgT > 1.1 || pressed(CONFIRM) || clicked(0)) m.msg = null;
     return;
   }
+  if (m.mode !== 'root' && m.cursor2 == null) m.cursor2 = 0;
   const mc = clicks.filter(c => c.b === 0); // left clicks route through the menu
-  const LX = MRX - 200; // must match drawMenu
+  const rb = rootBox();
   if (m.mode === 'root') {
-    const hov = hoverRow(MRX + 6, 14, 100, 16, ROOT_MENU.length);
+    const hov = hoverRow(rb.x + 6, rb.y + 6, rb.w - 12, 16, ROOT_MENU.length);
     if (hov >= 0) m.cursor = hov;
     for (const c of mc) {
       let acted = false;
       for (let i = 0; i < ROOT_MENU.length; i++)
-        if (hit(c, MRX + 6, 14 + i * 16, 100, 16)) { m.cursor = i; rootMenuSelect(ROOT_MENU[i]); acted = true; break; }
-      if (!acted && !hit(c, MRX, 8, 112, ROOT_MENU.length * 16 + 40)) { game.menu = null; sfx('Cancel1'); return; }
+        if (hit(c, rb.x + 6, rb.y + 6 + i * 16, rb.w - 12, 16)) { m.cursor = i; rootMenuSelect(ROOT_MENU[i]); acted = true; break; }
+      if (!acted && !hit(c, rb.x, rb.y, rb.w, rb.h)) { game.menu = null; sfx('Cancel1'); return; }
       if (!game.menu || game.menu.mode !== 'root') return;
     }
     if (pressed(['ArrowUp', 'w'])) { m.cursor = (m.cursor + ROOT_MENU.length - 1) % ROOT_MENU.length; sfx('Cursor1'); }
@@ -978,101 +1413,150 @@ function updateMenu(dt) {
     if (pressed(CONFIRM)) rootMenuSelect(ROOT_MENU[m.cursor]);
   } else if (m.mode === 'skills') {
     const ids = Object.keys(SKILLS);
-    const hov = hoverRow(LX + 6, 14, 176, 16, ids.length);
+    const l = skillLayout(ids);
+    const hov = hoverRow(l.x + 8, l.rowY, l.w - 16, 16, ids.length, l.rowH);
     if (hov >= 0) m.cursor2 = hov;
     for (const c of mc) {
-      if (!hit(c, LX, 8, 188, ids.length * 16 + 64)) { m.mode = 'root'; sfx('Cancel1'); return; }
-      for (let i = 0; i < ids.length; i++) // click a skill row: select it
-        if (hit(c, LX + 6, 14 + i * 16, 176, 16)) { m.cursor2 = i; m.assign = true; sfx('Cursor1'); }
-      for (let j = 0; j < 5; j++) // click a hotbar slot box: assign
-        if (hit(c, LX + 12 + j * 20, ids.length * 16 + 40, 16, 16)) pushIntent({ t: 'assignSkill', id: ids[m.cursor2], slot: j });
+      if (!hit(c, l.x, l.y, l.w, l.h)) { m.mode = 'root'; m.skillDrag = null; m.skillCarry = null; sfx('Cancel1'); return; }
+      const slot = skillSlotAt(l, c.x, c.y);
+      if (slot >= 0) {
+        const id = m.skillCarry || m.skillDrag;
+        if (id) { pushIntent({ t: 'assignSkill', id, slot }); m.skillCarry = null; m.skillDrag = null; m.assign = false; }
+        else sfx('Buzzer1');
+        continue;
+      }
+      if (hit(c, l.x + 12, l.buttonY, 116, 18)) { m.skillCarry = ids[m.cursor2]; m.assign = true; sfx('Decision1'); continue; }
+      for (let i = 0; i < ids.length; i++) {
+        const ry = l.rowY + i * l.rowH;
+        if (hit(c, l.x + 8, ry, l.w - 16, 16)) {
+          m.cursor2 = i;
+          if (hit(c, l.x + 10, ry, 16, 16)) { m.skillDrag = ids[i]; m.skillCarry = null; m.assign = false; }
+          sfx('Cursor1');
+        }
+      }
     }
-    if (m.assign) { // waiting for a slot number
-      if (pressed(CANCEL)) { m.assign = false; sfx('Cancel1'); return; }
-      for (let i = 0; i < 5; i++) if (pressed([String(i + 1)])) { pushIntent({ t: 'assignSkill', id: ids[m.cursor2], slot: i }); m.assign = false; return; }
+    for (const r of releases) if (m.skillDrag) {
+      const slot = skillSlotAt(l, r.x, r.y);
+      if (slot >= 0) pushIntent({ t: 'assignSkill', id: m.skillDrag, slot });
+      m.skillDrag = null;
     }
-    if (pressed(CANCEL)) { m.mode = 'root'; sfx('Cancel1'); return; }
+    if (m.skillDrag && !mouse.down) m.skillDrag = null;
+    if (m.skillCarry) { // waiting for a slot number or slot click
+      if (pressed(CANCEL)) { m.skillCarry = null; m.assign = false; sfx('Cancel1'); return; }
+      for (let i = 0; i < 5; i++) if (pressed([String(i + 1)])) {
+        pushIntent({ t: 'assignSkill', id: m.skillCarry, slot: i });
+        m.skillCarry = null; m.assign = false; return;
+      }
+    }
+    if (pressed(CANCEL)) { m.mode = 'root'; m.skillDrag = null; m.skillCarry = null; sfx('Cancel1'); return; }
     if (pressed(['ArrowUp', 'w'])) { m.cursor2 = (m.cursor2 + ids.length - 1) % ids.length; sfx('Cursor1'); }
     if (pressed(['ArrowDown', 's'])) { m.cursor2 = (m.cursor2 + 1) % ids.length; sfx('Cursor1'); }
-    if (pressed(CONFIRM)) { m.assign = true; sfx('Decision1'); }
+    if (pressed(CONFIRM)) { m.skillCarry = ids[m.cursor2]; m.assign = true; sfx('Decision1'); }
   } else if (m.mode === 'attribs') {
-    const hov = hoverRow(LX + 4, 27, 92, 15, ATTRS.length);
+    ensureAttrDraft(m);
+    const l = attrLayout();
+    const hov = hoverRow(l.x + 8, l.y + 30, 100, 15, ATTRS.length);
     if (hov >= 0) m.cursor2 = hov;
     for (const c of mc) {
-      if (!hit(c, LX, 8, 100, ATTRS.length * 15 + 34)) { m.mode = 'root'; sfx('Cancel1'); return; }
-      for (let i = 0; i < ATTRS.length; i++)
-        if (hit(c, LX + 4, 27 + i * 15, 92, 15)) { // click an attribute: spend a point
-          m.cursor2 = i;
-          pushIntent({ t: 'spendAttr', key: ATTRS[i][0] });
-        }
+      if (!hit(c, l.x, l.y, l.w, l.h)) { m.mode = 'root'; sfx('Cancel1'); return; }
+      for (let i = 0; i < ATTRS.length; i++) {
+        const y = l.y + 30 + i * 15;
+        if (hit(c, l.x + 8, y, 100, 15)) { m.cursor2 = i; sfx('Cursor1'); }
+        if (hit(c, l.x + 96, y, 14, 14)) { m.cursor2 = i; addAttrDraft(m, ATTRS[i][0]); }
+      }
+      if (hit(c, l.x + 16, l.y + l.h - 26, 72, 18)) confirmAttrDraft(m);
+      if (hit(c, l.x + 96, l.y + l.h - 26, 56, 18)) resetAttrDraft(m);
     }
     if (pressed(CANCEL)) { m.mode = 'root'; sfx('Cancel1'); return; }
     if (pressed(['ArrowUp', 'w'])) { m.cursor2 = (m.cursor2 + ATTRS.length - 1) % ATTRS.length; sfx('Cursor1'); }
     if (pressed(['ArrowDown', 's'])) { m.cursor2 = (m.cursor2 + 1) % ATTRS.length; sfx('Cursor1'); }
-    if (pressed(CONFIRM) || pressed(['ArrowRight', 'd']))
-      pushIntent({ t: 'spendAttr', key: ATTRS[m.cursor2][0] });
+    if (pressed(['ArrowRight', 'd']) || pressed(CONFIRM)) addAttrDraft(m, ATTRS[m.cursor2][0]);
+  } else if (m.mode === 'options') {
+    const l = optionsLayout();
+    const hov = hoverRow(l.x + 6, l.y + 8, l.w - 12, 16, OPTIONS_MENU.length);
+    if (hov >= 0) m.cursor2 = hov;
+    for (const c of mc) {
+      if (!hit(c, l.x, l.y, l.w, l.h)) { m.mode = 'root'; sfx('Cancel1'); return; }
+      for (let i = 0; i < OPTIONS_MENU.length; i++)
+        if (hit(c, l.x + 6, l.y + 8 + i * 16, l.w - 12, 16)) { m.cursor2 = i; toggleOption(OPTIONS_MENU[i]); }
+    }
+    if (pressed(CANCEL)) { m.mode = 'root'; sfx('Cancel1'); return; }
+    if (pressed(['ArrowUp', 'w'])) { m.cursor2 = (m.cursor2 + OPTIONS_MENU.length - 1) % OPTIONS_MENU.length; sfx('Cursor1'); }
+    if (pressed(['ArrowDown', 's'])) { m.cursor2 = (m.cursor2 + 1) % OPTIONS_MENU.length; sfx('Cursor1'); }
+    if (pressed(CONFIRM)) toggleOption(OPTIONS_MENU[m.cursor2]);
   } else { // status / quest
     if (pressed(CONFIRM) || pressed(CANCEL) || clicked(0)) { m.mode = 'root'; sfx('Cancel1'); }
   }
 }
-const MRX = (W - 112) / 2; // root menu, centered
 function drawMenu() {
   const m = game.menu, h = game.hero;
-  drawWindow(MRX, 8, 112, ROOT_MENU.length * 16 + 12);
+  const rb = rootBox();
+  drawWindow(rb.x, rb.y, rb.w, rb.h);
   ROOT_MENU.forEach((s, i) => {
-    if (m.mode === 'root' && m.cursor === i) drawCursor(MRX + 6, 14 + i * 16, 100, 16);
-    const label = s === 'Music' ? 'Music: ' + (MidiPlayer.isEnabled() ? 'On' : 'Off')
-      : s === 'Autoloot' ? 'Autoloot: ' + (game.autoloot ? 'On' : 'Off')
-      : s === 'Log' ? 'Log: ' + (game.logOpen ? 'On' : 'Off')
-      : s === 'Mini Map' ? 'Mini Map: ' + (game.minimapOpen ? 'On' : 'Off')
-      : s === 'Inventory' ? 'Inventory: ' + (game.invOpen ? 'On' : 'Off') : s;
-    text(label, MRX + 14, 18 + i * 16);
+    if (m.mode === 'root' && m.cursor === i) drawCursor(rb.x + 6, rb.y + 6 + i * 16, rb.w - 12, 16);
+    text(s, rb.x + 14, rb.y + 10 + i * 16);
   });
-  drawWindow(MRX, ROOT_MENU.length * 16 + 24, 112, 24);
-  text(`Gold ${h.gold}`, MRX + 14, ROOT_MENU.length * 16 + 32);
-  const LX = MRX - 200; // sub-screens open just left of the menu column
   if (m.mode === 'skills') {
     const ids = Object.keys(SKILLS);
-    drawWindow(LX, 8, 188, ids.length * 16 + 64);
+    const l = skillLayout(ids);
+    drawWindow(l.x, l.y, l.w, l.h);
+    text('Skills', l.x + 12, l.y + 8, '#ffe080');
     ids.forEach((id, i) => {
       const sk = SKILLS[id], slot = h.slots.indexOf(id);
-      if (m.cursor2 === i) drawCursor(LX + 6, 14 + i * 16, 176, 16);
-      text(sk.name, LX + 16, 18 + i * 16);
-      text(sk.mp + 'MP', LX + 80, 18 + i * 16, '#bcd');
-      if (slot >= 0) text(`[${slot + 1}]`, LX + 120, 18 + i * 16, '#ffe080');
+      const y = l.rowY + i * l.rowH;
+      if (m.cursor2 === i) drawCursor(l.x + 6, y - 1, l.w - 12, 18);
+      drawSkillIcon(id, l.x + 10, y, m.skillCarry === id || m.skillDrag === id);
+      text(sk.name, l.x + 32, y + 4);
+      text(sk.mp + 'MP', l.x + 98, y + 4, '#bcd');
+      if (slot >= 0) text(`[${slot + 1}]`, l.x + 142, y + 4, '#ffe080');
     });
-    text('Slots (click to assign):', LX + 12, ids.length * 16 + 26, '#9cf');
+    text('Slots', l.x + 12, l.slotsY - 13, '#9cf');
     for (let j = 0; j < 5; j++) { // clickable hotbar slot boxes
-      const bx = LX + 12 + j * 20, by = ids.length * 16 + 40;
-      drawWindow(bx, by, 16, 16);
-      text(String(j + 1), bx + 2, by - 8, '#9cf');
+      const bx = l.x + 14 + j * 22, by = l.slotsY;
+      drawWindow(bx, by, 18, 18);
+      text(String(j + 1), bx + 3, by - 8, '#9cf');
       const sid = h.slots[j];
-      if (sid) text(SKILLS[sid].name[0], bx + 5, by + 4, sid === ids[m.cursor2] ? '#ffe080' : '#fff');
+      if (sid) text(SKILLS[sid].name[0], bx + 6, by + 5, sid === ids[m.cursor2] ? '#ffe080' : '#fff');
+    }
+    drawWindow(l.x + 12, l.buttonY, 116, 18);
+    if (m.skillCarry) drawCursor(l.x + 15, l.buttonY + 3, 110, 12);
+    text('Assign skill to slot', l.x + 18, l.buttonY + 6, '#fff');
+    const heldSkill = m.skillCarry || m.skillDrag;
+    if (heldSkill) {
+      drawSkillIcon(heldSkill, mouse.x + 8, mouse.y + 8, true);
+      text(SKILLS[heldSkill].name, Math.min(W - 86, mouse.x + 28), mouse.y + 12, '#ffe080');
     }
   } else if (m.mode === 'attribs') {
-    const st = stats();
-    drawWindow(LX, 8, 100, ATTRS.length * 15 + 34);
-    text(`Points: ${h.points}`, LX + 8, 15, h.points > 0 ? '#ffe080' : '#bcd');
+    ensureAttrDraft(m);
+    const l = attrLayout(), st = statsForAttr(m.attrDraft);
+    drawWindow(l.x, l.y, l.w, l.h);
+    text(`Points: ${m.attrPoints}`, l.x + 10, l.y + 10, m.attrPoints > 0 ? '#ffe080' : '#bcd');
     ATTRS.forEach(([k, label], i) => {
-      if (m.cursor2 === i) drawCursor(LX + 4, 27 + i * 15, 92, 15);
-      text(label, LX + 10, 31 + i * 15);
-      text('' + h.attr[k], LX + 82, 31 + i * 15, '#ffe080');
+      const y = l.y + 30 + i * 15, pending = attrPending(m, k);
+      if (m.cursor2 === i) drawCursor(l.x + 6, y - 2, 106, 16);
+      text(label, l.x + 10, y + 2);
+      text('' + m.attrDraft[k], l.x + 80, y + 2, pending ? '#f76' : '#ffe080');
+      drawWindow(l.x + 96, y, 14, 14);
+      text('+', l.x + 100, y + 3, m.attrPoints > 0 ? '#fff' : '#777');
     });
-    text(h.points > 0 ? 'Enter: +1' : 'No points', LX + 8, ATTRS.length * 15 + 28, '#9cf');
-    drawWindow(LX + 102, 8, 94, 132);
     const dv = [
       ['Attack', st.atk], ['Magic Atk', st.matk], ['Precision', st.prec + '%'],
       ['Crit', st.crit + '%'], ['Endurance', st.end], ['Magic End', st.mend],
       ['Dodge', st.dodge + '%'], ['Atk Spd', st.aspd.toFixed(2)],
     ];
     dv.forEach(([label, v], i) => {
-      text(label, LX + 110, 16 + i * 15, '#bcd');
-      text('' + v, LX + 164, 16 + i * 15);
+      text(label, l.x + 122, l.y + 16 + i * 15, '#bcd');
+      text('' + v, l.x + 180, l.y + 16 + i * 15);
     });
+    drawWindow(l.x + 16, l.y + l.h - 26, 72, 18);
+    text('Confirm', l.x + 30, l.y + l.h - 20);
+    drawWindow(l.x + 96, l.y + l.h - 26, 56, 18);
+    text('Reset', l.x + 112, l.y + l.h - 20);
   } else if (m.mode === 'status') {
-    drawWindow(LX, 8, 188, 124);
+    const w = 188, x = subX(w);
+    drawWindow(x, 8, w, 124);
     const lines = [
-      `Hero  Lv.${h.lv}`,
+      `${heroDisplayName()}  Lv.${h.lv}`,
       `HP  ${Math.floor(h.hp)}/${h.maxhp}`,
       `MP  ${Math.floor(h.mp)}/${h.maxmp}`,
       `Attack ${stats().atk}  Magic ${stats().matk}`,
@@ -1080,14 +1564,22 @@ function drawMenu() {
       `Attr points  ${h.points}`,
       `Monsters slain  ${h.kills}`,
     ];
-    lines.forEach((l, i) => text(l, LX + 12, 18 + i * 15));
+    lines.forEach((line, i) => text(line, x + 12, 18 + i * 15));
   } else if (m.mode === 'quest') {
-    drawWindow(LX, 8, 188, 76);
-    text('QUEST', LX + 12, 16, '#ffe080');
+    const w = 188, x = subX(w);
+    drawWindow(x, 8, w, 76);
+    text('QUEST', x + 12, 16, '#ffe080');
     wrapText(
       game.won ? 'Complete! You are the hero of the valley.'
         : `The Elder asked you to slay 5 monsters in the grass. (${h.kills}/5)`,
-      LX + 12, 32, 164);
+      x + 12, 32, 164);
+  } else if (m.mode === 'options') {
+    const l = optionsLayout();
+    drawWindow(l.x, l.y, l.w, l.h);
+    OPTIONS_MENU.forEach((s, i) => {
+      if (m.cursor2 === i) drawCursor(l.x + 6, l.y + 8 + i * 16, l.w - 12, 16);
+      text(optionLabel(s), l.x + 14, l.y + 12 + i * 16);
+    });
   }
   if (m.msg) {
     drawWindow((W - 140) / 2, (H - 30) / 2, 140, 30);
@@ -1208,10 +1700,12 @@ function drawMap() {
   // HUD
   drawWindow(4, 4, 136, hudHeight());
   text(`${heroDisplayName()}  Lv.${h.lv}`, 12, 10, '#ffe080');
-  text(`HP ${Math.floor(h.hp)}/${h.maxhp}`, 12, 21);
-  drawMeter(12, 32, 112, 5, h.hp, h.maxhp, hpColor(h.hp, h.maxhp));
-  text(`MP ${Math.floor(h.mp)}/${h.maxmp}`, 12, 39, '#bcd');
-  if (overloaded()) text('OVERWEIGHT', 12, 50, '#f76');
+  drawMeter(12, 23, 112, 5, h.hp, h.maxhp, hpColor(h.hp, h.maxhp));
+  text(`HP ${Math.floor(h.hp)}/${h.maxhp}`, 12, 31);
+  drawMeter(12, 43, 112, 5, h.mp, h.maxmp, '#4bacff');
+  text(`MP ${Math.floor(h.mp)}/${h.maxmp}`, 12, 51, '#bcd');
+  text(`Gold ${h.gold}`, 12, 62, '#ffe080');
+  if (overloaded()) text('OVERWEIGHT', 12, 73, '#f76');
   if (!game.dialogue) { // skill hotbar
     h.slots.forEach((id, i) => {
       const x = 4 + i * 21, y = H - 24;
@@ -1236,7 +1730,7 @@ function drawMap() {
   if (game.logOpen) drawLog();
   if (game.dialogue) {
     const d = game.dialogue;
-    const dw = W - 8 - (game.invOpen ? 124 : 0);
+    const dw = W - 8 - (game.invOpen ? panelWidth() : 0);
     drawWindow(4, H - 62, dw, 58);
     const full = d.pages[d.page];
     const shown = full.slice(0, Math.floor(d.chars));
@@ -1386,9 +1880,12 @@ function processInput(dt) {
     if (game.invOpen && inPanel(c)) continue; // the panel owns its clicks
     if (game.corpseOpen && inCorpseWin(c)) continue; // handled above
     if (c.b === 2) { // right-click: open your corpse, else lock for attack (no follow)
-      const wx = Math.floor((c.x + cam.x) / TS), wy = Math.floor((c.y + cam.y) / TS);
+      const wxp = c.x + cam.x, wyp = c.y + cam.y;
+      const wx = Math.floor(wxp / TS), wy = Math.floor(wyp / TS);
+      const shopNpc = shopNpcAtPoint(wxp, wyp);
       const co = corpseAt(wx, wy);
-      if (co && !co.decayed && nearHero(wx, wy)) { game.corpseOpen = co; sfx('Decision1'); }
+      if (shopNpc && nearHero(shopNpc.tx, shopNpc.ty)) openShopChoice(shopForNpc(shopNpc));
+      else if (co && !co.decayed && nearHero(wx, wy)) { game.corpseOpen = co; sfx('Decision1'); }
       else pushIntent({ t: 'lockAt', x: c.x + cam.x, y: c.y + cam.y });
     } else if (c.b === 0 && c.alt) { // Alt+click locks an enemy AND follows it
       pushIntent({ t: 'followAt', x: c.x + cam.x, y: c.y + cam.y });
@@ -1492,6 +1989,7 @@ function loop(ts) {
   queue = [];
   clicks = [];
   releases = [];
+  wheelY = 0;
   requestAnimationFrame(loop);
 }
 

@@ -63,25 +63,46 @@ var shops = map[string][]string{
 	"grocer": {"bread", "meat", "potion", "boots", "ring", "amulet"},
 }
 
-// shopBuy sells one item id from shop `who` if the player can afford it and it's
-// actually in that shop's stock — so gold and inventory can't be forged.
-func shopBuy(p *Player, who, id string) {
-	inStock := false
+// shopBuy sells item id from shop `who` if the player can afford it and it's
+// actually in that shop's stock, so gold and inventory can't be forged.
+func shopHasStock(who, id string) bool {
 	for _, s := range shops[who] {
 		if s == id {
-			inStock = true
-			break
+			return true
 		}
 	}
-	if !inStock {
+	return false
+}
+
+func shopBuy(p *Player, who, id string, n int) {
+	it, ok := items[id]
+	if !ok || !shopHasStock(who, id) {
 		return
 	}
-	price := items[id].price
+	if n <= 0 {
+		n = 1
+	}
+	price := it.price * n
 	if p.gold < price {
 		return
 	}
 	p.gold -= price
-	addItem(p, id, 1)
+	addItem(p, id, n)
+}
+
+func shopSell(p *Player, id string, n int) {
+	it, ok := items[id]
+	if !ok {
+		return
+	}
+	if n <= 0 {
+		n = 1
+	}
+	if p.bag[id] < n {
+		return
+	}
+	removeItem(p, id, n)
+	p.gold += it.price * n
 }
 
 func addItem(p *Player, id string, n int) { p.bag[id] += n }

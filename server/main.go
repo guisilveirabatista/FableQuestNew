@@ -15,7 +15,7 @@ import (
 )
 
 var spawnSpread bool // dev: scatter players across the field (load-testing AoI)
-var store Store       // persistence backend (file or Postgres)
+var store Store      // persistence backend (file or Postgres)
 
 const tickHz = 20
 
@@ -44,12 +44,13 @@ type inMsg struct {
 	V     bool    `json:"v"`     // toggle value (e.g. autoloot)
 	Tx    int     `json:"tx"`    // tile for takeLoot/takeCorpse
 	Ty    int     `json:"ty"`
-	Key string `json:"key"` // attribute key for spendAttr
-	Who string `json:"who"` // shop id for buy
-	Vw   int    `json:"vw"` // viewport half-extents in tiles (area-of-interest)
-	Vh   int    `json:"vh"`
-	User string `json:"user"` // login
-	Pass string `json:"pass"`
+	Key   string  `json:"key"` // attribute key for spendAttr
+	Who   string  `json:"who"` // shop id for buy
+	N     int     `json:"n"`   // item quantity for buy/sell
+	Vw    int     `json:"vw"`  // viewport half-extents in tiles (area-of-interest)
+	Vh    int     `json:"vh"`
+	User  string  `json:"user"` // login
+	Pass  string  `json:"pass"`
 }
 
 type loginErrMsg struct {
@@ -580,7 +581,9 @@ func (h *Hub) applyIntent(p *Player, m inMsg) {
 	case "assignSkill":
 		assignSkill(p, m.Id, m.Slot)
 	case "buy":
-		shopBuy(p, m.Who, m.Id)
+		shopBuy(p, m.Who, m.Id, m.N)
+	case "sell":
+		shopSell(p, m.Id, m.N)
 	case "setAutoloot":
 		p.autoloot = m.V
 	case "view": // client reports its viewport; clamp to a sane area of interest

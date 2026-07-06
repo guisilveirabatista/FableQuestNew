@@ -219,6 +219,7 @@ function netFrame(frameDt) {
   const net = game.net, h = game.hero;
   if (game.login) { updateLoginScreen(); drawLoginScreen(); return; } // not in the world yet
   let uiCaptured = false;
+  const hadBlockingUi = !!(game.death || game.mapOpen || game.menu || game.shop || game.invFocus || game.itemPopup);
 
   // 1) input -> intents. The menu and inventory panels reuse the single-player
   //    UI code: their pushIntent() calls forward to the server (sim.js pushIntent).
@@ -232,8 +233,10 @@ function netFrame(frameDt) {
     updateMapWindow();
     uiCaptured = true;
   } else if (game.menu) {
+    uiCaptured = true;
     updateMenu(frameDt); // navigate; spend attrs / reassign skills -> server
   } else if (game.shop) {
+    uiCaptured = true;
     updateShop(); // browse the shop; buys are validated by the server
   } else {
     if (pressed(['i', 'I'])) {
@@ -267,7 +270,7 @@ function netFrame(frameDt) {
   }
 
   // movement is blocked while a panel owns the keyboard
-  const captured = uiCaptured || game.death || game.mapOpen || game.menu || game.shop || game.invFocus || game.itemPopup;
+  const captured = uiCaptured || hadBlockingUi || game.death || game.mapOpen || game.menu || game.shop || game.invFocus || game.itemPopup;
   const dir = captured ? '' : (dirHeld() || '');
   if (dir !== net.lastDir) {
     net.lastDir = dir;
@@ -299,10 +302,13 @@ function netFrame(frameDt) {
     for (const c of clicks) {
       if (game.invOpen && inPanel(c)) continue; // the panel owns its own clicks
       if (game.corpseOpen && inCorpseWin(c)) continue;
-      const wx = Math.floor((c.x + cam.x) / TS), wy = Math.floor((c.y + cam.y) / TS);
+      const wxp = c.x + cam.x, wyp = c.y + cam.y;
+      const wx = Math.floor(wxp / TS), wy = Math.floor(wyp / TS);
       if (c.b === 2) { // right-click: open your corpse if next to it, else lock a target
+        const shopNpc = shopNpcAtPoint(wxp, wyp);
         const co = corpseAt(wx, wy);
-        if (co && !co.decayed && nearHero(wx, wy)) { game.corpseOpen = co; sfx('Decision1'); }
+        if (shopNpc && nearHero(shopNpc.tx, shopNpc.ty)) openShopChoice(shopForNpc(shopNpc));
+        else if (co && !co.decayed && nearHero(wx, wy)) { game.corpseOpen = co; sfx('Decision1'); }
         else netSend(net, { t: 'lockAt', x: c.x + cam.x, y: c.y + cam.y });
       } else if (c.b === 0 && c.alt) { // Alt+left-click: lock the enemy AND follow it
         netSend(net, { t: 'followAt', x: c.x + cam.x, y: c.y + cam.y });
@@ -372,7 +378,7 @@ function netInteract() {
   const h = game.hero, d = DIRV[h.dir];
   const fx = h.tx + d[0], fy = h.ty + d[1];
   const npc = npcs.find(n => n.map === game.mapId && n.tx === fx && n.ty === fy);
-  if (npc && (npc.id === 'smith' || npc.id === 'grocer')) { openShop(npc.id); return true; }
+  if (shopForNpc(npc)) { openShopChoice(shopForNpc(npc)); return true; }
   return false;
 }
 

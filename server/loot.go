@@ -60,15 +60,13 @@ func (h *Hub) pickupAt(p *Player, tx, ty int) bool {
 }
 
 // dropCorpse turns a dead player's whole bag into a corpse at the fall site.
+// Even an empty pack leaves a body, so players can still open it until decay.
 func (h *Hub) dropCorpse(mapID string, tx, ty int, bag map[string]int) {
 	items := map[string]int{}
 	for id, n := range bag {
 		if n > 0 {
 			items[id] = n
 		}
-	}
-	if len(items) == 0 {
-		return
 	}
 	h.corpses[mapID] = append(h.corpses[mapID], &corpse{tx: tx, ty: ty, items: items})
 }
@@ -106,7 +104,7 @@ func (h *Hub) updateCorpses(dt float64) {
 // into the player's bag.
 func (h *Hub) takeCorpse(p *Player, tx, ty int, want string) bool {
 	list := h.corpses[p.mapID]
-	for i, c := range list {
+	for _, c := range list {
 		if c.tx == tx && c.ty == ty && !c.decayed && near(p, tx, ty) {
 			if want != "" && want != "*" {
 				n := c.items[want]
@@ -116,16 +114,13 @@ func (h *Hub) takeCorpse(p *Player, tx, ty int, want string) bool {
 				addItem(p, want, n)
 				p.logMsg(fmt.Sprintf("Looted %s x%d", itemName(want), n))
 				delete(c.items, want)
-				if len(c.items) == 0 {
-					h.corpses[p.mapID] = append(list[:i], list[i+1:]...)
-				}
 				return true
 			}
 			for id, n := range c.items {
 				addItem(p, id, n)
 				p.logMsg(fmt.Sprintf("Looted %s x%d", itemName(id), n))
 			}
-			h.corpses[p.mapID] = append(list[:i], list[i+1:]...)
+			c.items = map[string]int{}
 			return true
 		}
 	}
