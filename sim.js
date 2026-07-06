@@ -22,8 +22,8 @@ const ATTRS = [
   ['dex', 'Dexterity'], ['mag', 'Magic Power'], ['luck', 'Luck'],
 ];
 const BASE_ATTR = { agi: 1, int: 1, vit: 2, str: 2, dex: 1, mag: 1, luck: 1 };
-function stats() {
-  const a = game.hero.attr;
+function statsForAttr(attr) {
+  const a = attr;
   const eq = { atk: 0, def: 0, mdef: 0, dodge: 0, crit: 0 }; // worn gear bonuses
   for (const id of Object.values(game.hero.equip)) {
     if (!id) continue;
@@ -42,6 +42,7 @@ function stats() {
     aspd: 1 + (a.agi - 1) * 0.06,                           // attack cooldown divider
   };
 }
+function stats() { return statsForAttr(game.hero.attr); }
 function recalcMax() { // Vitality/Intelligence feed max HP/MP
   const h = game.hero;
   h.maxhp = 18 + h.lv * 4 + h.attr.vit * 4;
@@ -90,6 +91,7 @@ function resetGame() {
   game.invOpen = true;
   game.invFocus = null;
   game.invDrag = null;
+  game.bagScroll = 0;
   game.itemPopup = null;
   game.corpseOpen = null;
   game.lootDrag = null;
@@ -252,12 +254,9 @@ function interact() { // returns true if something was there to talk to / read
       sfx('Recovery1');
       return true;
     }
-    if (npc.id === 'smith') {
-      openShop('smith');
-      return true;
-    }
-    if (npc.id === 'grocer') {
-      openShop('grocer');
+    const shopId = shopForNpc(npc);
+    if (shopId) {
+      openShopChoice(shopId);
       return true;
     }
     if (npc.id === 'kid') {
@@ -797,17 +796,50 @@ const SHOPS = {
   smith: { name: 'Blacksmith', stock: ['sword1', 'sword2', 'sword3', 'shield', 'hat', 'helm', 'armor', 'legs'] },
   grocer: { name: 'Grocer', stock: ['bread', 'meat', 'potion', 'boots', 'ring', 'amulet'] },
 };
-function openShop(who) {
-  game.shop = { who, cursor: 0 };
+function shopForNpc(npc) {
+  return npc && (npc.id === 'smith' || npc.id === 'grocer') ? npc.id : null;
+}
+function shopNpcAt(tx, ty) {
+  return npcs.find(n => n.map === game.mapId && n.tx === tx && n.ty === ty && shopForNpc(n));
+}
+function shopNpcAtPoint(wx, wy) {
+  return npcs.find(n => n.map === game.mapId && shopForNpc(n) &&
+    wx >= n.px - 4 && wx < n.px + 20 && wy >= n.py - 16 && wy < n.py + 16);
+}
+function openShopChoice(who) {
+  game.shop = { who, mode: 'choice', cursor: 0 };
   sfx('Decision1');
 }
-function shopBuy() {
-  const s = game.shop, h = game.hero, it = ITEMS[SHOPS[s.who].stock[s.cursor]];
-  if (h.gold < it.price) { sfx('Buzzer1'); return; }
-  h.gold -= it.price;
-  addItem(SHOPS[s.who].stock[s.cursor], 1);
+function openShop(who, mode = 'buy') {
+  game.shop = { who, mode, cursor: 0, scroll: 0, qty: {}, edit: null, editText: '', warn: '' };
+  sfx('Decision1');
+}
+function shopInStock(who, id) {
+  return !!(SHOPS[who] && SHOPS[who].stock.includes(id));
+}
+function shopUnitPrice(id) {
+  return ITEMS[id] ? ITEMS[id].price : 0;
+}
+function sellValue(id) {
+  return shopUnitPrice(id);
+}
+function shopBuy(who, id, n = 1) {
+  const h = game.hero, it = ITEMS[id], amount = Math.max(1, Math.floor(n || 1));
+  if (!it || !shopInStock(who, id)) { sfx('Buzzer1'); return; }
+  const total = it.price * amount;
+  if (h.gold < total) { sfx('Buzzer1'); return; }
+  h.gold -= total;
+  addItem(id, amount);
   sfx('Item1');
-  addPop(`+1 ${it.name}`, h.px + 8, h.py - 12, '#9f9');
+  addPop(`+${amount} ${it.name}`, h.px + 8, h.py - 12, '#9f9');
+}
+function shopSell(id, n = 1) {
+  const h = game.hero, it = ITEMS[id], amount = Math.max(1, Math.floor(n || 1));
+  if (!it || (h.bag[id] || 0) < amount) { sfx('Buzzer1'); return; }
+  removeItem(id, amount);
+  h.gold += sellValue(id) * amount;
+  sfx('Item1');
+  addPop(`+${sellValue(id) * amount}g`, h.px + 8, h.py - 12, '#ffe080');
 }
 function assignSkillSlot(id, i) {
   const h = game.hero, old = h.slots.indexOf(id);
@@ -897,7 +929,8 @@ function applyIntent(it) {
         else if (game.corpseOpen.items[it.id]) takeFromCorpse(game.corpseOpen, it.id);
       }
       break;
-    case 'buy': shopBuy(); break;
+    case 'buy': shopBuy(it.who, it.id, it.n || 1); break;
+    case 'sell': shopSell(it.id, it.n || 1); break;
     case 'spendAttr':
       if (h.points > 0) { h.attr[it.key]++; h.points--; recalcMax(); sfx('Decision1'); }
       else sfx('Buzzer1');

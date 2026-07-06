@@ -1,0 +1,1 @@
+- I should be able to equip the weapon on either hand.

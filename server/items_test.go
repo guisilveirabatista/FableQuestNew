@@ -81,16 +81,42 @@ func TestOverloadedHalvesSpeed(t *testing.T) {
 func TestShopBuy(t *testing.T) {
 	p := heroAt("city", 19, 16)
 	p.gold = 100
-	shopBuy(p, "smith", "sword1") // 60g
+	shopBuy(p, "smith", "sword1", 1) // 60g
 	if p.gold != 40 || p.bag["sword1"] != 1 {
 		t.Fatalf("buying a sword should cost 60g and add it (gold=%d, sword=%d)", p.gold, p.bag["sword1"])
 	}
-	shopBuy(p, "smith", "sword2") // 150g — can't afford
+	shopBuy(p, "smith", "sword2", 1) // 150g - can't afford
 	if p.gold != 40 || p.bag["sword2"] != 0 {
 		t.Fatalf("should not be able to buy what you can't afford (gold=%d)", p.gold)
 	}
-	shopBuy(p, "grocer", "sword1") // not in the grocer's stock
+	shopBuy(p, "grocer", "sword1", 1) // not in the grocer's stock
 	if p.gold != 40 {
 		t.Fatal("should not be able to buy an item a shop doesn't stock")
+	}
+}
+
+func TestShopBuyBulk(t *testing.T) {
+	p := heroAt("city", 19, 16)
+	p.gold = 120
+	shopBuy(p, "smith", "sword1", 2)
+	if p.gold != 0 || p.bag["sword1"] != 2 {
+		t.Fatalf("bulk buying should charge and add the requested quantity (gold=%d, sword=%d)", p.gold, p.bag["sword1"])
+	}
+	shopBuy(p, "smith", "sword1", 1)
+	if p.gold != 0 || p.bag["sword1"] != 2 {
+		t.Fatal("bulk buying should still reject purchases without enough gold")
+	}
+}
+
+func TestShopSellBulk(t *testing.T) {
+	p := heroAt("city", 19, 16)
+	p.bag["potion"] = 3
+	shopSell(p, "potion", 2)
+	if p.gold != 50 || p.bag["potion"] != 1 {
+		t.Fatalf("selling should remove backpack items and pay their value (gold=%d, potion=%d)", p.gold, p.bag["potion"])
+	}
+	shopSell(p, "potion", 2)
+	if p.gold != 50 || p.bag["potion"] != 1 {
+		t.Fatal("selling should reject quantities the backpack does not contain")
 	}
 }

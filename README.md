@@ -160,6 +160,28 @@ PostgreSQL, build with the tag and point `-db` at your database:
 go build -tags postgres && ./server -db postgres://user:pass@localhost/fablequest
 ```
 
+### Scaling out: zone sharding
+
+For many players the world can be split across several **zone** processes, each
+simulating a subset of maps, behind one client-facing **gateway**. The gateway
+owns login and persistence and proxies each player to the zone that currently
+owns their map; when a player walks across a border the owning zone hands them
+off and the gateway reconnects them to the destination zone — transparently, so
+the browser just keeps receiving snapshots (now carrying the new map).
+
+```
+# one zone per map (own TCP link addresses), then the gateway that fronts them
+go build
+./server -mode zone -maps city  -zaddr :9101 &
+./server -mode zone -maps field -zaddr :9102 &
+./server -mode gateway -addr :8080 -zone city=:9101 -zone field=:9102
+```
+
+Then open the game at `http://localhost:8080/index.html?net=1` exactly as before.
+The default `-mode solo` is the all-in-one server above (no gateway needed); a
+gateway with a single zone that owns every map (`-maps city,field`) works too, so
+you can shard only when you need to.
+
 ## Asset license
 
 All art, sound and music are from the RPG Maker 2003 Run Time Package (plus

@@ -358,10 +358,16 @@ func (h *Hub) stepPlayer(p *Player, moveDir string, dt float64) {
 			p.moving = false
 			p.anim = 1
 			if ex, ok := maps[p.mapID].exits[[2]int{p.tx, p.ty}]; ok {
-				p.mapID = ex.to
-				p.tx, p.ty = ex.tx, ex.ty
-				p.px, p.py = float64(p.tx*TS), float64(p.ty*TS)
-				clearPath(p)
+				if h.ownsMap(ex.to) {
+					p.mapID = ex.to
+					p.tx, p.ty = ex.tx, ex.ty
+					p.px, p.py = float64(p.tx*TS), float64(p.ty*TS)
+					clearPath(p)
+				} else { // zone mode: hand this player off to the owning zone
+					e := ex
+					p.pendingHandoff = &e
+					clearPath(p)
+				}
 			}
 		}
 	case moveDir != "":

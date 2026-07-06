@@ -6,16 +6,18 @@ package main
 import (
 	"encoding/json"
 	"flag"
+	"fmt"
 	"log"
 	"math"
 	"math/rand"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
 
 var spawnSpread bool // dev: scatter players across the field (load-testing AoI)
-var store Store       // persistence backend (file or Postgres)
+var store Store      // persistence backend (file or Postgres)
 
 const tickHz = 20
 
@@ -44,12 +46,13 @@ type inMsg struct {
 	V     bool    `json:"v"`     // toggle value (e.g. autoloot)
 	Tx    int     `json:"tx"`    // tile for takeLoot/takeCorpse
 	Ty    int     `json:"ty"`
-	Key string `json:"key"` // attribute key for spendAttr
-	Who string `json:"who"` // shop id for buy
-	Vw   int    `json:"vw"` // viewport half-extents in tiles (area-of-interest)
-	Vh   int    `json:"vh"`
-	User string `json:"user"` // login
-	Pass string `json:"pass"`
+	Key   string  `json:"key"` // attribute key for spendAttr
+	Who   string  `json:"who"` // shop id for buy
+	N     int     `json:"n"`   // item quantity for buy/sell
+	Vw    int     `json:"vw"`  // viewport half-extents in tiles (area-of-interest)
+	Vh    int     `json:"vh"`
+	User  string  `json:"user"` // login
+	Pass  string  `json:"pass"`
 }
 
 type loginErrMsg struct {
@@ -153,7 +156,7 @@ func (e *enemy) view() enemyView {
 type Player struct {
 	id       string
 	username string
-	conn     *wsConn
+	conn     netConn
 
 	mu    sync.Mutex // guards inbox (read goroutine appends, tick drains)
 	inbox []inMsg
@@ -187,7 +190,8 @@ type Player struct {
 	log              []string
 	dead             bool
 	deathCause       string
-	aoiW, aoiH       int // area-of-interest half-extents in tiles (from the client viewport)
+	aoiW, aoiH       int   // area-of-interest half-extents in tiles (from the client viewport)
+	pendingHandoff   *exit // zone mode: stepped onto an exit to a map this zone doesn't own
 }
 
 func (p *Player) view() playerView {
@@ -218,6 +222,12 @@ type Hub struct {
 	players map[string]*Player
 	nextID  int
 
+	// ownedMaps limits which maps this hub simulates. nil (solo mode) owns
+	// everything and switches maps locally at exits; in zone mode it holds just
+	// this zone's maps, and stepping onto an exit to a map we don't own hands the
+	// player back to the gateway instead of switching locally.
+	ownedMaps map[string]bool
+
 	// shared world entities, keyed by map
 	enemies     map[string][]*enemy
 	spawnT      map[string]float64
@@ -240,6 +250,11 @@ func newHub() *Hub {
 	}
 }
 
+// ownsMap reports whether this hub simulates mapID (always true in solo mode).
+func (h *Hub) ownsMap(mapID string) bool {
+	return h.ownedMaps == nil || h.ownedMaps[mapID]
+}
+
 // online reports whether an account is already connected (one session each).
 func (h *Hub) online(user string) bool {
 	h.mu.Lock()
@@ -250,7 +265,7 @@ func (h *Hub) online(user string) bool {
 
 // addPlayer brings an authenticated account into the world, loading its saved
 // character (ch) or making a fresh one (ch == nil). The player id is the username.
-func (h *Hub) addPlayer(c *wsConn, user string, ch *charState) *Player {
+func (h *Hub) addPlayer(c netConn, user string, ch *charState) *Player {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	p := &Player{id: user, username: user, conn: c, dir: "down", aoiW: 22, aoiH: 16}
@@ -291,7 +306,9 @@ func (h *Hub) savePlayer(p *Player) {
 
 func (h *Hub) remove(p *Player) {
 	h.mu.Lock()
-	if _, ok := h.players[p.id]; ok {
+	// identity check: a handoff may already have dropped p and a new session for
+	// the same id could have joined (another zone link) — don't evict that one.
+	if cur, ok := h.players[p.id]; ok && cur == p {
 		delete(h.players, p.id)
 		log.Printf("- %s left (%d online)", p.id, len(h.players))
 	}
@@ -316,6 +333,7 @@ func (h *Hub) run() {
 			data []byte
 		}
 		var outs []outbound
+		var handoffOuts []outbound
 
 		h.mu.Lock()
 		// 1) drain each player's intent inbox (move / attack / lock)
@@ -349,6 +367,24 @@ func (h *Hub) run() {
 				dir = h.followDir(p)
 			}
 			h.stepPlayer(p, dir, dt)
+		}
+		// 2b) zone mode: players who stepped onto an exit to a map this zone does
+		//     not own are handed back to the gateway (which reconnects them to the
+		//     owning zone). Drop them from the sim now so they leave this tick's
+		//     snapshots and stop being simulated here.
+		if h.ownedMaps != nil {
+			for id, p := range h.players {
+				if p.pendingHandoff == nil {
+					continue
+				}
+				ex := p.pendingHandoff
+				ch := charStateOf(p)
+				ch.MapID, ch.Tx, ch.Ty = ex.to, ex.tx, ex.ty
+				b, _ := json.Marshal(handoffMsg{T: "handoff", To: ex.to, Tx: ex.tx, Ty: ex.ty, Char: ch})
+				handoffOuts = append(handoffOuts, outbound{p, b})
+				delete(h.players, id)
+				log.Printf("-> handoff %s to %s (%d here)", p.id, ex.to, len(h.players))
+			}
 		}
 		// 3) advance shared enemies against post-move player positions
 		playersByMap := map[string][]*Player{}
@@ -470,6 +506,12 @@ func (h *Hub) run() {
 				h.remove(o.p)
 			}
 		}
+		// deliver handoffs (the gateway closes the old link once it reconnects the
+		// player to the destination zone).
+		for _, o := range handoffOuts {
+			o.p.conn.WriteText(o.data)
+			o.p.pendingHandoff = nil
+		}
 
 		// tick-time / bandwidth metrics, logged every 5s while anyone is online
 		d := time.Since(tickStart)
@@ -580,7 +622,9 @@ func (h *Hub) applyIntent(p *Player, m inMsg) {
 	case "assignSkill":
 		assignSkill(p, m.Id, m.Slot)
 	case "buy":
-		shopBuy(p, m.Who, m.Id)
+		shopBuy(p, m.Who, m.Id, m.N)
+	case "sell":
+		shopSell(p, m.Id, m.N)
 	case "setAutoloot":
 		p.autoloot = m.V
 	case "view": // client reports its viewport; clamp to a sane area of interest
@@ -665,28 +709,95 @@ func main() {
 	spawnAt := flag.String("spawn", "city", "player spawn map: city (safe plaza) or field (among monsters, for testing)")
 	spread := flag.Bool("spread", false, "scatter players across the field (for load-testing area-of-interest)")
 	db := flag.String("db", "file:fablequest.db.json", "persistence: file:PATH (default) or postgres://... (needs -tags postgres)")
+	mode := flag.String("mode", "solo", "solo (all-in-one) | zone (simulate some maps) | gateway (client-facing proxy)")
+	zoneMaps := flag.String("maps", "", "zone mode: comma-separated maps this zone owns, e.g. city,field")
+	zaddr := flag.String("zaddr", ":9101", "zone mode: internal TCP address the gateway links to")
+	var zoneRoutes zoneRoutes
+	flag.Var(&zoneRoutes, "zone", "gateway mode: map=addr route, repeatable, e.g. -zone city=:9101 -zone field=:9102")
 	flag.Parse()
 	spawnSpread = *spread
-
-	var err error
-	if store, err = openStore(*db); err != nil {
-		log.Fatalf("store: %v", err)
-	}
-	defer store.Close()
 
 	buildMaps()
 	if *spawnAt == "field" { // dev/testing: drop players straight into monster territory
 		spawn.mapID, spawn.tx, spawn.ty = "field", 15, 10
 	}
-	hub := newHub()
-	go hub.run()
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("/ws", hub.serveWS)
-	mux.Handle("/", http.FileServer(http.Dir(*webRoot)))
+	switch *mode {
+	case "solo":
+		var err error
+		if store, err = openStore(*db); err != nil {
+			log.Fatalf("store: %v", err)
+		}
+		defer store.Close()
+		hub := newHub()
+		go hub.run()
+		mux := http.NewServeMux()
+		mux.HandleFunc("/ws", hub.serveWS)
+		mux.Handle("/", http.FileServer(http.Dir(*webRoot)))
+		log.Printf("Fable Quest server (solo) on %s (web root %q), tick %d Hz", *addr, *webRoot, tickHz)
+		if err := http.ListenAndServe(*addr, mux); err != nil {
+			log.Fatal(err)
+		}
 
-	log.Printf("Fable Quest server on %s (web root %q), tick %d Hz", *addr, *webRoot, tickHz)
-	if err := http.ListenAndServe(*addr, mux); err != nil {
-		log.Fatal(err)
+	case "zone":
+		owned := splitMaps(*zoneMaps)
+		if len(owned) == 0 {
+			log.Fatal("zone mode needs -maps (e.g. -maps city)")
+		}
+		hub := newHub()
+		hub.ownedMaps = map[string]bool{}
+		for _, m := range owned {
+			hub.ownedMaps[m] = true
+		}
+		go hub.run()
+		runZone(hub, owned, *zaddr) // blocks
+
+	case "gateway":
+		if len(zoneRoutes) == 0 {
+			log.Fatal("gateway mode needs at least one -zone map=addr route")
+		}
+		var err error
+		if store, err = openStore(*db); err != nil {
+			log.Fatalf("store: %v", err)
+		}
+		defer store.Close()
+		gw := newGateway(zoneRoutes)
+		mux := http.NewServeMux()
+		mux.HandleFunc("/ws", gw.serveWS)
+		mux.Handle("/", http.FileServer(http.Dir(*webRoot)))
+		log.Printf("Fable Quest gateway on %s (web root %q), zones %v", *addr, *webRoot, map[string]string(zoneRoutes))
+		if err := http.ListenAndServe(*addr, mux); err != nil {
+			log.Fatal(err)
+		}
+
+	default:
+		log.Fatalf("unknown -mode %q (want solo, zone, or gateway)", *mode)
 	}
+}
+
+// splitMaps parses a comma-separated map list ("city,field") into a slice.
+func splitMaps(s string) []string {
+	var out []string
+	for _, m := range strings.Split(s, ",") {
+		if m = strings.TrimSpace(m); m != "" {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// zoneRoutes is a repeatable -zone map=addr flag collected into a map.
+type zoneRoutes map[string]string
+
+func (z zoneRoutes) String() string { return fmt.Sprintf("%v", map[string]string(z)) }
+func (z *zoneRoutes) Set(s string) error {
+	i := strings.IndexByte(s, '=')
+	if i <= 0 {
+		return fmt.Errorf("want map=addr, got %q", s)
+	}
+	if *z == nil {
+		*z = zoneRoutes{}
+	}
+	(*z)[s[:i]] = s[i+1:]
+	return nil
 }
