@@ -72,6 +72,7 @@ function onSnapshot(m) {
   net.prevHP = you.hp;
   h.hp = you.hp; h.maxhp = you.maxhp; h.mp = you.mp; h.maxmp = you.maxmp;
   h.lv = you.lv; h.exp = you.exp; h.gold = you.gold; h.kills = you.kills;
+  if (you.slots) h.slots = you.slots;
 
   // remote players
   const seen = {};
@@ -101,6 +102,12 @@ function onSnapshot(m) {
   for (const id in net.eById) if (!eSeen[id]) delete net.eById[id];
   game.enemies = Object.values(net.eById);
   game.lock = you.lock ? net.eById[you.lock] : null; // yellow lock marker
+
+  // fireballs and lightning are shared world entities; render them straight from
+  // the server (boom < 0 means still flying, >= 0 means the impact burst)
+  game.projectiles = (m.projectiles || []).map(v =>
+    v.boom >= 0 ? { x: v.x, y: v.y, t: v.t, boom: v.boom } : { x: v.x, y: v.y, t: v.t });
+  game.bolts = (m.bolts || []).map(v => ({ x: v.x, y: v.y, t: v.t }));
 }
 
 // One render frame in netplay mode (called from the main loop instead of the
@@ -122,6 +129,14 @@ function netFrame(frameDt) {
     sfx('Blow1');
   }
   if (pressed(['Tab'])) netSend(net, { t: 'cycleLock' });
+  for (let i = 0; i < 5; i++) if (pressed([String(i + 1)])) { // cast hotbar skill
+    netSend(net, { t: 'cast', slot: i });
+    const sk = h.slots && h.slots[i]; // optimistic local effect; damage is server-side
+    if (sk === 'spin') { game.slashFx = { t: 0, spin: true, dur: 0.3 }; sfx('Sword1'); }
+    else if (sk === 'heal') { game.healFx = 0.5; sfx('Recovery1'); }
+    else if (sk === 'fire') sfx('Flame1');
+    else if (sk === 'bolt') sfx('Thunder4');
+  }
   const cam = camPos();
   for (const c of clicks) {
     if (c.b === 2) netSend(net, { t: 'lockAt', x: c.x + cam.x, y: c.y + cam.y });

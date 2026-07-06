@@ -47,6 +47,7 @@ func recalcMax(p *Player) {
 func initHero(p *Player) {
 	p.lv = 1
 	p.attr = baseAttr
+	p.slots = []string{"fire", "heal", "spin", "bolt", ""} // skill hotbar (keys 1-5)
 	recalcMax(p)
 	p.hp = float64(p.maxhp)
 	p.mp = float64(p.maxmp)

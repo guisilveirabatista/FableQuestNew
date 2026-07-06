@@ -24,9 +24,10 @@ const tickHz = 20
 type inMsg struct {
 	T    string  `json:"t"`   // "move" | "attack" | "lockAt" | "cycleLock" | "unlock"
 	Seq  int     `json:"seq"` // client input sequence, echoed back for reconciliation
-	Dir string  `json:"dir"` // "up"|"down"|"left"|"right"|"" (stop)
-	X   float64 `json:"x"`   // world point for lockAt
-	Y   float64 `json:"y"`
+	Dir  string  `json:"dir"`  // "up"|"down"|"left"|"right"|"" (stop)
+	X    float64 `json:"x"`    // world point for lockAt
+	Y    float64 `json:"y"`
+	Slot int     `json:"slot"` // hotbar slot for cast
 }
 
 // server -> client
@@ -45,9 +46,21 @@ type playerView struct {
 	MaxMP  int     `json:"maxmp"`
 	Lv     int     `json:"lv"`
 	Exp    int     `json:"exp"`
-	Gold   int     `json:"gold"`
-	Kills  int     `json:"kills"`
-	Lock   int     `json:"lock"`
+	Gold   int      `json:"gold"`
+	Kills  int      `json:"kills"`
+	Lock   int      `json:"lock"`
+	Slots  []string `json:"slots"`
+}
+type projView struct {
+	X    float64 `json:"x"`
+	Y    float64 `json:"y"`
+	T    float64 `json:"t"`
+	Boom float64 `json:"boom"` // -1 = flying, >=0 = impact burst remaining
+}
+type boltView struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
+	T float64 `json:"t"`
 }
 type welcomeMsg struct {
 	T    string `json:"t"`
@@ -70,12 +83,14 @@ type enemyView struct {
 	Dying  float64 `json:"dying"`
 }
 type snapMsg struct {
-	T       string       `json:"t"`
-	Map     string       `json:"map"`
-	Ack     int          `json:"ack"`
-	You     playerView   `json:"you"`
-	Players []playerView `json:"players"`
-	Enemies []enemyView  `json:"enemies"`
+	T           string       `json:"t"`
+	Map         string       `json:"map"`
+	Ack         int          `json:"ack"`
+	You         playerView   `json:"you"`
+	Players     []playerView `json:"players"`
+	Enemies     []enemyView  `json:"enemies"`
+	Projectiles []projView   `json:"projectiles"`
+	Bolts       []boltView   `json:"bolts"`
 }
 
 func (e *enemy) view() enemyView {
@@ -107,13 +122,14 @@ type Player struct {
 	lv, exp, gold    int
 	kills, points    int
 	attr             AttrSet
+	slots            []string
 	atkCool, iframes float64
 	lockID           int
 }
 
 func (p *Player) view() playerView {
 	return playerView{p.id, p.tx, p.ty, p.px, p.py, p.dir, p.moving, p.anim,
-		p.hp, p.maxhp, p.mp, p.maxmp, p.lv, p.exp, p.gold, p.kills, p.lockID}
+		p.hp, p.maxhp, p.mp, p.maxmp, p.lv, p.exp, p.gold, p.kills, p.lockID, p.slots}
 }
 
 // ---- hub -------------------------------------------------------------------
@@ -124,16 +140,20 @@ type Hub struct {
 	nextID  int
 
 	// shared world entities, keyed by map
-	enemies map[string][]*enemy
-	spawnT  map[string]float64
-	nextEID int
+	enemies     map[string][]*enemy
+	spawnT      map[string]float64
+	nextEID     int
+	projectiles map[string][]*projectile
+	bolts       map[string][]*bolt
 }
 
 func newHub() *Hub {
 	return &Hub{
-		players: map[string]*Player{},
-		enemies: map[string][]*enemy{},
-		spawnT:  map[string]float64{},
+		players:     map[string]*Player{},
+		enemies:     map[string][]*enemy{},
+		spawnT:      map[string]float64{},
+		projectiles: map[string][]*projectile{},
+		bolts:       map[string][]*bolt{},
 	}
 }
 
@@ -206,6 +226,8 @@ func (h *Hub) run() {
 				h.autoMelee(p)
 			}
 		}
+		// 5) advance fireballs (homing + hits) and decay bolts
+		h.updateProjectiles(dt)
 		// 3) build per-map views
 		pViews := map[string][]playerView{}
 		for _, p := range h.players {
@@ -215,6 +237,22 @@ func (h *Hub) run() {
 		for mapID, list := range h.enemies {
 			for _, e := range list {
 				eViews[mapID] = append(eViews[mapID], e.view())
+			}
+		}
+		prViews := map[string][]projView{}
+		for mapID, list := range h.projectiles {
+			for _, pr := range list {
+				b := -1.0
+				if pr.booming {
+					b = pr.boom
+				}
+				prViews[mapID] = append(prViews[mapID], projView{pr.x, pr.y, pr.t, b})
+			}
+		}
+		blViews := map[string][]boltView{}
+		for mapID, list := range h.bolts {
+			for _, b := range list {
+				blViews[mapID] = append(blViews[mapID], boltView{b.x, b.y, b.t})
 			}
 		}
 		// 4) snapshot each player its own map
@@ -231,6 +269,7 @@ func (h *Hub) run() {
 			data, _ := json.Marshal(snapMsg{
 				T: "snap", Map: p.mapID, Ack: ack, You: p.view(),
 				Players: others, Enemies: eViews[p.mapID],
+				Projectiles: prViews[p.mapID], Bolts: blViews[p.mapID],
 			})
 			outs = append(outs, outbound{p, data})
 		}
@@ -261,6 +300,8 @@ func (h *Hub) applyIntent(p *Player, m inMsg) {
 		h.cycleLock(p)
 	case "unlock":
 		p.lockID = 0
+	case "cast":
+		h.castSlot(p, m.Slot)
 	}
 }
 
