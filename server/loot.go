@@ -20,7 +20,7 @@ type corpse struct {
 }
 
 const (
-	corpseDecaySeconds = 1 * 30
+	corpseDecaySeconds = 10 * 60
 	maxDecayedCorpses  = 24
 )
 

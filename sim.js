@@ -11,7 +11,7 @@
 // stubs it) — the sim only *requests* sounds, it doesn't play them.
 
 const TS = 16, MW = 40, MH = 25;
-const CORPSE_DECAY = 1 * 30;
+const CORPSE_DECAY = 10 * 60;
 const DIRV = { up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0] };
 // ---------------------------------------------------------------- game state
 const game = {};
@@ -52,7 +52,6 @@ function recalcMax() { // Vitality/Intelligence feed max HP/MP
 function resetGame() {
   game.scene = 'title';
   game.hero = {
-    name: 'Hero',
     tx: SPAWN.tx, ty: SPAWN.ty, px: SPAWN.tx * TS, py: SPAWN.ty * TS, dir: 'down', anim: 0, moving: false,
     dead: false,
     hp: 30, maxhp: 30, mp: 10, maxmp: 10, lv: 1, exp: 0, gold: 0,
