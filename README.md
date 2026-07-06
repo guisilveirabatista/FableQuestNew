@@ -130,6 +130,27 @@ The engine is split into an authoritative **simulation** and a thin **client**
   walk sprites and the slash/flame effects are ripped from the RTP by
   `tools/rip.js` (it injects a tRNS chunk so palette 0 becomes transparent).
 
+## Multiplayer server (experimental — MMORPG Phase 1)
+
+An authoritative Go server (`server/`, stdlib only) that owns **player movement**
+for many clients sharing one world. Clients send only a desired direction; the
+server validates it, moves everyone at a fixed 20 Hz, and streams snapshots back,
+so positions can't be spoofed. Enemies/combat are still client-side for now
+(they move server-side in Phase 2).
+
+```
+cd server
+go run .            # serves the game + WebSocket on http://localhost:8080
+go test ./...       # movement / collision / map-exit tests
+```
+
+Then open **http://localhost:8080/index.html?net=1** in two browser windows —
+each is a player, and you'll see the others move around the city and field. The
+client predicts your own hero locally (using the same rules the server runs, in
+`sim.js`'s `stepHero`) and interpolates everyone else. `netclient.js` is the thin
+netplay layer; `?net=1` opts into it (plain `index.html` still runs the full
+single-player game).
+
 ## Asset license
 
 All art, sound and music are from the RPG Maker 2003 Run Time Package (plus

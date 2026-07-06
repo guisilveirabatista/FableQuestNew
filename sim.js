@@ -915,6 +915,16 @@ function advanceWorld(dt) {
     if (slashReaches(dir, game.lock)) { h.dir = dir; slash(); }
   }
 
+  stepHero(dt);
+}
+
+// Hero locomotion: integrate toward the target tile while moving, else start a
+// step from game.moveDir / click path / follow. Split out of advanceWorld() so
+// the netplay client can predict the local hero with the exact same rules the
+// Go server runs (world.go's stepPlayer is this function's port). Returns true
+// if a map exit was taken (caller should stop advancing this tick).
+function stepHero(dt) {
+  const h = game.hero;
   if (h.moving) {
     const speed = (overloaded() ? 32 : 70) * dt; // trudge when the pack is too heavy
     const gx = h.tx * TS, gy = h.ty * TS;
@@ -925,7 +935,7 @@ function advanceWorld(dt) {
       h.moving = false;
       game.steps++;
       const exit = cur().exits[h.tx + ',' + h.ty];
-      if (exit) { switchMap(...exit); return; }
+      if (exit) { switchMap(...exit); return true; }
     }
   } else {
     const dir = game.moveDir; // set by the 'moveDir' intent (null when a UI panel owns input)
@@ -968,6 +978,7 @@ function advanceWorld(dt) {
       if (!h.moving) h.anim = 1;
     } else h.anim = 1; // standing frame
   }
+  return false;
 }
 
 // Node (headless sim + future tooling) loads this file with require(); the

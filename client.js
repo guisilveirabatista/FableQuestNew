@@ -853,6 +853,10 @@ function drawMap() {
     base: en.py + TS,
     draw: () => drawEnemy(en),
   });
+  if (game.players) for (const pl of game.players) drawables.push({ // netplay: other players
+    base: pl.py + TS,
+    draw: () => drawChar(img.hero, 0, 0, pl.dir, pl.moving ? [0, 1, 2, 1][Math.floor(pl.anim) % 4] : 1, pl.px, pl.py),
+  });
   drawables.push({
     base: h.py + TS,
     draw: () => {
@@ -1124,17 +1128,21 @@ function loop(ts) {
     if (game.scene === 'title') drawTitle();
     acc = 0;
   } else if (game.scene === 'map') {
-    processInput(frame); // raw input -> UI state + intents (every frame)
-    if (game.scene === 'map') {
-      acc += frame;
-      let ticks = 0;
-      while (acc >= FIXED && ticks < 5) { snapshotPrev(); stepWorld(FIXED); acc -= FIXED; ticks++; }
-      if (ticks === 5) acc = 0; // fell too far behind: drop the backlog
+    if (game.net) {
+      netFrame(frame); // netplay: predict own hero, render server snapshots
+    } else {
+      processInput(frame); // raw input -> UI state + intents (every frame)
       if (game.scene === 'map') {
-        const a = Math.max(0, Math.min(1, acc / FIXED));
-        applyInterp(a);
-        drawMap();
-        clearInterp();
+        acc += frame;
+        let ticks = 0;
+        while (acc >= FIXED && ticks < 5) { snapshotPrev(); stepWorld(FIXED); acc -= FIXED; ticks++; }
+        if (ticks === 5) acc = 0; // fell too far behind: drop the backlog
+        if (game.scene === 'map') {
+          const a = Math.max(0, Math.min(1, acc / FIXED));
+          applyInterp(a);
+          drawMap();
+          clearInterp();
+        }
       }
     }
   }
@@ -1153,6 +1161,13 @@ Promise.all(IMAGES.map(n => new Promise((res, rej) => {
 }))).then(() => {
   resetGame();
   const p = new URLSearchParams(location.search);
+  if (p.get('net')) { // netplay: connect to the authoritative server and skip the title
+    const v = p.get('net');
+    const url = v === '1' ? (location.protocol === 'https:' ? 'wss' : 'ws') + '://' + location.host + '/ws' : v;
+    netStart(url);
+    requestAnimationFrame(loop);
+    return;
+  }
   if (p.get('scene') === 'map') game.scene = 'map';
   if (p.get('gamemenu')) { game.scene = 'map'; game.menu = { mode: p.get('gamemenu') === '1' ? 'root' : p.get('gamemenu'), cursor: 0 }; }
   if (p.get('enemy')) { // put the hero on the field with one enemy for testing
