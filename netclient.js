@@ -21,17 +21,13 @@ function netStart(url) {
   game.logOpen = true;
   game.menu = null;
   game.scene = 'map';
+  game.login = { user: '', pass: '', field: 'user', error: '', busy: false }; // login screen until welcome
 
   const ws = new WebSocket(url);
   net.ws = ws;
-  ws.onopen = () => {
-    net.connected = true; net.status = 'connected';
-    // tell the server our area of interest (half-viewport in tiles + margin) so
-    // it only streams entities we could actually see
-    netSend(net, { t: 'view', vw: Math.ceil(W / TS / 2) + 6, vh: Math.ceil(H / TS / 2) + 6 });
-  };
-  ws.onclose = () => { net.connected = false; net.status = 'disconnected'; };
-  ws.onerror = () => { net.status = 'connection error'; };
+  ws.onopen = () => { net.connected = true; net.status = 'connected'; };
+  ws.onclose = () => { net.connected = false; net.status = 'disconnected'; if (game.login) { game.login.error = 'disconnected'; game.login.busy = false; } };
+  ws.onerror = () => { net.status = 'connection error'; if (game.login) { game.login.error = 'connection error'; game.login.busy = false; } };
   ws.onmessage = e => {
     const m = JSON.parse(e.data);
     if (m.t === 'welcome') {
@@ -39,11 +35,81 @@ function netStart(url) {
       game.hero.name = m.id;
       game.mapId = m.map;
       snapHero(m); // start at the server-assigned spawn
+      game.login = null; // logged in — enter the world
+      // report our area of interest (half-viewport in tiles + margin)
+      netSend(net, { t: 'view', vw: Math.ceil(W / TS / 2) + 6, vh: Math.ceil(H / TS / 2) + 6 });
+    } else if (m.t === 'loginError') {
+      if (game.login) { game.login.error = m.msg; game.login.busy = false; }
     } else if (m.t === 'snap') {
       net.ack = m.ack;
       onSnapshot(m);
     }
   };
+}
+
+// ---- login screen ----------------------------------------------------------
+function loginBox() {
+  const w = 224, h = 134, x = Math.floor((W - w) / 2), y = Math.floor((H - h) / 2);
+  return {
+    x, y, w, h,
+    user: { x: x + 16, y: y + 42, w: w - 32, h: 16 },
+    pass: { x: x + 16, y: y + 76, w: w - 32, h: 16 },
+    btn: { x: x + w / 2 - 40, y: y + 100, w: 80, h: 18 },
+  };
+}
+
+function submitLogin() {
+  const L = game.login;
+  if (L.busy || !L.user || !L.pass) return;
+  L.error = ''; L.busy = true;
+  netSend(game.net, { t: 'login', user: L.user, pass: L.pass });
+}
+
+function updateLoginScreen() {
+  const L = game.login, b = loginBox();
+  for (const c of clicks) {
+    if (c.b !== 0) continue;
+    if (hit(c, b.user.x, b.user.y, b.user.w, b.user.h)) { L.field = 'user'; sfx('Cursor1'); }
+    else if (hit(c, b.pass.x, b.pass.y, b.pass.w, b.pass.h)) { L.field = 'pass'; sfx('Cursor1'); }
+    else if (hit(c, b.btn.x, b.btn.y, b.btn.w, b.btn.h)) submitLogin();
+  }
+  for (const k of queue) { // typed characters
+    if (k === 'Enter') submitLogin();
+    else if (k === 'Tab') { L.field = L.field === 'user' ? 'pass' : 'user'; sfx('Cursor1'); }
+    else if (k === 'Backspace') L[L.field] = L[L.field].slice(0, -1);
+    else if (k === 'Escape') { location.href = location.pathname; }
+    else if (k.length === 1) {
+      if (L.field === 'user') { if (/[a-zA-Z0-9_]/.test(k) && L.user.length < 16) L.user += k; }
+      else if (k.charCodeAt(0) >= 32 && k.charCodeAt(0) < 127 && L.pass.length < 64) L.pass += k;
+    }
+  }
+}
+
+function drawLoginField(f, val, active) {
+  ctx.fillStyle = 'rgba(10,20,30,.6)';
+  ctx.fillRect(f.x, f.y, f.w, f.h);
+  ctx.strokeStyle = active ? '#ffe080' : '#56718a';
+  ctx.strokeRect(f.x + 0.5, f.y + 0.5, f.w - 1, f.h - 1);
+  text(val, f.x + 4, f.y + 4);
+  if (active && Math.floor(performance.now() / 400) % 2) {
+    ctx.font = 'bold 8px "Courier New", monospace';
+    text('_', f.x + 4 + ctx.measureText(val).width, f.y + 4);
+  }
+}
+
+function drawLoginScreen() {
+  const L = game.login, b = loginBox();
+  if (img.title) ctx.drawImage(img.title, (W - 320) / 2, -20, 320, 240);
+  ctx.fillStyle = 'rgba(0,0,0,.5)'; ctx.fillRect(0, 0, W, H);
+  drawWindow(b.x, b.y, b.w, b.h);
+  text('FABLE QUEST', b.x + 16, b.y + 12, '#ffe080');
+  text('Username', b.user.x, b.user.y - 11, '#bcd');
+  drawLoginField(b.user, L.user, L.field === 'user');
+  text('Password', b.pass.x, b.pass.y - 11, '#bcd');
+  drawLoginField(b.pass, '*'.repeat(L.pass.length), L.field === 'pass');
+  drawWindow(b.btn.x, b.btn.y, b.btn.w, b.btn.h);
+  text(L.busy ? '...' : 'Login', b.btn.x + b.btn.w / 2 - (L.busy ? 6 : 14), b.btn.y + 5);
+  text(L.error || 'New here? Just pick a name — you\'ll be registered.', b.x + 14, b.y + b.h - 14, L.error ? '#f76' : '#9cf');
 }
 
 // hard-set the local hero from an authoritative server state
@@ -151,6 +217,7 @@ function onSnapshot(m) {
 // single-player processInput/stepWorld path).
 function netFrame(frameDt) {
   const net = game.net, h = game.hero;
+  if (game.login) { updateLoginScreen(); drawLoginScreen(); return; } // not in the world yet
   let uiCaptured = false;
 
   // 1) input -> intents. The menu and inventory panels reuse the single-player
