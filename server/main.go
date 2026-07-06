@@ -10,12 +10,12 @@ import (
 	"math"
 	"math/rand"
 	"net/http"
-	"strconv"
 	"sync"
 	"time"
 )
 
 var spawnSpread bool // dev: scatter players across the field (load-testing AoI)
+var store Store       // persistence backend (file or Postgres)
 
 const tickHz = 20
 
@@ -46,8 +46,15 @@ type inMsg struct {
 	Ty    int     `json:"ty"`
 	Key string `json:"key"` // attribute key for spendAttr
 	Who string `json:"who"` // shop id for buy
-	Vw  int    `json:"vw"`  // viewport half-extents in tiles (area-of-interest)
-	Vh  int    `json:"vh"`
+	Vw   int    `json:"vw"` // viewport half-extents in tiles (area-of-interest)
+	Vh   int    `json:"vh"`
+	User string `json:"user"` // login
+	Pass string `json:"pass"`
+}
+
+type loginErrMsg struct {
+	T   string `json:"t"`
+	Msg string `json:"msg"`
 }
 
 // server -> client
@@ -144,8 +151,9 @@ func (e *enemy) view() enemyView {
 // ---- player ----------------------------------------------------------------
 
 type Player struct {
-	id   string
-	conn *wsConn
+	id       string
+	username string
+	conn     *wsConn
 
 	mu    sync.Mutex // guards inbox (read goroutine appends, tick drains)
 	inbox []inMsg
@@ -232,30 +240,53 @@ func newHub() *Hub {
 	}
 }
 
-func (h *Hub) add(c *wsConn) *Player {
+// online reports whether an account is already connected (one session each).
+func (h *Hub) online(user string) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.nextID++
-	p := &Player{
-		id: "p" + strconv.Itoa(h.nextID), conn: c,
-		mapID: spawn.mapID, tx: spawn.tx, ty: spawn.ty,
-		px: float64(spawn.tx * TS), py: float64(spawn.ty * TS), dir: "down",
-		aoiW: 22, aoiH: 16, // generous default until the client reports its viewport
-	}
-	if spawnSpread { // dev/load-test: scatter across the field so AoI has an effect
-		for tries := 0; tries < 60; tries++ {
-			x, y := 1+rand.Intn(MW-2), 1+rand.Intn(MH-2)
-			if !blocked("field", x, y) {
-				p.mapID, p.tx, p.ty = "field", x, y
-				p.px, p.py = float64(x*TS), float64(y*TS)
-				break
+	_, ok := h.players[user]
+	return ok
+}
+
+// addPlayer brings an authenticated account into the world, loading its saved
+// character (ch) or making a fresh one (ch == nil). The player id is the username.
+func (h *Hub) addPlayer(c *wsConn, user string, ch *charState) *Player {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	p := &Player{id: user, username: user, conn: c, dir: "down", aoiW: 22, aoiH: 16}
+	if ch != nil {
+		applyCharState(p, ch)
+	} else {
+		p.mapID, p.tx, p.ty = spawn.mapID, spawn.tx, spawn.ty
+		if spawnSpread { // dev/load-test: scatter across the field so AoI has an effect
+			for tries := 0; tries < 60; tries++ {
+				x, y := 1+rand.Intn(MW-2), 1+rand.Intn(MH-2)
+				if !blocked("field", x, y) {
+					p.mapID, p.tx, p.ty = "field", x, y
+					break
+				}
 			}
 		}
+		p.px, p.py = float64(p.tx*TS), float64(p.ty*TS)
+		initHero(p)
 	}
-	initHero(p)
 	h.players[p.id] = p
-	log.Printf("+ %s joined (%d online)", p.id, len(h.players))
+	log.Printf("+ %s logged in (%d online)", p.id, len(h.players))
 	return p
+}
+
+// savePlayer persists a player's character (copying state under the lock so it's
+// safe against the tick), then writes to the store off-lock.
+func (h *Hub) savePlayer(p *Player) {
+	if store == nil {
+		return
+	}
+	h.mu.Lock()
+	ch := charStateOf(p)
+	h.mu.Unlock()
+	if err := store.Save(p.username, ch); err != nil {
+		log.Printf("save %s: %v", p.username, err)
+	}
 }
 
 func (h *Hub) remove(p *Player) {
@@ -277,6 +308,7 @@ func (h *Hub) run() {
 	var mSum, mMax time.Duration // tick-time metrics
 	var mBytes, mCount int
 	lastLog := time.Now()
+	lastSave := time.Now()
 	for range ticker.C {
 		tickStart := time.Now()
 		type outbound struct {
@@ -459,6 +491,27 @@ func (h *Hub) run() {
 			mSum, mMax, mBytes, mCount = 0, 0, 0, 0
 			lastLog = now
 		}
+
+		// autosave every 20s so progress survives a crash (copies under the lock,
+		// writes to the store off the tick)
+		if store != nil && time.Since(lastSave) >= 20*time.Second {
+			h.mu.Lock()
+			type sv struct {
+				user string
+				ch   *charState
+			}
+			saves := make([]sv, 0, len(h.players))
+			for _, p := range h.players {
+				saves = append(saves, sv{p.username, charStateOf(p)})
+			}
+			h.mu.Unlock()
+			go func() {
+				for _, s := range saves {
+					store.Save(s.user, s.ch)
+				}
+			}()
+			lastSave = time.Now()
+		}
 	}
 }
 
@@ -543,12 +596,10 @@ func (h *Hub) serveWS(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	p := h.add(c)
-	welcome, _ := json.Marshal(welcomeMsg{T: "welcome", ID: p.id, Map: p.mapID, Tick: tickHz})
-	if err := c.WriteText(welcome); err != nil {
-		h.remove(p)
-		return
-	}
+	loginErr := func(msg string) { b, _ := json.Marshal(loginErrMsg{T: "loginError", Msg: msg}); c.WriteText(b) }
+
+	var p *Player // nil until the client logs in
+readloop:
 	for {
 		op, data, err := c.ReadMessage()
 		if err != nil {
@@ -557,22 +608,55 @@ func (h *Hub) serveWS(w http.ResponseWriter, r *http.Request) {
 		switch op {
 		case opClose:
 			c.writeFrame(opClose, nil)
-			h.remove(p)
-			return
+			break readloop
 		case opPing:
 			c.writeFrame(opPong, data)
 		case opText:
 			var m inMsg
-			if json.Unmarshal(data, &m) == nil {
-				p.mu.Lock()
-				if len(p.inbox) < 256 { // drop floods
-					p.inbox = append(p.inbox, m)
-				}
-				p.mu.Unlock()
+			if json.Unmarshal(data, &m) != nil {
+				continue
 			}
+			if p == nil { // must authenticate before joining the world
+				if m.T != "login" {
+					continue
+				}
+				if !validName(m.User) {
+					loginErr("invalid username (1-16 letters, digits, _)")
+					continue
+				}
+				if len(m.Pass) < 1 || len(m.Pass) > 64 {
+					loginErr("invalid password")
+					continue
+				}
+				ch, err := store.Login(m.User, m.Pass)
+				if err == errBadPassword {
+					loginErr("wrong password")
+					continue
+				}
+				if err != nil {
+					loginErr("login failed")
+					continue
+				}
+				if h.online(m.User) {
+					loginErr("already logged in")
+					continue
+				}
+				p = h.addPlayer(c, m.User, ch)
+				welcome, _ := json.Marshal(welcomeMsg{T: "welcome", ID: p.id, Map: p.mapID, Tick: tickHz})
+				c.WriteText(welcome)
+				continue
+			}
+			p.mu.Lock()
+			if len(p.inbox) < 256 { // drop floods
+				p.inbox = append(p.inbox, m)
+			}
+			p.mu.Unlock()
 		}
 	}
-	h.remove(p)
+	if p != nil {
+		h.savePlayer(p) // persist on disconnect
+		h.remove(p)
+	}
 }
 
 func main() {
@@ -580,8 +664,15 @@ func main() {
 	webRoot := flag.String("web", "..", "directory to serve the game client from")
 	spawnAt := flag.String("spawn", "city", "player spawn map: city (safe plaza) or field (among monsters, for testing)")
 	spread := flag.Bool("spread", false, "scatter players across the field (for load-testing area-of-interest)")
+	db := flag.String("db", "file:fablequest.db.json", "persistence: file:PATH (default) or postgres://... (needs -tags postgres)")
 	flag.Parse()
 	spawnSpread = *spread
+
+	var err error
+	if store, err = openStore(*db); err != nil {
+		log.Fatalf("store: %v", err)
+	}
+	defer store.Close()
 
 	buildMaps()
 	if *spawnAt == "field" { // dev/testing: drop players straight into monster territory

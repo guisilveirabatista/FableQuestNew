@@ -1,3 +1,5 @@
 /server
 /fqserver
 *.test
+fablequest.db.json
+fablequest.db.json.tmp
