@@ -127,12 +127,16 @@ func (h *Hub) killEnemy(p *Player, en *enemy) {
 	p.kills++
 	p.exp += k.exp
 	p.gold += k.gold
-	if rand.Float64() < 0.25 { // loot: straight into the killer's bag (autoloot)
+	if rand.Float64() < 0.25 { // loot: autoloot pockets it, else it falls where it died
 		id := "bread"
 		if rand.Float64() >= 0.7 {
 			id = "potion"
 		}
-		addItem(p, id, 1)
+		if p.autoloot {
+			addItem(p, id, 1)
+		} else {
+			h.dropFloor(p.mapID, id, 1, en.tx, en.ty)
+		}
 	}
 	if p.exp >= p.lv*10 { // level up
 		p.exp -= p.lv * 10
@@ -167,12 +171,15 @@ func (h *Hub) attackHero(en *enemy, p *Player) {
 	p.hp -= float64(dmg)
 	p.iframes = 1
 	if p.hp <= 0 {
-		playerDie(p)
+		h.playerDie(p)
 	}
 }
 
-// no game-over: respawn at the plaza with gear intact (corpses land in 2d).
-func playerDie(p *Player) {
+// no game-over: your pack stays where you fell (a corpse) and you wake at the
+// plaza with full HP and your gear — but your backpack stays with the body.
+func (h *Hub) playerDie(p *Player) {
+	h.dropCorpse(p.mapID, p.tx, p.ty, p.bag)
+	p.bag = map[string]int{}
 	p.mapID = spawn.mapID
 	p.tx, p.ty = spawn.tx, spawn.ty
 	p.px, p.py = float64(p.tx*TS), float64(p.ty*TS)

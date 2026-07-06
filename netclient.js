@@ -112,6 +112,11 @@ function onSnapshot(m) {
   game.projectiles = (m.projectiles || []).map(v =>
     v.boom >= 0 ? { x: v.x, y: v.y, t: v.t, boom: v.boom } : { x: v.x, y: v.y, t: v.t });
   game.bolts = (m.bolts || []).map(v => ({ x: v.x, y: v.y, t: v.t }));
+
+  // floor loot and corpses are shared world entities on the current map; tag them
+  // with the map id so the existing renderer/queries (drawMap, floorAt, corpseAt) work
+  game.floor = (m.floor || []).map(v => ({ map: game.mapId, id: v.id, n: v.n, tx: v.tx, ty: v.ty }));
+  game.corpses = (m.corpses || []).map(v => ({ map: game.mapId, tx: v.tx, ty: v.ty, items: v.items }));
 }
 
 // One render frame in netplay mode (called from the main loop instead of the
@@ -162,7 +167,13 @@ function netFrame(frameDt) {
     const cam = camPos();
     for (const c of clicks) {
       if (game.invOpen && inPanel(c)) continue; // the panel owns its own clicks
-      if (c.b === 2) netSend(net, { t: 'lockAt', x: c.x + cam.x, y: c.y + cam.y });
+      const wx = Math.floor((c.x + cam.x) / TS), wy = Math.floor((c.y + cam.y) / TS);
+      if (c.b === 2) { // right-click: loot your corpse if next to it, else lock a target
+        if (corpseAt(wx, wy) && nearHero(wx, wy)) netSend(net, { t: 'takeCorpse', tx: wx, ty: wy });
+        else netSend(net, { t: 'lockAt', x: c.x + cam.x, y: c.y + cam.y });
+      } else if (c.b === 0 && c.dbl && floorAt(wx, wy).length && nearHero(wx, wy)) {
+        netSend(net, { t: 'takeLoot', tx: wx, ty: wy }); // double-click floor loot in reach
+      }
     }
   }
 

@@ -22,33 +22,35 @@ const tickHz = 20
 
 // client -> server
 type inMsg struct {
-	T    string  `json:"t"`   // "move" | "attack" | "lockAt" | "cycleLock" | "unlock"
-	Seq  int     `json:"seq"` // client input sequence, echoed back for reconciliation
-	Dir   string  `json:"dir"`   // "up"|"down"|"left"|"right"|"" (stop)
-	X     float64 `json:"x"`     // world point for lockAt
+	T     string  `json:"t"`   // "move" | "attack" | "lockAt" | "cycleLock" | "unlock"
+	Seq   int     `json:"seq"` // client input sequence, echoed back for reconciliation
+	Dir   string  `json:"dir"` // "up"|"down"|"left"|"right"|"" (stop)
+	X     float64 `json:"x"`   // world point for lockAt
 	Y     float64 `json:"y"`
 	Slot  int     `json:"slot"`  // hotbar slot for cast
 	Id    string  `json:"id"`    // item id for useItem/equip/dropItem
 	Bslot string  `json:"bslot"` // body slot for equip/unequip
 	V     bool    `json:"v"`     // toggle value (e.g. autoloot)
+	Tx    int     `json:"tx"`    // tile for takeLoot/takeCorpse
+	Ty    int     `json:"ty"`
 }
 
 // server -> client
 type playerView struct {
-	ID     string  `json:"id"`
-	Tx     int     `json:"tx"`
-	Ty     int     `json:"ty"`
-	Px     float64 `json:"px"`
-	Py     float64 `json:"py"`
-	Dir    string  `json:"dir"`
-	Moving bool    `json:"moving"`
-	Anim   float64 `json:"anim"`
-	HP     float64 `json:"hp"`
-	MaxHP  int     `json:"maxhp"`
-	MP     float64 `json:"mp"`
-	MaxMP  int     `json:"maxmp"`
-	Lv     int     `json:"lv"`
-	Exp    int     `json:"exp"`
+	ID     string   `json:"id"`
+	Tx     int      `json:"tx"`
+	Ty     int      `json:"ty"`
+	Px     float64  `json:"px"`
+	Py     float64  `json:"py"`
+	Dir    string   `json:"dir"`
+	Moving bool     `json:"moving"`
+	Anim   float64  `json:"anim"`
+	HP     float64  `json:"hp"`
+	MaxHP  int      `json:"maxhp"`
+	MP     float64  `json:"mp"`
+	MaxMP  int      `json:"maxmp"`
+	Lv     int      `json:"lv"`
+	Exp    int      `json:"exp"`
 	Gold   int      `json:"gold"`
 	Kills  int      `json:"kills"`
 	Lock   int      `json:"lock"`
@@ -94,11 +96,24 @@ type snapMsg struct {
 	Enemies     []enemyView  `json:"enemies"`
 	Projectiles []projView   `json:"projectiles"`
 	Bolts       []boltView   `json:"bolts"`
+	Floor       []floorView  `json:"floor"`
+	Corpses     []corpseView `json:"corpses"`
 	// the receiving player's own private inventory
 	Bag      map[string]int    `json:"bag"`
 	Equip    map[string]string `json:"equip"`
 	Points   int               `json:"points"`
 	Autoloot bool              `json:"autoloot"`
+}
+type floorView struct {
+	Id string `json:"id"`
+	N  int    `json:"n"`
+	Tx int    `json:"tx"`
+	Ty int    `json:"ty"`
+}
+type corpseView struct {
+	Tx    int            `json:"tx"`
+	Ty    int            `json:"ty"`
+	Items map[string]int `json:"items"`
 }
 
 func (e *enemy) view() enemyView {
@@ -156,6 +171,8 @@ type Hub struct {
 	nextEID     int
 	projectiles map[string][]*projectile
 	bolts       map[string][]*bolt
+	floor       map[string][]*floorItem
+	corpses     map[string][]*corpse
 }
 
 func newHub() *Hub {
@@ -165,6 +182,8 @@ func newHub() *Hub {
 		spawnT:      map[string]float64{},
 		projectiles: map[string][]*projectile{},
 		bolts:       map[string][]*bolt{},
+		floor:       map[string][]*floorItem{},
+		corpses:     map[string][]*corpse{},
 	}
 }
 
@@ -266,6 +285,18 @@ func (h *Hub) run() {
 				blViews[mapID] = append(blViews[mapID], boltView{b.x, b.y, b.t})
 			}
 		}
+		fViews := map[string][]floorView{}
+		for mapID, list := range h.floor {
+			for _, f := range list {
+				fViews[mapID] = append(fViews[mapID], floorView{f.id, f.n, f.tx, f.ty})
+			}
+		}
+		cViews := map[string][]corpseView{}
+		for mapID, list := range h.corpses {
+			for _, c := range list {
+				cViews[mapID] = append(cViews[mapID], corpseView{c.tx, c.ty, c.items})
+			}
+		}
 		// 4) snapshot each player its own map
 		for _, p := range h.players {
 			others := make([]playerView, 0, len(pViews[p.mapID]))
@@ -281,6 +312,7 @@ func (h *Hub) run() {
 				T: "snap", Map: p.mapID, Ack: ack, You: p.view(),
 				Players: others, Enemies: eViews[p.mapID],
 				Projectiles: prViews[p.mapID], Bolts: blViews[p.mapID],
+				Floor: fViews[p.mapID], Corpses: cViews[p.mapID],
 				Bag: p.bag, Equip: p.equip, Points: p.points, Autoloot: p.autoloot,
 			})
 			outs = append(outs, outbound{p, data})
@@ -321,7 +353,14 @@ func (h *Hub) applyIntent(p *Player, m inMsg) {
 	case "unequip":
 		unequipSlot(p, m.Bslot)
 	case "dropItem":
-		removeItem(p, m.Id, 1) // floor drops arrive with the loot/corpse step
+		if p.bag[m.Id] > 0 {
+			removeItem(p, m.Id, 1)
+			h.dropFloor(p.mapID, m.Id, 1, p.tx, p.ty)
+		}
+	case "takeLoot":
+		h.pickupAt(p, m.Tx, m.Ty)
+	case "takeCorpse":
+		h.takeCorpse(p, m.Tx, m.Ty)
 	case "setAutoloot":
 		p.autoloot = m.V
 	}
