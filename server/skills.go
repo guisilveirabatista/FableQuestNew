@@ -89,6 +89,7 @@ func (h *Hub) castSpin(p *Player) bool {
 			h.meleeHit(p, en)
 		}
 	}
+	h.pvpMeleeSweep(p, true) // sweep hostile players around you too
 	return true
 }
 
@@ -150,6 +151,18 @@ func (h *Hub) updateProjectiles(dt float64) {
 					}
 					hit = true
 					break
+				}
+			}
+			if !hit && owner != nil { // a fireball can also scorch a hostile player
+				for _, o := range h.players {
+					if o.mapID != mapID || !h.canPvp(owner, o) {
+						continue
+					}
+					if math.Abs(o.px+8-pr.x) < 11 && math.Abs(o.py+8-pr.y) < 11 {
+						h.pvpHit(owner, o, statsOf(owner).matk*2+rand.Intn(5), false, true)
+						hit = true
+						break
+					}
 				}
 			}
 			if hit {

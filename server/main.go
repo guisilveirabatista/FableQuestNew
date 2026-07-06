@@ -53,6 +53,8 @@ type inMsg struct {
 	Vh    int     `json:"vh"`
 	User  string  `json:"user"` // login
 	Pass  string  `json:"pass"`
+	Text  string  `json:"text"`  // chat message
+	Scope string  `json:"scope"` // chat scope: say | party | world
 }
 
 type loginErrMsg struct {
@@ -83,6 +85,7 @@ type playerView struct {
 	Follow     bool     `json:"follow"`
 	Dead       bool     `json:"dead"`
 	DeathCause string   `json:"deathCause"`
+	Pvp        bool     `json:"pvp"`
 }
 type projView struct {
 	X    float64 `json:"x"`
@@ -133,6 +136,10 @@ type snapMsg struct {
 	Autoloot bool              `json:"autoloot"`
 	Attr     AttrSet           `json:"attr"`
 	Log      []string          `json:"log,omitempty"`
+	// social (Phase 6): private to the receiving player
+	Chat  []chatLine `json:"chat,omitempty"`
+	Party *partyView `json:"party,omitempty"`
+	Trade *tradeView `json:"trade,omitempty"`
 }
 type floorView struct {
 	Id string `json:"id"`
@@ -192,11 +199,20 @@ type Player struct {
 	deathCause       string
 	aoiW, aoiH       int   // area-of-interest half-extents in tiles (from the client viewport)
 	pendingHandoff   *exit // zone mode: stepped onto an exit to a map this zone doesn't own
+
+	// social (Phase 6)
+	pvp         bool // opted in to player-vs-player
+	chatCool    float64
+	chatOut     []chatLine
+	partyID     int    // 0 = solo
+	partyInvite int    // pending invite to this party id
+	tradeID     int    // 0 = not trading
+	tradeReq    string // username of a pending trade requester
 }
 
 func (p *Player) view() playerView {
 	return playerView{p.id, p.tx, p.ty, p.px, p.py, p.dir, p.moving, p.anim,
-		p.hp, p.maxhp, p.mp, p.maxmp, p.lv, p.exp, p.gold, p.kills, p.lockID, p.slots, p.follow, p.dead, p.deathCause}
+		p.hp, p.maxhp, p.mp, p.maxmp, p.lv, p.exp, p.gold, p.kills, p.lockID, p.slots, p.follow, p.dead, p.deathCause, p.pvp}
 }
 
 func (p *Player) logMsg(msg string) {
@@ -236,6 +252,12 @@ type Hub struct {
 	bolts       map[string][]*bolt
 	floor       map[string][]*floorItem
 	corpses     map[string][]*corpse
+
+	// social (Phase 6)
+	parties     map[int]*party
+	nextPartyID int
+	trades      map[int]*trade
+	nextTradeID int
 }
 
 func newHub() *Hub {
@@ -247,6 +269,8 @@ func newHub() *Hub {
 		bolts:       map[string][]*bolt{},
 		floor:       map[string][]*floorItem{},
 		corpses:     map[string][]*corpse{},
+		parties:     map[int]*party{},
+		trades:      map[int]*trade{},
 	}
 }
 
@@ -309,6 +333,8 @@ func (h *Hub) remove(p *Player) {
 	// identity check: a handoff may already have dropped p and a new session for
 	// the same id could have joined (another zone link) — don't evict that one.
 	if cur, ok := h.players[p.id]; ok && cur == p {
+		h.cancelTrade(p)
+		h.leaveParty(p)
 		delete(h.players, p.id)
 		log.Printf("- %s left (%d online)", p.id, len(h.players))
 	}
@@ -354,6 +380,7 @@ func (h *Hub) run() {
 			}
 			p.atkCool = max(0, p.atkCool-dt)
 			p.iframes = max(0, p.iframes-dt)
+			p.chatCool = max(0, p.chatCool-dt)
 			p.mp = math.Min(float64(p.maxmp), p.mp+dt*0.35)
 			p.hp = math.Min(float64(p.maxhp), p.hp+dt*0.4)
 			// drop a stale lock/follow (target died or left the map)
@@ -382,6 +409,8 @@ func (h *Hub) run() {
 				ch.MapID, ch.Tx, ch.Ty = ex.to, ex.tx, ex.ty
 				b, _ := json.Marshal(handoffMsg{T: "handoff", To: ex.to, Tx: ex.tx, Ty: ex.ty, Char: ch})
 				handoffOuts = append(handoffOuts, outbound{p, b})
+				h.cancelTrade(p) // trade partners are left behind on the old map
+				h.leaveParty(p)  // cross-zone parties aren't supported yet
 				delete(h.players, id)
 				log.Printf("-> handoff %s to %s (%d here)", p.id, ex.to, len(h.players))
 			}
@@ -403,6 +432,7 @@ func (h *Hub) run() {
 		// 5) advance fireballs (homing + hits) and decay bolts
 		h.updateProjectiles(dt)
 		h.updateCorpses(dt)
+		h.updateTrades() // drop trades whose partners drifted apart or died
 		// 3) build per-map views
 		pViews := map[string][]playerView{}
 		for _, p := range h.players {
@@ -494,7 +524,10 @@ func (h *Hub) run() {
 				Players: others, Enemies: enemies, Projectiles: proj, Bolts: bolts,
 				Floor: fl, Corpses: cp,
 				Bag: p.bag, Equip: p.equip, Points: p.points, Autoloot: p.autoloot, Attr: p.attr,
-				Log: p.drainLog(),
+				Log:   p.drainLog(),
+				Chat:  p.drainChat(),
+				Party: h.buildPartyView(p),
+				Trade: h.buildTradeView(p),
 			})
 			outs = append(outs, outbound{p, data})
 		}
@@ -560,7 +593,7 @@ func (h *Hub) run() {
 // applyIntent dispatches one validated player action (the server's sole entry
 // point for player-driven world changes — mirrors sim.js applyIntent).
 func (h *Hub) applyIntent(p *Player, m inMsg) {
-	if p.dead && m.T != "respawn" {
+	if p.dead && m.T != "respawn" && m.T != "chat" && m.T != "view" && m.T != "partyLeave" {
 		if m.T == "move" {
 			p.moveDir = ""
 			p.ackSeq = m.Seq
@@ -630,6 +663,37 @@ func (h *Hub) applyIntent(p *Player, m inMsg) {
 	case "view": // client reports its viewport; clamp to a sane area of interest
 		p.aoiW = clampInt(m.Vw, 8, 60)
 		p.aoiH = clampInt(m.Vh, 6, 40)
+	// ---- social (Phase 6) ----
+	case "chat":
+		h.chat(p, m.Scope, m.Text)
+	case "setPvp":
+		p.pvp = m.V
+	case "partyInvite":
+		h.partyInvite(p, m.Id)
+	case "partyAccept":
+		h.partyAccept(p)
+	case "partyDecline":
+		h.partyDecline(p)
+	case "partyLeave":
+		h.leaveParty(p)
+	case "partyKick":
+		h.partyKick(p, m.Id)
+	case "tradeRequest":
+		h.tradeRequest(p, m.Id)
+	case "tradeAccept":
+		h.tradeAccept(p)
+	case "tradeDecline":
+		h.tradeDecline(p)
+	case "tradeOffer":
+		h.tradeOffer(p, m.Id, m.N)
+	case "tradeGold":
+		h.tradeGold(p, m.N)
+	case "tradeLock":
+		h.tradeLock(p, m.V)
+	case "tradeConfirm":
+		h.tradeConfirm(p)
+	case "tradeCancel":
+		h.cancelTrade(p)
 	}
 }
 

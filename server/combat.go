@@ -152,6 +152,7 @@ func (h *Hub) doSlash(p *Player) {
 			h.meleeHit(p, en)
 		}
 	}
+	h.pvpMeleeSweep(p, false) // also strike any hostile players in the arc
 }
 
 func (h *Hub) meleeHit(p *Player, en *enemy) {
@@ -183,7 +184,6 @@ func (h *Hub) killEnemy(p *Player, en *enemy) {
 	en.dying = 0.45
 	k := enemyKinds[en.kind]
 	p.kills++
-	p.exp += k.exp
 	p.gold += k.gold
 	p.logMsg(fmt.Sprintf("Defeated %s: +%d EXP, +%d gold", k.name, k.exp, k.gold))
 	if rand.Float64() < 0.25 { // loot: autoloot pockets it, else it falls where it died
@@ -198,7 +198,14 @@ func (h *Hub) killEnemy(p *Player, en *enemy) {
 			h.dropFloor(p.mapID, id, 1, en.tx, en.ty)
 		}
 	}
-	if p.exp >= p.lv*10 { // level up
+	grantExp(p, k.exp)
+	h.sharePartyExp(p, k.exp)
+}
+
+// grantExp adds experience and applies any level-ups it triggers.
+func grantExp(p *Player, exp int) {
+	p.exp += exp
+	for p.exp >= p.lv*10 {
 		p.exp -= p.lv * 10
 		p.lv++
 		p.points += 3
