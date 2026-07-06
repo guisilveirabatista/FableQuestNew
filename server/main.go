@@ -43,12 +43,30 @@ type welcomeMsg struct {
 	Map  string `json:"map"`
 	Tick int    `json:"tick"`
 }
+type enemyView struct {
+	ID     int     `json:"id"`
+	Kind   string  `json:"kind"`
+	Tx     int     `json:"tx"`
+	Ty     int     `json:"ty"`
+	Px     float64 `json:"px"`
+	Py     float64 `json:"py"`
+	Dir    string  `json:"dir"`
+	Moving bool    `json:"moving"`
+	Anim   float64 `json:"anim"`
+	HP     int     `json:"hp"`
+	MaxHP  int     `json:"maxhp"`
+}
 type snapMsg struct {
 	T       string       `json:"t"`
 	Map     string       `json:"map"`
 	Ack     int          `json:"ack"`
 	You     playerView   `json:"you"`
 	Players []playerView `json:"players"`
+	Enemies []enemyView  `json:"enemies"`
+}
+
+func (e *enemy) view() enemyView {
+	return enemyView{e.id, e.kind, e.tx, e.ty, e.px, e.py, e.dir, e.moving, e.anim, e.hp, e.maxhp}
 }
 
 // ---- player ----------------------------------------------------------------
@@ -80,9 +98,20 @@ type Hub struct {
 	mu      sync.Mutex
 	players map[string]*Player
 	nextID  int
+
+	// shared world entities, keyed by map
+	enemies map[string][]*enemy
+	spawnT  map[string]float64
+	nextEID int
 }
 
-func newHub() *Hub { return &Hub{players: map[string]*Player{}} }
+func newHub() *Hub {
+	return &Hub{
+		players: map[string]*Player{},
+		enemies: map[string][]*enemy{},
+		spawnT:  map[string]float64{},
+	}
+}
 
 func (h *Hub) add(c *wsConn) *Player {
 	h.mu.Lock()
@@ -122,19 +151,34 @@ func (h *Hub) run() {
 		var outs []outbound
 
 		h.mu.Lock()
+		// 1) advance players from their latest input
 		for _, p := range h.players {
 			p.mu.Lock()
 			dir := p.moveDir
 			p.mu.Unlock()
 			stepPlayer(p, dir, dt)
 		}
-		byMap := map[string][]playerView{}
+		// 2) advance shared enemies against post-move player positions
+		playersByMap := map[string][]*Player{}
 		for _, p := range h.players {
-			byMap[p.mapID] = append(byMap[p.mapID], p.view())
+			playersByMap[p.mapID] = append(playersByMap[p.mapID], p)
 		}
+		h.updateEnemies(playersByMap, dt)
+		// 3) build per-map views
+		pViews := map[string][]playerView{}
 		for _, p := range h.players {
-			others := make([]playerView, 0, len(byMap[p.mapID]))
-			for _, v := range byMap[p.mapID] {
+			pViews[p.mapID] = append(pViews[p.mapID], p.view())
+		}
+		eViews := map[string][]enemyView{}
+		for mapID, list := range h.enemies {
+			for _, e := range list {
+				eViews[mapID] = append(eViews[mapID], e.view())
+			}
+		}
+		// 4) snapshot each player its own map
+		for _, p := range h.players {
+			others := make([]playerView, 0, len(pViews[p.mapID]))
+			for _, v := range pViews[p.mapID] {
 				if v.ID != p.id {
 					others = append(others, v)
 				}
@@ -142,7 +186,10 @@ func (h *Hub) run() {
 			p.mu.Lock()
 			ack := p.ackSeq
 			p.mu.Unlock()
-			data, _ := json.Marshal(snapMsg{T: "snap", Map: p.mapID, Ack: ack, You: p.view(), Players: others})
+			data, _ := json.Marshal(snapMsg{
+				T: "snap", Map: p.mapID, Ack: ack, You: p.view(),
+				Players: others, Enemies: eViews[p.mapID],
+			})
 			outs = append(outs, outbound{p, data})
 		}
 		h.mu.Unlock()
@@ -196,9 +243,13 @@ func (h *Hub) serveWS(w http.ResponseWriter, r *http.Request) {
 func main() {
 	addr := flag.String("addr", ":8080", "listen address")
 	webRoot := flag.String("web", "..", "directory to serve the game client from")
+	spawnAt := flag.String("spawn", "city", "player spawn map: city (safe plaza) or field (among monsters, for testing)")
 	flag.Parse()
 
 	buildMaps()
+	if *spawnAt == "field" { // dev/testing: drop players straight into monster territory
+		spawn.mapID, spawn.tx, spawn.ty = "field", 15, 10
+	}
 	hub := newHub()
 	go hub.run()
 

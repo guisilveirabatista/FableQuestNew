@@ -12,10 +12,11 @@
 function netStart(url) {
   const net = {
     ws: null, url, id: null, seq: 0, ack: 0, lastDir: '',
-    acc: 0, byId: {}, connected: false, status: 'connecting…',
+    acc: 0, byId: {}, eById: {}, connected: false, status: 'connecting…',
   };
   game.net = net;
   game.players = [];
+  game.enemies = [];
   game.invOpen = false; // declutter: no inventory panel in the movement demo
   game.logOpen = false;
   game.menu = null;
@@ -72,6 +73,19 @@ function onSnapshot(m) {
   }
   for (const id in net.byId) if (!seen[id]) delete net.byId[id];
   game.players = Object.values(net.byId);
+
+  // shared enemies: track by id for smooth interpolation; fill the extra fields
+  // drawEnemy() expects (they carry combat meaning from Phase 2b on)
+  const eSeen = {};
+  for (const v of m.enemies || []) {
+    eSeen[v.id] = true;
+    let e = net.eById[v.id];
+    if (!e) e = net.eById[v.id] = { px: v.px, py: v.py, dying: 0, flash: 0, hurtT: 9, lunge: 0 };
+    e.kind = v.kind; e.tx = v.tx; e.ty = v.ty; e.tpx = v.px; e.tpy = v.py;
+    e.dir = v.dir; e.moving = v.moving; e.anim = v.anim; e.hp = v.hp; e.maxhp = v.maxhp;
+  }
+  for (const id in net.eById) if (!eSeen[id]) delete net.eById[id];
+  game.enemies = Object.values(net.eById);
 }
 
 // One render frame in netplay mode (called from the main loop instead of the
@@ -95,9 +109,10 @@ function netFrame(frameDt) {
   while (net.acc >= FIXED && ticks < 5) { snapshotPrev(); stepHero(FIXED); net.acc -= FIXED; ticks++; }
   if (ticks === 5) net.acc = 0;
 
-  // 3) ease remote players toward their latest authoritative positions
+  // 3) ease remote players and shared enemies toward their snapshot positions
   const k = Math.min(1, frameDt * 14);
   for (const p of game.players) { p.px += (p.tpx - p.px) * k; p.py += (p.tpy - p.py) * k; }
+  for (const e of game.enemies) { e.px += (e.tpx - e.px) * k; e.py += (e.tpy - e.py) * k; }
 
   // 4) draw the world (hero interpolated by the leftover accumulator)
   const a = Math.max(0, Math.min(1, net.acc / FIXED));

@@ -30,6 +30,7 @@ type exit struct {
 
 type gameMap struct {
 	blocked [MH][MW]bool
+	ground  [MH][MW]byte // ground char (G grass, D dirt, ...) — enemies roam grass only
 	exits   map[[2]int]exit
 }
 
@@ -56,6 +57,7 @@ func buildMaps() {
 			case x == 6 && y >= 13 && y <= 20:
 				c = 'D'
 			}
+			field.ground[y][x] = c
 			if solid(c) {
 				field.blocked[y][x] = true
 			}
@@ -103,6 +105,7 @@ func buildMaps() {
 			default:
 				c = 'P'
 			}
+			city.ground[y][x] = c
 			if solid(c) {
 				city.blocked[y][x] = true
 			}
@@ -133,6 +136,15 @@ func blocked(mapID string, x, y int) bool {
 	}
 	m := maps[mapID]
 	return m == nil || m.blocked[y][x]
+}
+
+// enemies keep to the grass — the dirt path and town are safe ground.
+func isGrass(mapID string, x, y int) bool {
+	if x < 0 || y < 0 || x >= MW || y >= MH {
+		return false
+	}
+	m := maps[mapID]
+	return m != nil && m.ground[y][x] == 'G'
 }
 
 func sign(v float64) float64 {
