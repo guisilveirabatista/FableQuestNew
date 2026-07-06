@@ -153,6 +153,26 @@ other. The client predicts your own hero with the same rules the server runs
 netplay layer; `?net=1` opts into it (plain `index.html` still runs the full
 single-player game).
 
+### Playing together: chat, parties, trading, PvP
+
+Everyone sharing the world can socialise, and — like combat — every result is
+decided on the server, so none of it can be spoofed.
+
+- **Chat**: press **Enter** to open the chat line (bottom-left). Type to talk to
+  everyone on your map; `/w message` for world chat, `/p message` for party chat.
+  In netplay **Space/Z** swing your sword (Enter is chat).
+- **Parties** (up to 4): `/invite <name>` invites a nearby player — they get an
+  Accept/Decline prompt (or `/join`). Party members show up as HP frames, party
+  chat works with `/p`, and same-map members share a slice of every kill's EXP.
+  `/leave` leaves, `/kick <name>` (leader only) removes someone.
+- **Trading**: stand next to someone and `/trade <name>`. A trade window opens for
+  both: click bag items to offer them, add gold, then **Lock** and **Confirm**.
+  The swap only happens when both sides confirm, and the server re-checks that
+  each side still has what they offered — no dupes, no take-backs.
+- **PvP**: opt in with `/pvp` (a ⚔ appears over you). You can only damage — and
+  be damaged by — other players who are *also* flagged, so nobody is ganked;
+  whole maps can be marked as free-for-all arenas server-side.
+
 Persistence defaults to a JSON file (`-db file:PATH`, zero setup). For
 PostgreSQL, build with the tag and point `-db` at your database:
 

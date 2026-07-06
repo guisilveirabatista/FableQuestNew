@@ -18,10 +18,13 @@ function netStart(url) {
   game.players = [];
   game.enemies = [];
   game.invOpen = false; // hidden by default; press I to open (bag comes from the server)
-  game.logOpen = true;
+  game.logOpen = false; // netplay routes reward messages into the chat feed instead
   game.menu = null;
   game.scene = 'map';
   game.login = { user: '', pass: '', field: 'user', error: '', busy: false }; // login screen until welcome
+  // social (Phase 6)
+  game.chat = []; game.chatInput = null; game.party = null; game.trade = null;
+  game.socialPrompt = null; game.youPvp = false;
 
   const ws = new WebSocket(url);
   net.ws = ws;
@@ -157,7 +160,16 @@ function onSnapshot(m) {
   h.points = m.points || 0;
   if (m.attr) h.attr = m.attr;  // character sheet (Attribs/Status screens)
   game.autoloot = !!m.autoloot;
-  if (m.log) for (const s of m.log) logMsg(s);
+  game.youPvp = !!you.pvp;
+  if (m.log) for (const s of m.log) pushChatLine({ scope: 'reward', text: s });
+  if (m.chat) for (const c of m.chat) { pushChatLine(c); if (c.scope !== 'reward' && c.scope !== 'system') sfx('Cursor1'); }
+  // party / trade windows come straight from the server
+  game.party = m.party || null;
+  game.trade = m.trade || null;
+  if (m.trade) game.socialPrompt = null;          // trade window supersedes the prompt
+  else if (m.tradeReq) game.socialPrompt = { kind: 'trade', from: m.tradeReq };
+  else if (m.invite) game.socialPrompt = { kind: 'party' };
+  else game.socialPrompt = null;
 
   // remote players
   const seen = {};
@@ -170,7 +182,7 @@ function onSnapshot(m) {
     };
     p.tpx = v.px; p.tpy = v.py; p.dir = v.dir; p.moving = v.moving; p.anim = v.anim;
     p.hp = v.hp; p.maxhp = v.maxhp; p.name = v.name || v.id;
-    p.dead = !!v.dead;
+    p.dead = !!v.dead; p.pvp = !!v.pvp;
   }
   for (const id in net.byId) if (!seen[id]) delete net.byId[id];
   game.players = Object.values(net.byId);
@@ -219,12 +231,18 @@ function netFrame(frameDt) {
   const net = game.net, h = game.hero;
   if (game.login) { updateLoginScreen(); drawLoginScreen(); return; } // not in the world yet
   let uiCaptured = false;
-  const hadBlockingUi = !!(game.death || game.mapOpen || game.menu || game.shop || game.invFocus || game.itemPopup);
+  const hadBlockingUi = !!(game.death || game.mapOpen || game.menu || game.shop || game.invFocus || game.itemPopup || game.chatInput || game.trade);
 
   // 1) input -> intents. The menu and inventory panels reuse the single-player
   //    UI code: their pushIntent() calls forward to the server (sim.js pushIntent).
   if (game.death) {
     updateDeathPopup();
+    uiCaptured = true;
+  } else if (game.chatInput) {
+    updateChatInput(); // typing a chat line / slash command captures the keyboard
+    uiCaptured = true;
+  } else if (game.trade) {
+    updateTradeWindow(); // the trade window owns clicks while it's open
     uiCaptured = true;
   } else if (pressed(['m', 'M'])) {
     toggleMapWindow();
@@ -281,7 +299,9 @@ function netFrame(frameDt) {
   if (captured) {
     if (game.invFocus) updateInvKeys(); // arrows/Enter/Q drive the focused panel
   } else {
-    if (pressed(CONFIRM)) { // talk to a shopkeeper if facing one, else swing
+    updateSocialPrompt(); // Accept/Decline an incoming party invite or trade request
+    if (pressed(['Enter'])) openChat(); // Enter opens chat (Space/Z still attack)
+    if (pressed([' ', 'z', 'Z'])) { // talk to a shopkeeper if facing one, else swing
       if (!netInteract()) {
         netSend(net, { t: 'attack' });
         game.slashFx = { t: 0, dir: h.dir, punch: true, dur: 0.24 };
@@ -365,7 +385,7 @@ function netFrame(frameDt) {
   applyInterp(a);
   drawMap();
   clearInterp();
-  // drawNetOverlay();
+  drawNetSocial(); // chat feed, party frames, name tags, trade window, prompts
 }
 
 function netSend(net, obj) {
