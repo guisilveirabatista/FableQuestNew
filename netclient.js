@@ -52,10 +52,9 @@ function snapHero(s) {
 }
 
 function onSnapshot(m) {
-  const h = game.hero, you = m.you;
-  // reconcile own hero: trust local prediction unless it has drifted from the
-  // server's truth (a different tile, or noticeable sub-tile error). On localhost
-  // this almost never fires; over real latency it keeps us honest.
+  const h = game.hero, you = m.you, net = game.net;
+  // reconcile own hero position: trust local prediction unless it has drifted
+  // from the server's truth (different tile or noticeable sub-tile error).
   if (game.mapId !== m.map) {
     game.mapId = m.map;
     snapHero(you);
@@ -63,8 +62,19 @@ function onSnapshot(m) {
     Math.abs(you.px - h.px) > 8 || Math.abs(you.py - h.py) > 8) {
     snapHero(you);
   }
-  // remote players: update interpolation targets, keyed by id for continuity
-  const net = game.net, seen = {};
+  // authoritative hero stats drive the HUD; a drop means we took a hit
+  if (net.prevHP === undefined) net.prevHP = you.hp;
+  if (you.hp < net.prevHP - 0.01) {
+    game.iframes = 0.6; // flash the hero red
+    addPop('-' + Math.max(1, Math.round(net.prevHP - you.hp)), h.px + 8, h.py - 12, '#f76');
+    sfx('Damege1');
+  }
+  net.prevHP = you.hp;
+  h.hp = you.hp; h.maxhp = you.maxhp; h.mp = you.mp; h.maxmp = you.maxmp;
+  h.lv = you.lv; h.exp = you.exp; h.gold = you.gold; h.kills = you.kills;
+
+  // remote players
+  const seen = {};
   for (const v of m.players) {
     seen[v.id] = true;
     let p = net.byId[v.id];
@@ -74,18 +84,23 @@ function onSnapshot(m) {
   for (const id in net.byId) if (!seen[id]) delete net.byId[id];
   game.players = Object.values(net.byId);
 
-  // shared enemies: track by id for smooth interpolation; fill the extra fields
-  // drawEnemy() expects (they carry combat meaning from Phase 2b on)
+  // shared enemies: interpolate positions, derive hit-flash + damage pops from
+  // HP drops, and take the death fade (dying) straight from the server.
   const eSeen = {};
   for (const v of m.enemies || []) {
     eSeen[v.id] = true;
     let e = net.eById[v.id];
-    if (!e) e = net.eById[v.id] = { px: v.px, py: v.py, dying: 0, flash: 0, hurtT: 9, lunge: 0 };
+    if (!e) e = net.eById[v.id] = { px: v.px, py: v.py, dying: 0, flash: 0, hurtT: 9, lunge: 0, hp: v.hp };
+    else if (v.hp < e.hp) { // took damage since last snapshot
+      e.flash = 0.3; e.hurtT = 0;
+      addPop('' + (e.hp - v.hp), v.px + 8, v.py - 10, '#ffe080');
+    }
     e.kind = v.kind; e.tx = v.tx; e.ty = v.ty; e.tpx = v.px; e.tpy = v.py;
-    e.dir = v.dir; e.moving = v.moving; e.anim = v.anim; e.hp = v.hp; e.maxhp = v.maxhp;
+    e.dir = v.dir; e.moving = v.moving; e.anim = v.anim; e.hp = v.hp; e.maxhp = v.maxhp; e.dying = v.dying;
   }
   for (const id in net.eById) if (!eSeen[id]) delete net.eById[id];
   game.enemies = Object.values(net.eById);
+  game.lock = you.lock ? net.eById[you.lock] : null; // yellow lock marker
 }
 
 // One render frame in netplay mode (called from the main loop instead of the
@@ -93,26 +108,45 @@ function onSnapshot(m) {
 function netFrame(frameDt) {
   const net = game.net, h = game.hero;
 
-  // 1) input -> intent: send our desired direction whenever it changes
+  // 1) input -> intents. Movement is a held direction (sent on change); attack,
+  //    lock-cycle, and right-click lock are discrete actions.
   const dir = dirHeld() || '';
   if (dir !== net.lastDir) {
     net.lastDir = dir;
     net.seq++;
-    if (net.ws && net.ws.readyState === 1) net.ws.send(JSON.stringify({ t: 'move', seq: net.seq, dir }));
+    netSend(net, { t: 'move', seq: net.seq, dir });
+  }
+  if (pressed(CONFIRM)) { // swing (optimistic local animation; the hit is server-side)
+    netSend(net, { t: 'attack' });
+    game.slashFx = { t: 0, dir: h.dir, punch: true, dur: 0.24 };
+    sfx('Blow1');
+  }
+  if (pressed(['Tab'])) netSend(net, { t: 'cycleLock' });
+  const cam = camPos();
+  for (const c of clicks) {
+    if (c.b === 2) netSend(net, { t: 'lockAt', x: c.x + cam.x, y: c.y + cam.y });
   }
 
   // 2) predict our own hero at the fixed 20 Hz tick, using the server's rules
   game.moveDir = dir || null;
-  game.path = null; game.follow = false; game.lock = null;
+  game.path = null; game.follow = false;
   net.acc += frameDt;
   let ticks = 0;
   while (net.acc >= FIXED && ticks < 5) { snapshotPrev(); stepHero(FIXED); net.acc -= FIXED; ticks++; }
   if (ticks === 5) net.acc = 0;
 
-  // 3) ease remote players and shared enemies toward their snapshot positions
+  // 3) ease remote players and enemies toward their snapshot positions
   const k = Math.min(1, frameDt * 14);
   for (const p of game.players) { p.px += (p.tpx - p.px) * k; p.py += (p.tpy - p.py) * k; }
   for (const e of game.enemies) { e.px += (e.tpx - e.px) * k; e.py += (e.tpy - e.py) * k; }
+
+  // 3.5) advance the client-only visual timers advanceWorld() would normally run
+  for (const p of game.pops) p.t += frameDt;
+  game.pops = game.pops.filter(p => p.t < 0.8);
+  game.iframes = Math.max(0, game.iframes - frameDt);
+  game.healFx = Math.max(0, game.healFx - frameDt);
+  if (game.slashFx && (game.slashFx.t += frameDt) >= (game.slashFx.dur || 0.18)) game.slashFx = null;
+  for (const e of game.enemies) { e.flash = Math.max(0, e.flash - frameDt); e.hurtT += frameDt; }
 
   // 4) draw the world (hero interpolated by the leftover accumulator)
   const a = Math.max(0, Math.min(1, net.acc / FIXED));
@@ -120,6 +154,10 @@ function netFrame(frameDt) {
   drawMap();
   clearInterp();
   drawNetOverlay();
+}
+
+function netSend(net, obj) {
+  if (net.ws && net.ws.readyState === 1) net.ws.send(JSON.stringify(obj));
 }
 
 // tiny connection/roster banner so the demo is legible

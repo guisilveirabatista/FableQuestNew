@@ -46,8 +46,9 @@ type enemy struct {
 	wait   float64
 	hp     int
 	maxhp  int
-	// combat fields (used from 2b on)
+	// combat fields
 	flash, dying, stun, hurtT, lunge float64
+	dead                             bool
 }
 
 func pickKind() string {
@@ -132,11 +133,34 @@ func (h *Hub) updateEnemies(playersByMap map[string][]*Player, dt float64) {
 		for _, en := range h.enemies[mapID] {
 			h.stepEnemy(mapID, en, players, dt)
 		}
+		// reap the dead (their fade-out finished)
+		list := h.enemies[mapID]
+		kept := list[:0]
+		for _, en := range list {
+			if !en.dead {
+				kept = append(kept, en)
+			}
+		}
+		h.enemies[mapID] = kept
 	}
 }
 
 func (h *Hub) stepEnemy(mapID string, en *enemy, players []*Player, dt float64) {
 	k := enemyKinds[en.kind]
+	en.flash = max(0, en.flash-dt)
+	en.lunge = max(0, en.lunge-dt)
+	en.hurtT += dt
+	if en.dying > 0 { // fading out after a kill
+		en.dying -= dt
+		if en.dying <= 0 {
+			en.dead = true
+		}
+		return
+	}
+	en.stun = max(0, en.stun-dt)
+	if en.stun > 0 { // briefly staggered by a hit
+		return
+	}
 	if en.moving {
 		gx, gy := float64(en.tx*TS), float64(en.ty*TS)
 		sp := k.speed * dt
@@ -156,14 +180,16 @@ func (h *Hub) stepEnemy(mapID string, en *enemy, players []*Player, dt float64) 
 	en.wait = k.waitLo + rand.Float64()*(k.waitHi-k.waitLo)
 
 	target, dist := nearestPlayer(players, en.tx, en.ty)
+	fleeing := k.flee > 0 && float64(en.hp)/float64(en.maxhp) <= k.flee
 	var dirs []string
 	if target != nil && dist <= k.rng && rand.Float64() > 0.2 {
+		// chase — or flee (same pathing, away from the player)
 		dx, dy := target.tx-en.tx, target.ty-en.ty
 		hd, vd := "left", "up"
-		if dx > 0 {
+		if (fleeing && dx < 0) || (!fleeing && dx > 0) {
 			hd = "right"
 		}
-		if dy > 0 {
+		if (fleeing && dy < 0) || (!fleeing && dy > 0) {
 			vd = "down"
 		}
 		if abs(dx) > abs(dy) {
@@ -182,7 +208,10 @@ func (h *Hub) stepEnemy(mapID string, en *enemy, players []*Player, dt float64) 
 		d := dirVec[dir]
 		nx, ny := en.tx+d[0], en.ty+d[1]
 		if target != nil && nx == target.tx && ny == target.ty {
-			en.dir = dir // bump into a player: face them (attack comes in 2b)
+			en.dir = dir // bump into a player = attack (unless running for its life)
+			if !fleeing {
+				h.attackHero(en, target)
+			}
 			break
 		}
 		if !isGrass(mapID, nx, ny) || blocked(mapID, nx, ny) || enemyAt(h.enemies[mapID], nx, ny, en) {
