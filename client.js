@@ -1076,22 +1076,67 @@ function processInput(dt) {
   for (let i = 0; i < 5; i++) if (pressed([String(i + 1)])) pushIntent({ t: 'cast', slot: i });
 }
 
+// ---------------------------------------------------------------- render interpolation
+// The sim advances in discrete 20 Hz ticks, so between ticks entity positions
+// would sit still and then jump. To keep motion smooth at any refresh rate we
+// remember each moving entity's position at the start of the latest tick (rpx/
+// rpy) and, at draw time, blend it toward the current position by the leftover
+// accumulator fraction. drawMap() reads px/py as usual — applyInterp() swaps in
+// the blended values just for the draw and clearInterp() restores the truth
+// afterwards, so input/logic always see real positions.
+function snapshotPrev() {
+  const h = game.hero; if (h) { h.rpx = h.px; h.rpy = h.py; }
+  for (const e of game.enemies) { e.rpx = e.px; e.rpy = e.py; }
+  for (const n of npcs) { n.rpx = n.px; n.rpy = n.py; }
+  for (const p of game.projectiles) { p.rpx = p.x; p.rpy = p.y; }
+}
+function blend(cur, prev, a) { return prev == null ? cur : prev + (cur - prev) * a; }
+function applyInterp(a) {
+  const h = game.hero;
+  h._px = h.px; h._py = h.py; h.px = blend(h.px, h.rpx, a); h.py = blend(h.py, h.rpy, a);
+  for (const e of game.enemies) { e._px = e.px; e._py = e.py; e.px = blend(e.px, e.rpx, a); e.py = blend(e.py, e.rpy, a); }
+  for (const n of npcs) { n._px = n.px; n._py = n.py; n.px = blend(n.px, n.rpx, a); n.py = blend(n.py, n.rpy, a); }
+  for (const p of game.projectiles) { p._x = p.x; p._y = p.y; p.x = blend(p.x, p.rpx, a); p.y = blend(p.y, p.rpy, a); }
+}
+function clearInterp() {
+  const h = game.hero;
+  h.px = h._px; h.py = h._py;
+  for (const e of game.enemies) { e.px = e._px; e.py = e._py; }
+  for (const n of npcs) { n.px = n._px; n.py = n._py; }
+  for (const p of game.projectiles) { p.x = p._x; p.y = p._y; }
+}
+
 // ---------------------------------------------------------------- main loop
-// Render frame: translate input to intents, run one sim tick, draw. The sim is
-// still stepped once per rendered frame here (variable dt, exactly as the
-// original single loop did) so there's no visual change; the authoritative
-// 20 Hz fixed tick is what the headless sim and the future server run. A
-// fixed-tick + interpolation client is the next Phase-0 increment.
-let last = 0;
+// Fixed-timestep loop: input every rendered frame, but the world only advances
+// in whole 20 Hz ticks pulled from a time accumulator (so the sim is fully
+// decoupled from the display's refresh rate — the same cadence the server will
+// run). Whatever time is left in the accumulator becomes the interpolation
+// alpha for a smooth draw.
+const FIXED = 1 / 20; // authoritative tick: 20 Hz
+let last = 0, acc = 0;
 function loop(ts) {
-  const dt = Math.min(0.05, (ts - last) / 1000);
+  let frame = (ts - last) / 1000;
   last = ts;
+  if (!(frame >= 0)) frame = 0;   // first frame / clock reset
+  if (frame > 0.25) frame = 0.25; // don't spiral after a long pause
   if (game.scene === 'title') {
     updateTitle();
     if (game.scene === 'title') drawTitle();
+    acc = 0;
   } else if (game.scene === 'map') {
-    processInput(dt);
-    if (game.scene === 'map') { stepWorld(dt); drawMap(); }
+    processInput(frame); // raw input -> UI state + intents (every frame)
+    if (game.scene === 'map') {
+      acc += frame;
+      let ticks = 0;
+      while (acc >= FIXED && ticks < 5) { snapshotPrev(); stepWorld(FIXED); acc -= FIXED; ticks++; }
+      if (ticks === 5) acc = 0; // fell too far behind: drop the backlog
+      if (game.scene === 'map') {
+        const a = Math.max(0, Math.min(1, acc / FIXED));
+        applyInterp(a);
+        drawMap();
+        clearInterp();
+      }
+    }
   }
   queue = [];
   clicks = [];
