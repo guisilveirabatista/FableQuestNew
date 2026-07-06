@@ -108,9 +108,19 @@ report to the Elder by the well. He also heals you and tops up your potions.
 
 ## How it works
 
-- `game.js` — the engine: tile map, sprites, dialogue, real-time combat
-  (roaming enemies, sword slashes, fireballs, damage popups), menus, save/load
-  (localStorage).
+The engine is split into an authoritative **simulation** and a thin **client**
+(step one of the road to server-authoritative multiplayer — see "MMORPG plan"):
+
+- `sim.js` — the world model and all the *rules*: tile maps, enemy AI, real-time
+  combat (damage, crit, loot, XP), movement, inventory/equipment, shops. It
+  touches no DOM, canvas, input or audio, so it runs headless (`node
+  tools/simtest.js`) — the same rules will later run on the server. The client
+  never mutates the world directly: it pushes **intents** (`move`, `attack`,
+  `cast`, `equip`, `buy`, …) that the sim drains each tick in `stepWorld()`.
+  `applyIntent()` is the single entry point for player actions.
+- `client.js` — the browser front end: canvas + camera, input capture, all
+  rendering, the UI panels/menus, `localStorage` save/load, and the main loop.
+  It reads the world to draw it and turns raw input into intents.
 - `midi.js` — a tiny Standard MIDI File parser + WebAudio synth (oscillator
   voices per GM instrument family, synthesized drums), so the RTP's `.mid`
   soundtrack plays without a soundfont.
