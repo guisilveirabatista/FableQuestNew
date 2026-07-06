@@ -31,6 +31,30 @@ var items = map[string]item{
 	"amulet": {w: 0.2, slot: "acc", mdef: 3, price: 200},
 }
 
+var itemNames = map[string]string{
+	"bread":  "Bread",
+	"meat":   "Meat",
+	"potion": "Potion",
+	"sword1": "Bronze Sword",
+	"sword2": "Iron Sword",
+	"sword3": "Claymore",
+	"shield": "Buckler",
+	"hat":    "Felt Hat",
+	"helm":   "Iron Helm",
+	"armor":  "Breastplate",
+	"legs":   "Greaves",
+	"boots":  "Swift Boots",
+	"ring":   "Lucky Ring",
+	"amulet": "Ward Amulet",
+}
+
+func itemName(id string) string {
+	if name, ok := itemNames[id]; ok {
+		return name
+	}
+	return id
+}
+
 var bodySlots = []string{"head", "main", "off", "torso", "legs", "acc1", "boots", "acc2"}
 
 // shop stock (the client opens the shop UI; the server validates the purchase).

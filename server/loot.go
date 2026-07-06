@@ -4,6 +4,8 @@ package main
 // the packs of the fallen are shared, server-owned world entities: anyone can
 // walk up and take them, and it's the server that decides who gets what.
 
+import "fmt"
+
 type floorItem struct {
 	id     string
 	n      int
@@ -11,9 +13,16 @@ type floorItem struct {
 }
 
 type corpse struct {
-	tx, ty int
-	items  map[string]int
+	tx, ty  int
+	items   map[string]int
+	age     float64
+	decayed bool
 }
+
+const (
+	corpseDecaySeconds = 1 * 30
+	maxDecayedCorpses  = 24
+)
 
 func (h *Hub) dropFloor(mapID, id string, n, tx, ty int) {
 	for _, f := range h.floor[mapID] {
@@ -40,6 +49,7 @@ func (h *Hub) pickupAt(p *Player, tx, ty int) bool {
 	for _, f := range h.floor[p.mapID] {
 		if f.tx == tx && f.ty == ty {
 			addItem(p, f.id, f.n)
+			p.logMsg(fmt.Sprintf("Looted %s x%d", itemName(f.id), f.n))
 			got = true
 			continue
 		}
@@ -60,19 +70,60 @@ func (h *Hub) dropCorpse(mapID string, tx, ty int, bag map[string]int) {
 	if len(items) == 0 {
 		return
 	}
-	h.corpses[mapID] = append(h.corpses[mapID], &corpse{tx, ty, items})
-	if len(h.corpses[mapID]) > 8 { // the field tidies itself
-		h.corpses[mapID] = h.corpses[mapID][1:]
+	h.corpses[mapID] = append(h.corpses[mapID], &corpse{tx: tx, ty: ty, items: items})
+}
+
+func (h *Hub) updateCorpses(dt float64) {
+	for mapID, list := range h.corpses {
+		decayed := 0
+		for _, c := range list {
+			c.age += dt
+			if !c.decayed && c.age >= corpseDecaySeconds {
+				c.decayed = true
+				c.items = map[string]int{}
+			}
+			if c.decayed {
+				decayed++
+			}
+		}
+		if decayed <= maxDecayedCorpses {
+			continue
+		}
+		kept := list[:0]
+		drop := decayed - maxDecayedCorpses
+		for _, c := range list {
+			if c.decayed && drop > 0 {
+				drop--
+				continue
+			}
+			kept = append(kept, c)
+		}
+		h.corpses[mapID] = kept
 	}
 }
 
-// takeCorpse empties a nearby corpse into the player's bag.
-func (h *Hub) takeCorpse(p *Player, tx, ty int) bool {
+// takeCorpse moves a nearby, undecayed corpse's whole pack or one requested item
+// into the player's bag.
+func (h *Hub) takeCorpse(p *Player, tx, ty int, want string) bool {
 	list := h.corpses[p.mapID]
 	for i, c := range list {
-		if c.tx == tx && c.ty == ty && near(p, tx, ty) {
+		if c.tx == tx && c.ty == ty && !c.decayed && near(p, tx, ty) {
+			if want != "" && want != "*" {
+				n := c.items[want]
+				if n <= 0 {
+					return false
+				}
+				addItem(p, want, n)
+				p.logMsg(fmt.Sprintf("Looted %s x%d", itemName(want), n))
+				delete(c.items, want)
+				if len(c.items) == 0 {
+					h.corpses[p.mapID] = append(list[:i], list[i+1:]...)
+				}
+				return true
+			}
 			for id, n := range c.items {
 				addItem(p, id, n)
+				p.logMsg(fmt.Sprintf("Looted %s x%d", itemName(id), n))
 			}
 			h.corpses[p.mapID] = append(list[:i], list[i+1:]...)
 			return true

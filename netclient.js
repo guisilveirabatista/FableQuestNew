@@ -18,7 +18,7 @@ function netStart(url) {
   game.players = [];
   game.enemies = [];
   game.invOpen = false; // hidden by default; press I to open (bag comes from the server)
-  game.logOpen = false;
+  game.logOpen = true;
   game.menu = null;
   game.scene = 'map';
 
@@ -31,6 +31,7 @@ function netStart(url) {
     const m = JSON.parse(e.data);
     if (m.t === 'welcome') {
       net.id = m.id;
+      game.hero.name = m.id;
       game.mapId = m.map;
       snapHero(m); // start at the server-assigned spawn
     } else if (m.t === 'snap') {
@@ -72,20 +73,33 @@ function onSnapshot(m) {
   net.prevHP = you.hp;
   h.hp = you.hp; h.maxhp = you.maxhp; h.mp = you.mp; h.maxmp = you.maxmp;
   h.lv = you.lv; h.exp = you.exp; h.gold = you.gold; h.kills = you.kills;
+  h.dead = !!you.dead;
+  if (h.dead) {
+    if (!game.death || game.death.cause !== you.deathCause) {
+      game.death = { cause: you.deathCause || 'unknown forces', cursor: 0 };
+      game.menu = null; game.shop = null; game.itemPopup = null; game.corpseOpen = null;
+    }
+  } else if (game.death) game.death = null;
   if (you.slots) h.slots = you.slots;
   h.bag = m.bag || {};          // authoritative inventory drives the panel
   h.equip = m.equip || {};
   h.points = m.points || 0;
   if (m.attr) h.attr = m.attr;  // character sheet (Attribs/Status screens)
   game.autoloot = !!m.autoloot;
+  if (m.log) for (const s of m.log) logMsg(s);
 
   // remote players
   const seen = {};
   for (const v of m.players) {
     seen[v.id] = true;
     let p = net.byId[v.id];
-    if (!p) p = net.byId[v.id] = { id: v.id, px: v.px, py: v.py, tpx: v.px, tpy: v.py, dir: v.dir, moving: v.moving, anim: v.anim };
+    if (!p) p = net.byId[v.id] = {
+      id: v.id, name: v.id, px: v.px, py: v.py, tpx: v.px, tpy: v.py,
+      dir: v.dir, moving: v.moving, anim: v.anim, hp: v.hp, maxhp: v.maxhp,
+    };
     p.tpx = v.px; p.tpy = v.py; p.dir = v.dir; p.moving = v.moving; p.anim = v.anim;
+    p.hp = v.hp; p.maxhp = v.maxhp; p.name = v.name || v.id;
+    p.dead = !!v.dead;
   }
   for (const id in net.byId) if (!seen[id]) delete net.byId[id];
   game.players = Object.values(net.byId);
@@ -118,17 +132,34 @@ function onSnapshot(m) {
   // floor loot and corpses are shared world entities on the current map; tag them
   // with the map id so the existing renderer/queries (drawMap, floorAt, corpseAt) work
   game.floor = (m.floor || []).map(v => ({ map: game.mapId, id: v.id, n: v.n, tx: v.tx, ty: v.ty }));
-  game.corpses = (m.corpses || []).map(v => ({ map: game.mapId, tx: v.tx, ty: v.ty, items: v.items }));
+  const openCorpse = game.corpseOpen;
+  game.corpses = (m.corpses || []).map(v => ({
+    map: game.mapId, tx: v.tx, ty: v.ty, items: v.items || {}, decayed: !!v.decayed,
+  }));
+  if (openCorpse) {
+    const fresh = game.corpses.find(c => c.tx === openCorpse.tx && c.ty === openCorpse.ty && !c.decayed);
+    game.corpseOpen = fresh && nearHero(fresh.tx, fresh.ty) ? fresh : null;
+  }
 }
 
 // One render frame in netplay mode (called from the main loop instead of the
 // single-player processInput/stepWorld path).
 function netFrame(frameDt) {
   const net = game.net, h = game.hero;
+  let uiCaptured = false;
 
   // 1) input -> intents. The menu and inventory panels reuse the single-player
   //    UI code: their pushIntent() calls forward to the server (sim.js pushIntent).
-  if (game.menu) {
+  if (game.death) {
+    updateDeathPopup();
+    uiCaptured = true;
+  } else if (pressed(['m', 'M'])) {
+    toggleMapWindow();
+    uiCaptured = true;
+  } else if (game.mapOpen) {
+    updateMapWindow();
+    uiCaptured = true;
+  } else if (game.menu) {
     updateMenu(frameDt); // navigate; spend attrs / reassign skills -> server
   } else if (game.shop) {
     updateShop(); // browse the shop; buys are validated by the server
@@ -143,6 +174,20 @@ function netFrame(frameDt) {
       sfx('Cursor1');
     }
     if (game.itemPopup && (pressed(CANCEL) || pressed(CONFIRM) || clicked(0))) { game.itemPopup = null; sfx('Cancel1'); }
+    if (game.corpseOpen && (game.corpseOpen.map !== game.mapId ||
+      game.corpseOpen.decayed || !nearHero(game.corpseOpen.tx, game.corpseOpen.ty))) game.corpseOpen = null;
+    if (game.corpseOpen) {
+      const co = game.corpseOpen;
+      if (pressed(CANCEL)) { game.corpseOpen = null; sfx('Cancel1'); }
+      if (pressed(CONFIRM)) { netSend(net, { t: 'takeCorpse', tx: co.tx, ty: co.ty, id: '*' }); queue = []; }
+      clicks = clicks.filter(cl => {
+        if (cl.b !== 0 || !inCorpseWin(cl)) return true;
+        const ids = Object.keys(co.items);
+        const i = corpseCellAt(cl.x, cl.y);
+        if (cl.dbl && i >= 0 && i < ids.length) netSend(net, { t: 'takeCorpse', tx: co.tx, ty: co.ty, id: ids[i] });
+        return false;
+      });
+    }
     if (game.invOpen && !game.itemPopup) updateInvPanel(); // mouse drag/click -> item intents
     if (!game.invOpen && !game.invFocus && !game.itemPopup && pressed(CANCEL)) {
       game.menu = { mode: 'root', cursor: 0 }; sfx('Decision1'); // Esc opens the menu
@@ -150,7 +195,7 @@ function netFrame(frameDt) {
   }
 
   // movement is blocked while a panel owns the keyboard
-  const captured = game.menu || game.shop || game.invFocus || game.itemPopup;
+  const captured = uiCaptured || game.death || game.mapOpen || game.menu || game.shop || game.invFocus || game.itemPopup;
   const dir = captured ? '' : (dirHeld() || '');
   if (dir !== net.lastDir) {
     net.lastDir = dir;
@@ -181,23 +226,44 @@ function netFrame(frameDt) {
     const cam = camPos();
     for (const c of clicks) {
       if (game.invOpen && inPanel(c)) continue; // the panel owns its own clicks
+      if (game.corpseOpen && inCorpseWin(c)) continue;
       const wx = Math.floor((c.x + cam.x) / TS), wy = Math.floor((c.y + cam.y) / TS);
-      if (c.b === 2) { // right-click: loot your corpse if next to it, else lock a target
-        if (corpseAt(wx, wy) && nearHero(wx, wy)) netSend(net, { t: 'takeCorpse', tx: wx, ty: wy });
+      if (c.b === 2) { // right-click: open your corpse if next to it, else lock a target
+        const co = corpseAt(wx, wy);
+        if (co && !co.decayed && nearHero(wx, wy)) { game.corpseOpen = co; sfx('Decision1'); }
         else netSend(net, { t: 'lockAt', x: c.x + cam.x, y: c.y + cam.y });
       } else if (c.b === 0 && c.alt) { // Alt+left-click: lock the enemy AND follow it
         netSend(net, { t: 'followAt', x: c.x + cam.x, y: c.y + cam.y });
-      } else if (c.b === 0 && c.dbl && floorAt(wx, wy).length && nearHero(wx, wy)) {
-        netSend(net, { t: 'takeLoot', tx: wx, ty: wy }); // double-click floor loot in reach
+        const en = enemyAtPoint(c.x + cam.x, c.y + cam.y);
+        if (en) { game.lock = en; game.follow = true; game.path = null; sfx('Decision1'); }
+      } else if (c.b === 0 && !game.invDrag) {
+        const co = corpseAt(wx, wy);
+        if (co && !co.decayed && nearHero(wx, wy) && c.dbl) {
+          game.corpseOpen = co; sfx('Decision1');
+        } else if (floorAt(wx, wy).length && nearHero(wx, wy)) {
+          if (c.dbl) netSend(net, { t: 'takeLoot', tx: wx, ty: wy }); // double-click floor loot in reach
+          else game.lootDrag = { tx: wx, ty: wy };
+        } else {
+          netSend(net, { t: 'moveTo', tx: wx, ty: wy });
+          game.follow = false;
+          startPathTo(wx, wy);
+        }
       }
     }
+    for (const r of releases) { // floor loot dragged into the backpack window
+      if (r.b !== 0 || !game.lootDrag) continue;
+      const d = game.lootDrag;
+      if (inPanel(r) && nearHero(d.tx, d.ty)) netSend(net, { t: 'takeLoot', tx: d.tx, ty: d.ty });
+      game.lootDrag = null;
+    }
+    if (game.lootDrag && !mouse.down) game.lootDrag = null;
   }
 
   // 2) predict our own hero at the fixed 20 Hz tick, using the server's rules.
   //    Keep game.follow/game.lock (set from the snapshot) so the chase is
   //    predicted locally AND the blue follow marker renders.
   game.moveDir = dir || null;
-  game.path = null;
+  if (dir) game.path = null;
   net.acc += frameDt;
   let ticks = 0;
   while (net.acc >= FIXED && ticks < 5) { snapshotPrev(); stepHero(FIXED); net.acc -= FIXED; ticks++; }
@@ -221,7 +287,7 @@ function netFrame(frameDt) {
   applyInterp(a);
   drawMap();
   clearInterp();
-  drawNetOverlay();
+  // drawNetOverlay();
 }
 
 function netSend(net, obj) {

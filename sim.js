@@ -11,6 +11,7 @@
 // stubs it) — the sim only *requests* sounds, it doesn't play them.
 
 const TS = 16, MW = 40, MH = 25;
+const CORPSE_DECAY = 1 * 30;
 const DIRV = { up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0] };
 // ---------------------------------------------------------------- game state
 const game = {};
@@ -51,7 +52,9 @@ function recalcMax() { // Vitality/Intelligence feed max HP/MP
 function resetGame() {
   game.scene = 'title';
   game.hero = {
+    name: 'Hero',
     tx: SPAWN.tx, ty: SPAWN.ty, px: SPAWN.tx * TS, py: SPAWN.ty * TS, dir: 'down', anim: 0, moving: false,
+    dead: false,
     hp: 30, maxhp: 30, mp: 10, maxmp: 10, lv: 1, exp: 0, gold: 0,
     kills: 0,
     slots: ['fire', 'heal', 'spin', 'bolt', null], // skill hotbar, keys 1-5
@@ -89,10 +92,12 @@ function resetGame() {
   game.invFocus = null;
   game.invDrag = null;
   game.itemPopup = null;
-  game.tipBtn = null;
   game.corpseOpen = null;
   game.lootDrag = null;
   game.talkingNpc = null;
+  game.mapOpen = false;
+  game.minimapOpen = false;
+  game.death = null;
   game.log = [];
   game.logOpen = true;
 }
@@ -223,6 +228,7 @@ function switchMap(to, tx, ty) {
 // ---------------------------------------------------------------- dialogue
 function say(pages) { game.dialogue = { pages, page: 0, chars: 0 }; }
 function interact() { // returns true if something was there to talk to / read
+  if (game.death) return false;
   const h = game.hero;
   const corpse = corpseNear();
   if (corpse) { game.corpseOpen = corpse; sfx('Decision1'); return true; }
@@ -450,30 +456,44 @@ function attackHero(en) {
   game.iframes = 1;
   sfx('Damege1');
   addPop('-' + dmg, h.px + 8, h.py - 12, '#f76');
-  if (h.hp <= 0) die();
+  if (h.hp <= 0) die(e.name);
 }
 
-// no game-over screen: your body stays where you fell and you wake up
-// at the spawn point with your gear intact
-function die() {
+// Death leaves your pack with the body and waits for an explicit respawn.
+function die(cause) {
   const h = game.hero;
+  if (h.dead) return;
   const items = {};
   for (const [id, n] of Object.entries(h.bag)) if (n > 0) items[id] = n;
   h.bag = {}; // your loot stays with the body — go get it back
-  game.corpses.push({ map: game.mapId, tx: h.tx, ty: h.ty, items });
-  if (game.corpses.length > 8) game.corpses.shift(); // the field tidies itself
+  game.corpses.push({ map: game.mapId, tx: h.tx, ty: h.ty, items, age: 0, decayed: false });
   sfx('Damege2');
-  switchMap(SPAWN.map, SPAWN.tx, SPAWN.ty);
-  h.hp = h.maxhp;
-  h.mp = h.maxmp;
-  h.dir = 'down';
-  game.iframes = 2;
+  h.hp = 0;
+  h.moving = false;
+  h.dead = true;
+  game.death = { cause: cause || 'unknown forces', cursor: 0 };
+  game.iframes = 0;
   game.dialogue = null; // death closes whatever you were reading
   game.menu = null;
   game.shop = null;
   game.itemPopup = null;
   game.corpseOpen = null;
+  game.path = null;
+  game.moveDir = null;
+  game.lock = null;
+  game.follow = false;
   addPop('You died!', h.px + 8, h.py - 14, '#f76');
+}
+
+function respawnHero() {
+  const h = game.hero;
+  switchMap(SPAWN.map, SPAWN.tx, SPAWN.ty);
+  h.hp = h.maxhp;
+  h.mp = h.maxmp;
+  h.dir = 'down';
+  h.dead = false;
+  game.death = null;
+  game.iframes = 2;
 }
 
 function hitEnemy(en, dmg, crit) {
@@ -760,12 +780,13 @@ function nearHero(tx, ty) { // same tile or adjacent (loot reach)
   return Math.abs(tx - game.hero.tx) <= 1 && Math.abs(ty - game.hero.ty) <= 1;
 }
 function corpseNear() {
-  return game.corpses.find(c => c.map === game.mapId && nearHero(c.tx, c.ty));
+  return game.corpses.find(c => !c.decayed && c.map === game.mapId && nearHero(c.tx, c.ty));
 }
 function corpseAt(tx, ty) {
   return game.corpses.find(c => c.map === game.mapId && c.tx === tx && c.ty === ty);
 }
 function takeFromCorpse(c, id) {
+  if (c.decayed || !c.items[id]) return;
   addItem(id, c.items[id]);
   addPop(`+${c.items[id]} ${ITEMS[id].name}`, game.hero.px + 8, game.hero.py - 12, '#9f9');
   delete c.items[id];
@@ -905,8 +926,13 @@ function advanceWorld(dt) {
   game.atkCool = Math.max(0, game.atkCool - dt);
   game.healFx = Math.max(0, game.healFx - dt);
   if (game.slashFx && (game.slashFx.t += dt) >= (game.slashFx.dur || 0.18)) game.slashFx = null;
+  if (h.dead || game.death) {
+    updateCorpses(dt);
+    return;
+  }
   h.mp = Math.min(h.maxmp, h.mp + dt * 0.35); // slow regen keeps skills in play
   h.hp = Math.min(h.maxhp, h.hp + dt * 0.4);
+  updateCorpses(dt);
   updateNpcs(dt);
   updateEnemies(dt);
   if (game.scene !== 'map') return;
@@ -923,6 +949,27 @@ function advanceWorld(dt) {
   stepHero(dt);
 }
 
+function updateCorpses(dt) {
+  let decayed = 0;
+  for (const c of game.corpses) {
+    c.age = (c.age || 0) + dt;
+    if (!c.decayed && c.age >= CORPSE_DECAY) {
+      c.decayed = true;
+      c.items = {};
+      if (game.corpseOpen === c) game.corpseOpen = null;
+    }
+    if (c.decayed) decayed++;
+  }
+  if (decayed > 24) {
+    let drop = decayed - 24;
+    game.corpses = game.corpses.filter(c => {
+      if (!c.decayed || drop <= 0) return true;
+      drop--;
+      return false;
+    });
+  }
+}
+
 // Hero locomotion: integrate toward the target tile while moving, else start a
 // step from game.moveDir / click path / follow. Split out of advanceWorld() so
 // the netplay client can predict the local hero with the exact same rules the
@@ -930,6 +977,7 @@ function advanceWorld(dt) {
 // if a map exit was taken (caller should stop advancing this tick).
 function stepHero(dt) {
   const h = game.hero;
+  if (h.dead || game.death) return false;
   if (h.moving) {
     const speed = (overloaded() ? 32 : 70) * dt; // trudge when the pack is too heavy
     const gx = h.tx * TS, gy = h.ty * TS;

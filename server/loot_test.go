@@ -31,11 +31,11 @@ func TestPickupNeedsReach(t *testing.T) {
 	}
 }
 
-func TestDeathDropsCorpseAndRespawns(t *testing.T) {
+func TestDeathDropsCorpseAndWaitsForRespawn(t *testing.T) {
 	h := newHub()
 	p := heroAt("field", 15, 10)
 	p.bag = map[string]int{"potion": 3, "bread": 2}
-	h.playerDie(p)
+	h.playerDie(p, "Slime")
 	cs := h.corpses["field"]
 	if len(cs) != 1 || cs[0].tx != 15 || cs[0].ty != 10 {
 		t.Fatalf("death should leave a corpse where you fell, got %+v", cs)
@@ -46,8 +46,8 @@ func TestDeathDropsCorpseAndRespawns(t *testing.T) {
 	if len(p.bag) != 0 {
 		t.Fatalf("your bag should be empty after death, got %+v", p.bag)
 	}
-	if p.mapID != "city" || int(p.hp) != p.maxhp {
-		t.Fatalf("you should respawn full-HP in the city, got %s hp=%v", p.mapID, p.hp)
+	if !p.dead || p.mapID != "field" || p.hp != 0 {
+		t.Fatalf("death should wait for respawn at the fall site, dead=%v map=%s hp=%v", p.dead, p.mapID, p.hp)
 	}
 }
 
@@ -55,12 +55,51 @@ func TestTakeCorpseReturnsPack(t *testing.T) {
 	h := newHub()
 	p := heroAt("field", 15, 10)
 	p.bag = map[string]int{}
-	h.corpses["field"] = []*corpse{{15, 10, map[string]int{"potion": 3}}}
-	if !h.takeCorpse(p, 15, 10) {
+	h.corpses["field"] = []*corpse{{tx: 15, ty: 10, items: map[string]int{"potion": 3}}}
+	if !h.takeCorpse(p, 15, 10, "*") {
 		t.Fatal("should be able to loot your own corpse when standing on it")
 	}
 	if p.bag["potion"] != 3 || len(h.corpses["field"]) != 0 {
 		t.Fatalf("looting the corpse should refill the bag and clear it (bag %d, corpses %d)", p.bag["potion"], len(h.corpses["field"]))
+	}
+}
+
+func TestTakeSingleCorpseItem(t *testing.T) {
+	h := newHub()
+	p := heroAt("field", 15, 10)
+	p.bag = map[string]int{}
+	h.corpses["field"] = []*corpse{{tx: 15, ty: 10, items: map[string]int{"potion": 3, "bread": 2}}}
+	if !h.takeCorpse(p, 15, 10, "bread") {
+		t.Fatal("should be able to take one item stack from your corpse")
+	}
+	if p.bag["bread"] != 2 || p.bag["potion"] != 0 {
+		t.Fatalf("single-item loot should take only bread, got bag %+v", p.bag)
+	}
+	if len(h.corpses["field"]) != 1 || h.corpses["field"][0].items["potion"] != 3 {
+		t.Fatalf("corpse should keep remaining items, got %+v", h.corpses["field"])
+	}
+}
+
+func TestCorpseDecaysAfterTenMinutes(t *testing.T) {
+	h := newHub()
+	p := heroAt("field", 15, 10)
+	p.bag = map[string]int{}
+	h.corpses["field"] = []*corpse{{tx: 15, ty: 10, items: map[string]int{"potion": 3}}}
+	h.updateCorpses(corpseDecaySeconds - 1)
+	if h.corpses["field"][0].decayed {
+		t.Fatal("corpse should still be lootable before ten minutes")
+	}
+	if !h.takeCorpse(p, 15, 10, "potion") {
+		t.Fatal("corpse should be lootable before decay")
+	}
+	h.corpses["field"] = []*corpse{{tx: 15, ty: 10, items: map[string]int{"potion": 3}, age: corpseDecaySeconds - 1}}
+	h.updateCorpses(1)
+	c := h.corpses["field"][0]
+	if !c.decayed || len(c.items) != 0 {
+		t.Fatalf("corpse should decay and lose loot after ten minutes, got %+v", c)
+	}
+	if h.takeCorpse(p, 15, 10, "*") {
+		t.Fatal("decayed corpse should no longer be lootable")
 	}
 }
 

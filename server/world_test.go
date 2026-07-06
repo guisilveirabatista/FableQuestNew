@@ -21,6 +21,7 @@ func TestBlocked(t *testing.T) {
 		{"field", 0, 0, true, "field hedge border is solid"},
 		{"field", 39, 12, false, "field east exit tile is walkable"},
 		{"field", 30, 6, true, "pond tile is solid"},
+		{"city", 15, 16, true, "NPCs are solid"},
 		{"field", 15, 15, false, "open grass is walkable"},
 	}
 	for _, c := range cases {
@@ -97,6 +98,47 @@ func TestEnemiesAreSolid(t *testing.T) {
 	h.stepPlayer(p, "right", 1.0/tickHz) // (16,10) is occupied by a slime
 	if p.moving || p.tx != 15 {
 		t.Fatalf("a player should not walk through an enemy (tx=%d moving=%v)", p.tx, p.moving)
+	}
+}
+
+func TestClickPathMovesPlayer(t *testing.T) {
+	h := newHub()
+	p := &Player{mapID: "city", tx: 19, ty: 16, px: 19 * TS, py: 16 * TS, dir: "down"}
+	h.applyIntent(p, inMsg{T: "moveTo", Tx: 22, Ty: 16})
+	for i := 0; i < 80 && (p.tx != 22 || p.moving); i++ {
+		h.stepPlayer(p, "", 1.0/tickHz)
+	}
+	if p.tx != 22 || p.ty != 16 || p.moving {
+		t.Fatalf("click path should reach (22,16), got (%d,%d) moving=%v", p.tx, p.ty, p.moving)
+	}
+}
+
+func TestClickingNPCWalksAdjacent(t *testing.T) {
+	h := newHub()
+	p := &Player{mapID: "city", tx: 13, ty: 16, px: 13 * TS, py: 16 * TS, dir: "right"}
+	h.applyIntent(p, inMsg{T: "moveTo", Tx: 15, Ty: 16}) // kid NPC
+	for i := 0; i < 80 && (p.tx != 14 || p.moving); i++ {
+		h.stepPlayer(p, "", 1.0/tickHz)
+	}
+	if p.tx != 14 || p.ty != 16 || p.moving {
+		t.Fatalf("clicking an NPC should stop adjacent at (14,16), got (%d,%d) moving=%v", p.tx, p.ty, p.moving)
+	}
+}
+
+func TestClickPathAvoidsEnemies(t *testing.T) {
+	h := newHub()
+	p := heroAt("field", 15, 10)
+	h.players[p.id] = p
+	h.enemies["field"] = []*enemy{{id: 1, kind: "slime", tx: 16, ty: 10, px: 16 * TS, py: 10 * TS, hp: 10, maxhp: 10, hurtT: 9}}
+	h.applyIntent(p, inMsg{T: "moveTo", Tx: 17, Ty: 10})
+	for i := 0; i < 120 && (p.tx != 17 || p.ty != 10 || p.moving); i++ {
+		if p.tx == 16 && p.ty == 10 {
+			t.Fatal("click path walked through the enemy tile")
+		}
+		h.stepPlayer(p, "", 1.0/tickHz)
+	}
+	if p.tx != 17 || p.ty != 10 || p.moving {
+		t.Fatalf("click path should route around enemy to (17,10), got (%d,%d) moving=%v", p.tx, p.ty, p.moving)
 	}
 }
 

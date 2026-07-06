@@ -1,9 +1,7 @@
 package main
 
-// Phase 1 authoritative server: many players share one world, movement only.
-// Each client sends its desired direction (an intent); the server owns every
-// position and streams snapshots back at a fixed 20 Hz. Enemies/combat/items
-// stay client-side for now — they move server-side in Phase 2.
+// Authoritative server: many players share one world. Clients send intents; the
+// server owns positions, combat, loot, and streams snapshots back at a fixed 20 Hz.
 
 import (
 	"encoding/json"
@@ -22,7 +20,7 @@ const tickHz = 20
 
 // client -> server
 type inMsg struct {
-	T     string  `json:"t"`   // "move" | "attack" | "lockAt" | "cycleLock" | "unlock"
+	T     string  `json:"t"`   // "move" | "moveTo" | "attack" | "lockAt" | ...
 	Seq   int     `json:"seq"` // client input sequence, echoed back for reconciliation
 	Dir   string  `json:"dir"` // "up"|"down"|"left"|"right"|"" (stop)
 	X     float64 `json:"x"`   // world point for lockAt
@@ -39,25 +37,27 @@ type inMsg struct {
 
 // server -> client
 type playerView struct {
-	ID     string   `json:"id"`
-	Tx     int      `json:"tx"`
-	Ty     int      `json:"ty"`
-	Px     float64  `json:"px"`
-	Py     float64  `json:"py"`
-	Dir    string   `json:"dir"`
-	Moving bool     `json:"moving"`
-	Anim   float64  `json:"anim"`
-	HP     float64  `json:"hp"`
-	MaxHP  int      `json:"maxhp"`
-	MP     float64  `json:"mp"`
-	MaxMP  int      `json:"maxmp"`
-	Lv     int      `json:"lv"`
-	Exp    int      `json:"exp"`
-	Gold   int      `json:"gold"`
-	Kills  int      `json:"kills"`
-	Lock   int      `json:"lock"`
-	Slots  []string `json:"slots"`
-	Follow bool     `json:"follow"`
+	ID         string   `json:"id"`
+	Tx         int      `json:"tx"`
+	Ty         int      `json:"ty"`
+	Px         float64  `json:"px"`
+	Py         float64  `json:"py"`
+	Dir        string   `json:"dir"`
+	Moving     bool     `json:"moving"`
+	Anim       float64  `json:"anim"`
+	HP         float64  `json:"hp"`
+	MaxHP      int      `json:"maxhp"`
+	MP         float64  `json:"mp"`
+	MaxMP      int      `json:"maxmp"`
+	Lv         int      `json:"lv"`
+	Exp        int      `json:"exp"`
+	Gold       int      `json:"gold"`
+	Kills      int      `json:"kills"`
+	Lock       int      `json:"lock"`
+	Slots      []string `json:"slots"`
+	Follow     bool     `json:"follow"`
+	Dead       bool     `json:"dead"`
+	DeathCause string   `json:"deathCause"`
 }
 type projView struct {
 	X    float64 `json:"x"`
@@ -107,6 +107,7 @@ type snapMsg struct {
 	Points   int               `json:"points"`
 	Autoloot bool              `json:"autoloot"`
 	Attr     AttrSet           `json:"attr"`
+	Log      []string          `json:"log,omitempty"`
 }
 type floorView struct {
 	Id string `json:"id"`
@@ -115,9 +116,10 @@ type floorView struct {
 	Ty int    `json:"ty"`
 }
 type corpseView struct {
-	Tx    int            `json:"tx"`
-	Ty    int            `json:"ty"`
-	Items map[string]int `json:"items"`
+	Tx      int            `json:"tx"`
+	Ty      int            `json:"ty"`
+	Items   map[string]int `json:"items"`
+	Decayed bool           `json:"decayed"`
 }
 
 func (e *enemy) view() enemyView {
@@ -134,14 +136,17 @@ type Player struct {
 	inbox []inMsg
 
 	// authoritative state — only the tick goroutine touches these
-	moveDir string
-	ackSeq  int
-	mapID   string
-	tx, ty  int
-	px, py  float64
-	dir     string
-	moving  bool
-	anim    float64
+	moveDir     string
+	ackSeq      int
+	mapID       string
+	tx, ty      int
+	px, py      float64
+	dir         string
+	moving      bool
+	anim        float64
+	path        []tile
+	pathGoal    tile
+	hasPathGoal bool
 
 	// combat state
 	hp, mp           float64
@@ -156,11 +161,30 @@ type Player struct {
 	atkCool, iframes float64
 	lockID           int
 	follow           bool // Alt+click / F: chase the locked target
+	log              []string
+	dead             bool
+	deathCause       string
 }
 
 func (p *Player) view() playerView {
 	return playerView{p.id, p.tx, p.ty, p.px, p.py, p.dir, p.moving, p.anim,
-		p.hp, p.maxhp, p.mp, p.maxmp, p.lv, p.exp, p.gold, p.kills, p.lockID, p.slots, p.follow}
+		p.hp, p.maxhp, p.mp, p.maxmp, p.lv, p.exp, p.gold, p.kills, p.lockID, p.slots, p.follow, p.dead, p.deathCause}
+}
+
+func (p *Player) logMsg(msg string) {
+	p.log = append(p.log, msg)
+	if len(p.log) > 40 {
+		p.log = p.log[len(p.log)-40:]
+	}
+}
+
+func (p *Player) drainLog() []string {
+	if len(p.log) == 0 {
+		return nil
+	}
+	out := append([]string(nil), p.log...)
+	p.log = nil
+	return out
 }
 
 // ---- hub -------------------------------------------------------------------
@@ -243,6 +267,10 @@ func (h *Hub) run() {
 		}
 		// 2) per-player timers + regen, then advance from the latest move
 		for _, p := range h.players {
+			if p.dead {
+				p.moveDir = ""
+				continue
+			}
 			p.atkCool = max(0, p.atkCool-dt)
 			p.iframes = max(0, p.iframes-dt)
 			p.mp = math.Min(float64(p.maxmp), p.mp+dt*0.35)
@@ -254,7 +282,7 @@ func (h *Hub) run() {
 				}
 			}
 			dir := p.moveDir
-			if dir == "" && p.follow { // no manual input: chase the locked target
+			if dir == "" && len(p.path) == 0 && p.follow { // no manual input/path: chase the locked target
 				dir = h.followDir(p)
 			}
 			h.stepPlayer(p, dir, dt)
@@ -262,7 +290,9 @@ func (h *Hub) run() {
 		// 3) advance shared enemies against post-move player positions
 		playersByMap := map[string][]*Player{}
 		for _, p := range h.players {
-			playersByMap[p.mapID] = append(playersByMap[p.mapID], p)
+			if !p.dead {
+				playersByMap[p.mapID] = append(playersByMap[p.mapID], p)
+			}
 		}
 		h.updateEnemies(playersByMap, dt)
 		// 4) locked-on players auto-swing when a target is in reach
@@ -273,6 +303,7 @@ func (h *Hub) run() {
 		}
 		// 5) advance fireballs (homing + hits) and decay bolts
 		h.updateProjectiles(dt)
+		h.updateCorpses(dt)
 		// 3) build per-map views
 		pViews := map[string][]playerView{}
 		for _, p := range h.players {
@@ -309,7 +340,7 @@ func (h *Hub) run() {
 		cViews := map[string][]corpseView{}
 		for mapID, list := range h.corpses {
 			for _, c := range list {
-				cViews[mapID] = append(cViews[mapID], corpseView{c.tx, c.ty, c.items})
+				cViews[mapID] = append(cViews[mapID], corpseView{c.tx, c.ty, c.items, c.decayed})
 			}
 		}
 		// 4) snapshot each player its own map
@@ -329,6 +360,7 @@ func (h *Hub) run() {
 				Projectiles: prViews[p.mapID], Bolts: blViews[p.mapID],
 				Floor: fViews[p.mapID], Corpses: cViews[p.mapID],
 				Bag: p.bag, Equip: p.equip, Points: p.points, Autoloot: p.autoloot, Attr: p.attr,
+				Log: p.drainLog(),
 			})
 			outs = append(outs, outbound{p, data})
 		}
@@ -345,10 +377,25 @@ func (h *Hub) run() {
 // applyIntent dispatches one validated player action (the server's sole entry
 // point for player-driven world changes — mirrors sim.js applyIntent).
 func (h *Hub) applyIntent(p *Player, m inMsg) {
+	if p.dead && m.T != "respawn" {
+		if m.T == "move" {
+			p.moveDir = ""
+			p.ackSeq = m.Seq
+		}
+		return
+	}
 	switch m.T {
+	case "respawn":
+		h.respawnPlayer(p)
 	case "move":
 		p.moveDir = m.Dir
 		p.ackSeq = m.Seq
+		if m.Dir != "" {
+			clearPath(p)
+		}
+	case "moveTo":
+		p.follow = false
+		h.startPathTo(p, m.Tx, m.Ty)
 	case "attack":
 		if p.atkCool <= 0 {
 			h.doSlash(p)
@@ -386,7 +433,7 @@ func (h *Hub) applyIntent(p *Player, m inMsg) {
 	case "takeLoot":
 		h.pickupAt(p, m.Tx, m.Ty)
 	case "takeCorpse":
-		h.takeCorpse(p, m.Tx, m.Ty)
+		h.takeCorpse(p, m.Tx, m.Ty, m.Id)
 	case "spendAttr":
 		spendAttr(p, m.Key)
 	case "assignSkill":

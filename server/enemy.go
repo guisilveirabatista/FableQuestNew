@@ -67,6 +67,9 @@ func nearestPlayer(players []*Player, tx, ty int) (*Player, int) {
 	var best *Player
 	bestD := 1 << 30
 	for _, p := range players {
+		if p.dead {
+			continue
+		}
 		d := abs(p.tx-tx) + abs(p.ty-ty)
 		if d < bestD {
 			bestD = d
@@ -92,6 +95,9 @@ func (h *Hub) spawnEnemy(mapID string, players []*Player) {
 		}
 		tooClose := false
 		for _, p := range players {
+			if p.dead {
+				continue
+			}
 			if abs(x-p.tx)+abs(y-p.ty) < 5 {
 				tooClose = true
 				break

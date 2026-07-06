@@ -7,6 +7,7 @@ package main
 // Loot drops and corpses arrive in 2d; skills/projectiles in 2c.
 
 import (
+	"fmt"
 	"math"
 	"math/rand"
 )
@@ -184,6 +185,7 @@ func (h *Hub) killEnemy(p *Player, en *enemy) {
 	p.kills++
 	p.exp += k.exp
 	p.gold += k.gold
+	p.logMsg(fmt.Sprintf("Defeated %s: +%d EXP, +%d gold", k.name, k.exp, k.gold))
 	if rand.Float64() < 0.25 { // loot: autoloot pockets it, else it falls where it died
 		id := "bread"
 		if rand.Float64() >= 0.7 {
@@ -191,6 +193,7 @@ func (h *Hub) killEnemy(p *Player, en *enemy) {
 		}
 		if p.autoloot {
 			addItem(p, id, 1)
+			p.logMsg(fmt.Sprintf("Looted %s x1", itemName(id)))
 		} else {
 			h.dropFloor(p.mapID, id, 1, en.tx, en.ty)
 		}
@@ -202,12 +205,16 @@ func (h *Hub) killEnemy(p *Player, en *enemy) {
 		recalcMax(p)
 		p.hp = float64(p.maxhp)
 		p.mp = float64(p.maxmp)
+		p.logMsg(fmt.Sprintf("LEVEL UP! Now Lv.%d  (+3 attribute points)", p.lv))
 	}
 }
 
 // ---- enemy -> player -------------------------------------------------------
 
 func (h *Hub) attackHero(en *enemy, p *Player) {
+	if p.dead {
+		return
+	}
 	en.lunge = 0.22
 	en.wait = 0.8 + rand.Float64()*0.4
 	if p.iframes > 0 {
@@ -228,15 +235,31 @@ func (h *Hub) attackHero(en *enemy, p *Player) {
 	p.hp -= float64(dmg)
 	p.iframes = 1
 	if p.hp <= 0 {
-		h.playerDie(p)
+		h.playerDie(p, enemyKinds[en.kind].name)
 	}
 }
 
-// no game-over: your pack stays where you fell (a corpse) and you wake at the
-// plaza with full HP and your gear — but your backpack stays with the body.
-func (h *Hub) playerDie(p *Player) {
+// Death leaves your pack where you fell and waits for an explicit respawn.
+func (h *Hub) playerDie(p *Player, cause string) {
+	if p.dead {
+		return
+	}
 	h.dropCorpse(p.mapID, p.tx, p.ty, p.bag)
 	p.bag = map[string]int{}
+	p.moving = false
+	p.hp = 0
+	p.dead = true
+	p.deathCause = cause
+	p.moveDir = ""
+	clearPath(p)
+	p.lockID = 0
+	p.follow = false
+}
+
+func (h *Hub) respawnPlayer(p *Player) {
+	if !p.dead {
+		return
+	}
 	p.mapID = spawn.mapID
 	p.tx, p.ty = spawn.tx, spawn.ty
 	p.px, p.py = float64(p.tx*TS), float64(p.ty*TS)
@@ -245,6 +268,10 @@ func (h *Hub) playerDie(p *Player) {
 	p.mp = float64(p.maxmp)
 	p.dir = "down"
 	p.iframes = 2
+	p.dead = false
+	p.deathCause = ""
+	p.moveDir = ""
+	clearPath(p)
 	p.lockID = 0
 	p.follow = false
 }

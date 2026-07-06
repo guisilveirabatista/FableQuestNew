@@ -12,6 +12,15 @@ func slimeAt(id, tx, ty int) *enemy {
 	return &enemy{id: id, kind: "slime", tx: tx, ty: ty, px: float64(tx * TS), py: float64(ty * TS), dir: "left", anim: 1, hp: 10, maxhp: 10, hurtT: 9}
 }
 
+func hasLog(logs []string, want string) bool {
+	for _, got := range logs {
+		if got == want {
+			return true
+		}
+	}
+	return false
+}
+
 func TestSlashKillsAdjacentEnemy(t *testing.T) {
 	h := newHub()
 	p := heroAt("field", 15, 10)
@@ -25,6 +34,9 @@ func TestSlashKillsAdjacentEnemy(t *testing.T) {
 	}
 	if p.kills != 1 || p.gold != 6 || p.exp != 4 {
 		t.Fatalf("kill rewards wrong: kills=%d gold=%d exp=%d", p.kills, p.gold, p.exp)
+	}
+	if !hasLog(p.log, "Defeated Slime: +4 EXP, +6 gold") {
+		t.Fatalf("kill should log rewards, got %#v", p.log)
 	}
 	if p.atkCool <= 0 {
 		t.Fatal("slash should have put attack on cooldown")
@@ -70,9 +82,12 @@ func TestLevelUp(t *testing.T) {
 	if int(p.hp) != p.maxhp {
 		t.Fatalf("level-up should have fully healed (hp %v / %d)", p.hp, p.maxhp)
 	}
+	if !hasLog(p.log, "LEVEL UP! Now Lv.2  (+3 attribute points)") {
+		t.Fatalf("level-up should log, got %#v", p.log)
+	}
 }
 
-func TestDeathRespawnsInCity(t *testing.T) {
+func TestDeathWaitsForRespawn(t *testing.T) {
 	h := newHub()
 	p := heroAt("field", 15, 10)
 	p.attr.Agi, p.attr.Luck = 0, 0 // dodge 0% so the hit lands
@@ -81,11 +96,18 @@ func TestDeathRespawnsInCity(t *testing.T) {
 	p.iframes = 0
 	en := slimeAt(1, 16, 10)
 	h.attackHero(en, p)
-	if p.mapID != "city" || p.tx != spawn.tx || p.ty != spawn.ty {
-		t.Fatalf("death should respawn in the city plaza, got %s (%d,%d)", p.mapID, p.tx, p.ty)
+	if !p.dead || p.deathCause != "Slime" {
+		t.Fatalf("death should mark the player dead with cause, dead=%v cause=%q", p.dead, p.deathCause)
 	}
-	if int(p.hp) != p.maxhp {
-		t.Fatalf("should respawn at full HP, got %v", p.hp)
+	if p.mapID != "field" || p.tx != 15 || p.ty != 10 || p.hp != 0 {
+		t.Fatalf("death should leave the player at the fall site at 0 HP, got %s (%d,%d) hp=%v", p.mapID, p.tx, p.ty, p.hp)
+	}
+	h.applyIntent(p, inMsg{T: "respawn"})
+	if p.dead || p.mapID != "city" || p.tx != spawn.tx || p.ty != spawn.ty {
+		t.Fatalf("respawn intent should move to city plaza alive, dead=%v at %s (%d,%d)", p.dead, p.mapID, p.tx, p.ty)
+	}
+	if int(p.hp) != p.maxhp || p.deathCause != "" {
+		t.Fatalf("respawn should restore HP and clear cause, hp=%v cause=%q", p.hp, p.deathCause)
 	}
 }
 

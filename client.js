@@ -26,7 +26,7 @@ function camPos() { // camera centered on the hero, clamped to the map
 
 // ---------------------------------------------------------------- assets
 const IMAGES = ['chipset', 'hero', 'npc', 'custom', 'knight', 'system', 'title',
-  'monsters', 'slash', 'flame', 'punch',
+  'monsters', 'slash', 'flame', 'punch', 'skeleton',
   'i_potion', 'i_bread', 'i_meat', 'i_sword1', 'i_sword2', 'i_sword3',
   'i_hat', 'i_helm', 'i_shield', 'i_armor', 'i_legs', 'i_boots', 'i_ring', 'i_amulet'];
 const img = {};
@@ -138,6 +138,31 @@ function text(str, x, y, color = '#fff') {
   ctx.fillStyle = color;
   ctx.fillText(str, x, y);
 }
+function textWidth(str) {
+  ctx.font = 'bold 8px "Courier New", monospace';
+  return ctx.measureText(str).width;
+}
+function drawMeter(x, y, w, h, cur, max, fill = '#d84242') {
+  const pct = max > 0 ? Math.max(0, Math.min(1, cur / max)) : 0;
+  ctx.fillStyle = '#111923';
+  ctx.fillRect(x, y, w, h);
+  ctx.fillStyle = '#23303b';
+  ctx.fillRect(x + 1, y + 1, w - 2, h - 2);
+  ctx.fillStyle = fill;
+  ctx.fillRect(x + 1, y + 1, Math.round((w - 2) * pct), h - 2);
+  ctx.strokeStyle = '#9fb4c8';
+  ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+}
+function hpColor(cur, max) {
+  const pct = max > 0 ? cur / max : 0;
+  if (pct <= 0) return '#7b8791';
+  if (pct < 0.3) return '#f76';
+  if (pct < 0.65) return '#ffe080';
+  return '#69d36d';
+}
+function heroDisplayName() {
+  return (game.hero && game.hero.name) || (game.net && game.net.id) || 'Hero';
+}
 
 window.FQ = game; // console/test handle
 
@@ -157,6 +182,7 @@ function saveGame() {
     hero: game.hero, won: game.won, steps: game.steps,
     mapId: game.mapId, floor: game.floor, autoloot: game.autoloot,
     corpses: game.corpses, invOpen: game.invOpen, logOpen: game.logOpen,
+    minimapOpen: game.minimapOpen,
   }));
 }
 function loadGame() {
@@ -174,8 +200,11 @@ function loadGame() {
   game.autoloot = d.autoloot !== false;
   game.invOpen = d.invOpen !== false;
   game.logOpen = d.logOpen !== false;
+  game.mapOpen = false;
+  game.minimapOpen = d.minimapOpen === true;
   game.shop = null;
   const h = game.hero;
+  if (!h.name) h.name = 'Hero';
   // pre-64x40 saves may sit out of bounds on the new maps
   if (h.tx >= MW || h.ty >= MH || cur().blocked.has(h.tx + ',' + h.ty)) {
     game.mapId = SPAWN.map; h.tx = SPAWN.tx; h.ty = SPAWN.ty;
@@ -216,6 +245,99 @@ const GROUND_T = {
   G: [304, 48], D: [352, 48], W: [0, 64], P: [192, 80],
   X: [224, 0], R: [224, 32], U: [224, 48], O: [208, 32],
 };
+const MAP_COLOR = {
+  G: '#376f45', D: '#a9844d', W: '#2e6f9f', P: '#767f89',
+  X: '#3e4d59', R: '#78484d', U: '#a87957', O: '#4a332a',
+};
+const MAP_NAME = { field: 'Field', city: 'City' };
+const NPC_NAME = {
+  elder: 'Elder',
+  girl: 'Girl',
+  pixel: 'Pixel',
+  knight: 'Knight',
+  smith: 'Blacksmith',
+  grocer: 'Grocer',
+  kid: 'Kid',
+  guard: 'Guard',
+};
+function npcName(n) { return NPC_NAME[n.id] || n.id; }
+function itemLabel(f) {
+  const name = ITEMS[f.id] ? ITEMS[f.id].name : f.id;
+  return f.n > 1 ? `${name} x${f.n}` : name;
+}
+function corpseLabel(c) { return c.decayed ? 'Decayed body' : 'Dead body'; }
+function mapName(id) { return MAP_NAME[id] || id; }
+function hudHeight() { return overloaded() ? 58 : 47; }
+function drawMapDot(mx, my, cell, tx, ty, color, r) {
+  const x = mx + (tx + 0.5) * cell, y = my + (ty + 0.5) * cell;
+  ctx.fillStyle = '#09131f';
+  ctx.beginPath(); ctx.arc(x, y, r + 1, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = color;
+  ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+}
+function drawHeroMapDot(mx, my, cell) {
+  const h = game.hero, x = mx + (h.px / TS + 0.5) * cell, y = my + (h.py / TS + 0.5) * cell;
+  const r = Math.max(2, Math.min(6, cell * 0.48));
+  ctx.fillStyle = '#09131f';
+  ctx.beginPath(); ctx.arc(x, y, r + 1.5, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#ffe080';
+  ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+  const d = DIRV[h.dir] || DIRV.down;
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(Math.round(x + d[0] * r) - 1, Math.round(y + d[1] * r) - 1, 2, 2);
+}
+function drawMapViewRect(mx, my, cell) {
+  const cam = camPos();
+  ctx.strokeStyle = 'rgba(255,255,255,.35)';
+  ctx.strokeRect(mx + cam.x / TS * cell + 0.5, my + cam.y / TS * cell + 0.5,
+    W / TS * cell, H / TS * cell);
+}
+function drawMapRaster(mapId, mx, my, cell, opts = {}) {
+  const m = MAPS[mapId];
+  if (!m) return;
+  ctx.fillStyle = '#07111a';
+  ctx.fillRect(mx - 1, my - 1, MW * cell + 2, MH * cell + 2);
+  for (let y = 0; y < MH; y++) for (let x = 0; x < MW; x++) {
+    ctx.fillStyle = MAP_COLOR[m.ground[y][x]] || '#444';
+    ctx.fillRect(mx + x * cell, my + y * cell, cell, cell);
+  }
+  ctx.fillStyle = '#1d4f32';
+  for (const [x, y] of m.trees) ctx.fillRect(mx + x * cell, my + (y - 1) * cell, cell * 2, cell * 2);
+  for (const [t, x, y] of m.props) {
+    ctx.fillStyle = t === 'well' ? '#6db7d9' : t === 'sign' ? '#d7aa58' : '#445462';
+    ctx.fillRect(mx + x * cell, my + y * cell, Math.max(1, cell), Math.max(1, cell));
+  }
+  ctx.fillStyle = '#9aa7b3';
+  for (const [, , , , x, y, solid] of m.deco) if (solid)
+    ctx.fillRect(mx + x * cell, my + y * cell, Math.max(1, cell), Math.max(1, cell));
+  for (const key of Object.keys(m.exits || {})) {
+    const [x, y] = key.split(',').map(Number);
+    ctx.fillStyle = '#ffe080';
+    ctx.fillRect(mx + x * cell, my + y * cell, Math.max(2, cell), Math.max(2, cell));
+  }
+  if (opts.viewport) drawMapViewRect(mx, my, cell);
+  if (opts.actors) {
+    const dot = Math.max(1.5, Math.min(3.5, cell * 0.28));
+    for (const c of game.corpses) if (c.map === mapId) drawMapDot(mx, my, cell, c.tx, c.ty, c.decayed ? '#9aa0a6' : '#c7cad0', dot);
+    for (const f of game.floor) if (f.map === mapId) drawMapDot(mx, my, cell, f.tx, f.ty, '#ffd75f', dot);
+    for (const n of npcs) if (n.map === mapId) drawMapDot(mx, my, cell, n.tx, n.ty, '#7fd7ff', dot);
+    for (const en of game.enemies) if (!en.dead && en.dying <= 0) drawMapDot(mx, my, cell, en.tx, en.ty, '#f76', dot);
+    if (game.players) for (const p of game.players) drawMapDot(mx, my, cell, p.px / TS, p.py / TS, p.dead ? '#778899' : '#9cf', dot);
+    drawHeroMapDot(mx, my, cell);
+  }
+}
+function mapWindowLayout() {
+  const cell = Math.max(2, Math.floor(Math.min(Math.max(120, W - 88) / MW, Math.max(80, H - 114) / MH)));
+  const mapW = MW * cell, mapH = MH * cell;
+  const w = mapW + 40, h = mapH + 68;
+  const x = Math.floor((W - w) / 2), y = Math.floor((H - h) / 2);
+  return { x, y, w, h, mx: x + 20, my: y + 36, cell, mapW, mapH };
+}
+function minimapLayout() {
+  const cell = 2, pad = 5;
+  const y = 4 + hudHeight() + 5;
+  return { x: 4, y, w: MW * cell + pad * 2, h: MH * cell + pad * 2, mx: 4 + pad, my: y + pad, cell };
+}
 const BODY_GRID = [ // keyboard navigation layout (rows of the paper doll)
   [null, 'head', null],
   ['main', 'torso', 'off'],
@@ -287,43 +409,26 @@ function drawCorpseWin() {
   text('Enter: take all', CORPSE_WIN.x + 10, CORPSE_WIN.y + CORPSE_WIN.h - 14, '#9cf');
 }
 
-// what item (if any) the mouse is hovering in the panel
-function panelHoverId() {
-  if (!game.invOpen || game.invDrag) return null;
-  const bi = bagCellAt(mouse.x, mouse.y);
-  if (bi >= 0) return bagIds()[bi];
-  const bs = bodySlotAt(mouse.x, mouse.y);
-  if (bs && game.hero.equip[bs]) return game.hero.equip[bs];
-  return null;
-}
-
 // mouse interactions on the live panel: click selects, double-click
 // uses/equips/unequips, drag moves gear (drag out of the panel to drop/unequip)
 function updateInvPanel() {
   const h = game.hero, ids = bagIds();
   game.invCursor = Math.min(game.invCursor || 0, Math.max(0, ids.length - 1));
   if (!game.invSlot) game.invSlot = 'torso';
-  // the tooltip's [?] button opens the item details popup and eats the click
-  if (game.tipBtn) {
-    const b = game.tipBtn;
-    const hit = clicks.find(c => c.b === 0 &&
-      c.x >= b.x && c.x < b.x + b.w && c.y >= b.y && c.y < b.y + b.h);
-    if (hit) {
-      game.itemPopup = b.id;
-      sfx('Decision1');
-      clicks = clicks.filter(c => c !== hit);
-      return;
-    }
-  }
   for (const c of clicks) {
-    if (c.b !== 0 || !inPanel(c)) continue;
+    if (!inPanel(c)) continue;
     const bi = bagCellAt(c.x, c.y), bs = bodySlotAt(c.x, c.y);
-    if (bi >= 0) {
+    if (c.b === 2 && bi >= 0) {
+      game.invFocus = 'bag';
+      game.invCursor = bi;
+      game.itemPopup = ids[bi];
+      sfx('Decision1');
+    } else if (c.b === 0 && bi >= 0) {
       game.invFocus = 'bag';
       game.invCursor = bi;
       if (c.dbl) pushIntent({ t: 'useItem', id: ids[bi] });
       else game.invDrag = { from: 'bag', id: ids[bi] };
-    } else if (bs) {
+    } else if (c.b === 0 && bs) {
       game.invFocus = 'body';
       game.invSlot = bs;
       if (c.dbl) pushIntent({ t: 'unequip', bslot: bs });
@@ -409,26 +514,6 @@ function drawInvPanel() {
   });
   if (!ids.length) text('Empty...', BAG_UI.x, BAG_UI.y + 4, '#999');
   text('I:hide E:keys Q:drop', BAG_WIN.x + 10, BAG_WIN.y + BAG_WIN.h - 14, '#9cf');
-
-  // hover tooltip: item name + a [?] button that opens the details popup
-  game.tipBtn = null;
-  const hovId = panelHoverId();
-  if (hovId) {
-    const it = ITEMS[hovId];
-    ctx.font = 'bold 8px "Courier New", monospace';
-    const tw = ctx.measureText(it.name).width + 26;
-    const tx = Math.max(4, Math.min(W - tw - 4, mouse.x - tw + 4));
-    const ty = Math.max(4, mouse.y - 22);
-    drawWindow(tx, ty, tw, 18);
-    text(it.name, tx + 6, ty + 5);
-    const bx = tx + tw - 15;
-    ctx.fillStyle = '#2a4a6a';
-    ctx.fillRect(bx, ty + 4, 11, 10);
-    ctx.strokeStyle = '#9cf';
-    ctx.strokeRect(bx + 0.5, ty + 4.5, 10, 9);
-    text('?', bx + 3, ty + 5, '#9cf');
-    game.tipBtn = { x: bx, y: ty + 4, w: 11, h: 10, id: hovId };
-  }
 
   if (game.invDrag) { // ghost icon rides the cursor
     ctx.globalAlpha = 0.85;
@@ -619,21 +704,233 @@ function drawPops() {
   }
 }
 
+function drawDeadHero(px, py, alpha = 0.85) {
+  ctx.save();
+  ctx.translate(px + 8, py + 8);
+  ctx.rotate(Math.PI / 2);
+  ctx.globalAlpha = alpha;
+  ctx.drawImage(img.hero, 24, 64, 24, 32, -12, -16, 24, 32);
+  ctx.globalAlpha = 1;
+  ctx.restore();
+}
+
+function deathButtons() {
+  const pw = 230, ph = 104;
+  const px = (W - pw) / 2, py = (H - ph) / 2;
+  return {
+    box: { x: px, y: py, w: pw, h: ph },
+    buttons: [
+      { id: 'respawn', label: 'Respawn', x: px + 20, y: py + 72, w: 86, h: 20 },
+      { id: 'disconnect', label: 'Disconnect', x: px + 124, y: py + 72, w: 86, h: 20 },
+    ],
+  };
+}
+
+function deathCauseText() {
+  const cause = game.death && game.death.cause ? game.death.cause : 'unknown forces';
+  return `You were killed by ${cause}.`;
+}
+
+function drawDeathPopup() {
+  const d = game.death;
+  if (!d) return;
+  const ui = deathButtons();
+  ctx.save();
+  ctx.fillStyle = 'rgba(0,0,0,.45)';
+  ctx.fillRect(0, 0, W, H);
+  ctx.restore();
+  drawWindow(ui.box.x, ui.box.y, ui.box.w, ui.box.h);
+  text('You died', ui.box.x + 94, ui.box.y + 14, '#f76');
+  wrapText(deathCauseText(), ui.box.x + 18, ui.box.y + 34, ui.box.w - 36);
+  ui.buttons.forEach((b, i) => {
+    drawWindow(b.x, b.y, b.w, b.h);
+    if ((d.cursor || 0) === i) drawCursor(b.x + 3, b.y + 3, b.w - 6, b.h - 6);
+    text(b.label, b.x + 14, b.y + 7, '#fff');
+  });
+}
+
+function deathAction(id) {
+  if (id === 'respawn') {
+    if (game.net) netSend(game.net, { t: 'respawn' });
+    else respawnHero();
+    sfx('Decision1');
+  } else {
+    sfx('Cancel1');
+    if (game.net) {
+      if (game.net.ws) game.net.ws.close();
+      location.href = location.pathname;
+    } else {
+      game.death = null;
+      game.scene = 'title';
+      game.titleCursor = 0;
+      syncMusic();
+    }
+  }
+}
+
+function updateDeathPopup() {
+  const d = game.death;
+  if (!d) return;
+  const ui = deathButtons();
+  for (const c of clicks) {
+    if (c.b !== 0) continue;
+    for (let i = 0; i < ui.buttons.length; i++) {
+      const b = ui.buttons[i];
+      if (hit(c, b.x, b.y, b.w, b.h)) {
+        d.cursor = i;
+        deathAction(b.id);
+        return;
+      }
+    }
+  }
+  const hov = ui.buttons.findIndex(b => hit(mouse, b.x, b.y, b.w, b.h));
+  if (hov >= 0) d.cursor = hov;
+  if (pressed(['ArrowLeft', 'ArrowRight', 'a', 'd'])) { d.cursor = (d.cursor || 0) ^ 1; sfx('Cursor1'); }
+  if (pressed(CONFIRM)) deathAction(ui.buttons[d.cursor || 0].id);
+}
+
+function hoverBlockedByUI() {
+  if (game.death || game.mapOpen || game.menu || game.shop || game.itemPopup || game.dialogue) return true;
+  if (game.invOpen && inPanel(mouse)) return true;
+  if (game.corpseOpen && inCorpseWin(mouse)) return true;
+  return false;
+}
+function spriteHit(wx, wy, px, py) {
+  return wx >= px - 4 && wx < px + 20 && wy >= py - 16 && wy < py + 16;
+}
+function tileHit(wx, wy, tx, ty, inset = 0) {
+  return wx >= tx * TS + inset && wx < (tx + 1) * TS - inset &&
+    wy >= ty * TS + inset && wy < (ty + 1) * TS - inset;
+}
+function hoverTarget() {
+  if (hoverBlockedByUI()) return null;
+  const cam = camPos();
+  const wx = mouse.x + cam.x, wy = mouse.y + cam.y;
+  const tx = Math.floor(wx / TS), ty = Math.floor(wy / TS);
+  const hits = [];
+  const add = (base, pri, t) => hits.push({ base, pri, ...t });
+
+  for (const f of game.floor) {
+    if (f.map === game.mapId && tileHit(wx, wy, f.tx, f.ty, 1))
+      add(f.ty * TS + 2, 1, {
+        name: itemLabel(f), hp: 1, maxhp: 1, hpColor: '#9fb4c8',
+        x: f.tx * TS + 8 - cam.x, y: f.ty * TS - cam.y, color: '#ffe080',
+      });
+  }
+  for (const c of game.corpses) {
+    if (c.map === game.mapId && tileHit(wx, wy, c.tx, c.ty))
+      add(c.ty * TS + 4, 2, {
+        name: corpseLabel(c), hp: 0, maxhp: 1, hpColor: c.decayed ? '#7b8791' : '#9aa0a6',
+        x: c.tx * TS + 8 - cam.x, y: c.ty * TS - cam.y, color: c.decayed ? '#b8c0c8' : '#f0d0d0',
+      });
+  }
+  for (const n of npcs) {
+    if (n.map === game.mapId && spriteHit(wx, wy, n.px, n.py))
+      add(n.py + TS, 3, {
+        name: npcName(n), hp: 1, maxhp: 1, hpColor: '#69d36d',
+        x: n.px + 8 - cam.x, y: n.py - 18 - cam.y, color: '#bde8ff',
+      });
+  }
+  for (const en of game.enemies) {
+    if (!en.dead && en.dying <= 0 && spriteHit(wx, wy, en.px, en.py))
+      add(en.py + TS, 4, {
+        name: ENEMIES[en.kind] ? ENEMIES[en.kind].name : en.kind,
+        hp: en.hp, maxhp: en.maxhp, hpColor: hpColor(en.hp, en.maxhp),
+        x: en.px + 8 - cam.x, y: en.py - 18 - cam.y, color: '#ffd0d0',
+      });
+  }
+  if (game.players) for (const p of game.players) {
+    if (spriteHit(wx, wy, p.px, p.py))
+      add(p.py + TS, 5, {
+        name: p.name || p.id || 'Player', hp: p.dead ? 0 : p.hp, maxhp: p.maxhp || 1,
+        hpColor: p.dead ? '#7b8791' : hpColor(p.hp, p.maxhp || 1),
+        x: p.px + 8 - cam.x, y: p.py - 18 - cam.y, color: '#d6e8ff',
+      });
+  }
+  const fs = floorAt(tx, ty);
+  if (fs.length && !hits.some(h => h.name === itemLabel(fs[0]))) {
+    const label = fs.map(itemLabel).slice(0, 2).join(', ') + (fs.length > 2 ? '...' : '');
+    add(ty * TS + 1, 0, {
+      name: label, hp: 1, maxhp: 1, hpColor: '#9fb4c8',
+      x: tx * TS + 8 - cam.x, y: ty * TS - cam.y, color: '#ffe080',
+    });
+  }
+  hits.sort((a, b) => a.base - b.base || a.pri - b.pri);
+  return hits[hits.length - 1] || null;
+}
+function drawHoverCard() {
+  const t = hoverTarget();
+  if (!t) return;
+  const hasHp = typeof t.hp === 'number' && typeof t.maxhp === 'number';
+  const w = Math.max(66, Math.ceil(textWidth(t.name)) + 18, hasHp ? 84 : 0);
+  const h = hasHp ? 32 : 20;
+  const x = Math.max(2, Math.min(W - w - 2, Math.round(t.x - w / 2)));
+  const y = Math.max(2, Math.min(H - h - 2, Math.round(t.y - h - 4)));
+  drawWindow(x, y, w, h);
+  text(t.name, x + 8, y + 6, t.color || '#fff');
+  if (hasHp) drawMeter(x + 8, y + 21, w - 16, 5, t.hp, t.maxhp, t.hpColor || hpColor(t.hp, t.maxhp));
+}
+
+function openMapWindow() {
+  game.mapOpen = true;
+  game.menu = null;
+  game.shop = null;
+  game.itemPopup = null;
+  game.invFocus = null;
+  game.invDrag = null;
+  game.lootDrag = null;
+  sfx('Decision1');
+}
+function closeMapWindow() {
+  game.mapOpen = false;
+  sfx('Cancel1');
+}
+function toggleMapWindow() {
+  if (game.mapOpen) closeMapWindow();
+  else openMapWindow();
+}
+function updateMapWindow() {
+  if (pressed(CANCEL) || pressed(CONFIRM)) {
+    closeMapWindow();
+    return;
+  }
+  const l = mapWindowLayout();
+  for (const c of clicks) if (c.b === 0 && !hit(c, l.x, l.y, l.w, l.h)) {
+    closeMapWindow();
+    return;
+  }
+}
+function drawWorldMapWindow() {
+  if (!game.mapOpen) return;
+  const h = game.hero, l = mapWindowLayout();
+  ctx.save();
+  ctx.fillStyle = 'rgba(0,0,0,.42)';
+  ctx.fillRect(0, 0, W, H);
+  ctx.restore();
+  drawWindow(l.x, l.y, l.w, l.h);
+  text(mapName(game.mapId), l.x + 18, l.y + 12, '#ffe080');
+  text(`${h.tx},${h.ty}`, l.x + l.w - 54, l.y + 12, '#bcd');
+  drawMapRaster(game.mapId, l.mx, l.my, l.cell, { actors: true, viewport: true });
+  ctx.strokeStyle = '#9fb4c8';
+  ctx.strokeRect(l.mx - 0.5, l.my - 0.5, l.mapW + 1, l.mapH + 1);
+}
+function drawMiniMap() {
+  if (!game.minimapOpen || game.mapOpen) return;
+  const l = minimapLayout();
+  drawWindow(l.x, l.y, l.w, l.h);
+  drawMapRaster(game.mapId, l.mx, l.my, l.cell, { actors: true, viewport: false });
+}
+
 // ---------------------------------------------------------------- game menu
-const ROOT_MENU = ['Inventory', 'Skills', 'Attribs', 'Status', 'Quest', 'Save', 'Load', 'Music', 'Autoloot', 'Log', 'To Title'];
+const ROOT_MENU = ['Inventory', 'Map', 'Mini Map', 'Skills', 'Attribs', 'Status', 'Quest', 'Music', 'Autoloot', 'Log', 'To Title'];
 function rootMenuSelect(sel) {
   const m = game.menu;
   if (sel === 'Inventory') { game.invOpen = !game.invOpen; game.menu = null; sfx('Decision1'); }
+  else if (sel === 'Map') openMapWindow();
+  else if (sel === 'Mini Map') { game.minimapOpen = !game.minimapOpen; sfx('Decision1'); }
   else if (sel === 'Skills') { m.mode = 'skills'; m.cursor2 = 0; m.assign = false; sfx('Decision1'); }
   else if (sel === 'Attribs') { m.mode = 'attribs'; m.cursor2 = 0; sfx('Decision1'); }
-  else if (sel === 'Status' || sel === 'Quest') { m.mode = sel.toLowerCase(); sfx('Decision1'); }
-  else if (sel === 'Save') {
-    if (game.net) { m.msg = 'Saved on the server'; m.msgT = 0; sfx('Buzzer1'); } // persistence is Phase 4
-    else { saveGame(); m.msg = 'Game saved!'; m.msgT = 0; sfx('Recovery1'); }
-  } else if (sel === 'Load') {
-    if (game.net) { m.msg = 'Not available online'; m.msgT = 0; sfx('Buzzer1'); }
-    else if (loadGame()) { m.msg = 'Game loaded!'; m.msgT = 0; sfx('Recovery1'); }
-    else { m.msg = 'No saved game.'; m.msgT = 0; sfx('Buzzer1'); }
+  else if (sel === 'Status' || sel === 'Quest') { m.mode = sel.toLowerCase(); sfx('Decision1'); 
   } else if (sel === 'Music') {
     MidiPlayer.setEnabled(!MidiPlayer.isEnabled());
     if (MidiPlayer.isEnabled()) syncMusic();
@@ -650,6 +947,11 @@ function rootMenuSelect(sel) {
   }
 }
 function hit(c, x, y, w, hgt) { return c.x >= x && c.x < x + w && c.y >= y && c.y < y + hgt; }
+function hoverRow(x, y, w, hgt, count, step = hgt) {
+  const i = Math.floor((mouse.y - y) / step);
+  return i >= 0 && i < count && mouse.x >= x && mouse.x < x + w &&
+    mouse.y >= y + i * step && mouse.y < y + i * step + hgt ? i : -1;
+}
 
 function updateMenu(dt) {
   const m = game.menu, h = game.hero;
@@ -661,6 +963,8 @@ function updateMenu(dt) {
   const mc = clicks.filter(c => c.b === 0); // left clicks route through the menu
   const LX = MRX - 200; // must match drawMenu
   if (m.mode === 'root') {
+    const hov = hoverRow(MRX + 6, 14, 100, 16, ROOT_MENU.length);
+    if (hov >= 0) m.cursor = hov;
     for (const c of mc) {
       let acted = false;
       for (let i = 0; i < ROOT_MENU.length; i++)
@@ -674,6 +978,8 @@ function updateMenu(dt) {
     if (pressed(CONFIRM)) rootMenuSelect(ROOT_MENU[m.cursor]);
   } else if (m.mode === 'skills') {
     const ids = Object.keys(SKILLS);
+    const hov = hoverRow(LX + 6, 14, 176, 16, ids.length);
+    if (hov >= 0) m.cursor2 = hov;
     for (const c of mc) {
       if (!hit(c, LX, 8, 188, ids.length * 16 + 64)) { m.mode = 'root'; sfx('Cancel1'); return; }
       for (let i = 0; i < ids.length; i++) // click a skill row: select it
@@ -690,6 +996,8 @@ function updateMenu(dt) {
     if (pressed(['ArrowDown', 's'])) { m.cursor2 = (m.cursor2 + 1) % ids.length; sfx('Cursor1'); }
     if (pressed(CONFIRM)) { m.assign = true; sfx('Decision1'); }
   } else if (m.mode === 'attribs') {
+    const hov = hoverRow(LX + 4, 27, 92, 15, ATTRS.length);
+    if (hov >= 0) m.cursor2 = hov;
     for (const c of mc) {
       if (!hit(c, LX, 8, 100, ATTRS.length * 15 + 34)) { m.mode = 'root'; sfx('Cancel1'); return; }
       for (let i = 0; i < ATTRS.length; i++)
@@ -716,6 +1024,7 @@ function drawMenu() {
     const label = s === 'Music' ? 'Music: ' + (MidiPlayer.isEnabled() ? 'On' : 'Off')
       : s === 'Autoloot' ? 'Autoloot: ' + (game.autoloot ? 'On' : 'Off')
       : s === 'Log' ? 'Log: ' + (game.logOpen ? 'On' : 'Off')
+      : s === 'Mini Map' ? 'Mini Map: ' + (game.minimapOpen ? 'On' : 'Off')
       : s === 'Inventory' ? 'Inventory: ' + (game.invOpen ? 'On' : 'Off') : s;
     text(label, MRX + 14, 18 + i * 16);
   });
@@ -825,13 +1134,17 @@ function drawMap() {
     drawables.push({
       base: c.ty * TS + 4, // under the living
       draw: () => {
-        ctx.save();
-        ctx.translate(c.tx * TS + 8, c.ty * TS + 8);
-        ctx.rotate(Math.PI / 2);
-        ctx.globalAlpha = 0.85;
-        ctx.drawImage(img.hero, 24, 64, 24, 32, -12, -16, 24, 32); // lying on his side
-        ctx.globalAlpha = 1;
-        ctx.restore();
+        if (c.decayed) {
+          ctx.save();
+          ctx.translate(c.tx * TS + 8, c.ty * TS + 8);
+          ctx.rotate(Math.PI / 2);
+          ctx.globalAlpha = 0.8;
+          ctx.drawImage(img.skeleton, -16, -10, 32, 20);
+          ctx.globalAlpha = 1;
+          ctx.restore();
+        } else {
+          drawDeadHero(c.tx * TS, c.ty * TS, 0.85);
+        }
       },
     });
   }
@@ -859,11 +1172,16 @@ function drawMap() {
   });
   if (game.players) for (const pl of game.players) drawables.push({ // netplay: other players
     base: pl.py + TS,
-    draw: () => drawChar(img.hero, 0, 0, pl.dir, pl.moving ? [0, 1, 2, 1][Math.floor(pl.anim) % 4] : 1, pl.px, pl.py),
+    draw: () => pl.dead ? drawDeadHero(pl.px, pl.py, 0.85) :
+      drawChar(img.hero, 0, 0, pl.dir, pl.moving ? [0, 1, 2, 1][Math.floor(pl.anim) % 4] : 1, pl.px, pl.py),
   });
   drawables.push({
     base: h.py + TS,
     draw: () => {
+      if (h.dead) {
+        if (!corpseAt(h.tx, h.ty)) drawDeadHero(h.px, h.py, 0.95);
+        return;
+      }
       const frame = [0, 1, 2, 1][Math.floor(h.anim) % 4];
       drawChar(img.hero, 0, 0, h.dir, frame, h.px, h.py);
       if (game.iframes > 0 && Math.floor(game.iframes * 12) % 2) // hurt: flash red
@@ -888,10 +1206,12 @@ function drawMap() {
   ctx.restore(); // end of the scrolled world; UI is screen-fixed below
 
   // HUD
-  drawWindow(4, 4, 126, overloaded() ? 45 : 34);
-  text(`HP ${Math.floor(h.hp)}/${h.maxhp}  Lv.${h.lv}`, 12, 10);
-  text(`MP ${Math.floor(h.mp)}/${h.maxmp}`, 12, 21);
-  if (overloaded()) text('OVERWEIGHT', 12, 32, '#f76');
+  drawWindow(4, 4, 136, hudHeight());
+  text(`${heroDisplayName()}  Lv.${h.lv}`, 12, 10, '#ffe080');
+  text(`HP ${Math.floor(h.hp)}/${h.maxhp}`, 12, 21);
+  drawMeter(12, 32, 112, 5, h.hp, h.maxhp, hpColor(h.hp, h.maxhp));
+  text(`MP ${Math.floor(h.mp)}/${h.maxmp}`, 12, 39, '#bcd');
+  if (overloaded()) text('OVERWEIGHT', 12, 50, '#f76');
   if (!game.dialogue) { // skill hotbar
     h.slots.forEach((id, i) => {
       const x = 4 + i * 21, y = H - 24;
@@ -900,6 +1220,8 @@ function drawMap() {
       if (id) text(SKILLS[id].name[0], x + 9, y + 9, h.mp >= SKILLS[id].mp ? '#fff' : '#999');
     });
   }
+  drawMiniMap();
+  drawHoverCard();
 
   if (game.invOpen) drawInvPanel();
   if (game.corpseOpen) drawCorpseWin();
@@ -925,6 +1247,8 @@ function drawMap() {
   if (game.menu) drawMenu();
   if (game.shop) drawShop();
   if (game.itemPopup) drawItemPopup();
+  if (game.mapOpen) drawWorldMapWindow();
+  if (game.death) drawDeathPopup();
 }
 // toggleable combat/reward log, docked above the skill hotbar (bottom-left)
 function drawLog() {
@@ -990,13 +1314,28 @@ function updateTitle() {
 // change to the *world* goes through pushIntent().
 function processInput(dt) {
   const h = game.hero;
+  if (game.death) {
+    pushIntent({ t: 'moveDir', dir: null });
+    updateDeathPopup();
+    return;
+  }
+  if (pressed(['m', 'M'])) {
+    pushIntent({ t: 'moveDir', dir: null });
+    toggleMapWindow();
+    return;
+  }
+  if (game.mapOpen) {
+    pushIntent({ t: 'moveDir', dir: null });
+    updateMapWindow();
+    return;
+  }
   // walk command: the held direction, unless a UI panel owns the keyboard
   const captured = game.shop || game.menu || game.dialogue || game.itemPopup || game.invFocus;
   pushIntent({ t: 'moveDir', dir: captured ? null : dirHeld() });
 
   // walked away from your remains: the loot window closes itself
   if (game.corpseOpen && (game.corpseOpen.map !== game.mapId ||
-    !nearHero(game.corpseOpen.tx, game.corpseOpen.ty))) game.corpseOpen = null;
+    game.corpseOpen.decayed || !nearHero(game.corpseOpen.tx, game.corpseOpen.ty))) game.corpseOpen = null;
 
   if (game.itemPopup) { // item details popup: any confirm/click closes
     if (pressed(CANCEL) || pressed(CONFIRM) || clicked(0)) { game.itemPopup = null; sfx('Cancel1'); }
@@ -1005,12 +1344,12 @@ function processInput(dt) {
   if (game.corpseOpen) { // corpse window: take loot; walking stays live
     const c = game.corpseOpen;
     if (pressed(CANCEL)) { game.corpseOpen = null; sfx('Cancel1'); return; }
-    if (pressed(CONFIRM)) { pushIntent({ t: 'takeCorpse', id: '*' }); queue = []; } // take everything
+    if (pressed(CONFIRM)) { pushIntent({ t: 'takeCorpse', tx: c.tx, ty: c.ty, id: '*' }); queue = []; } // take everything
     clicks = clicks.filter(cl => {
       if (cl.b !== 0 || !inCorpseWin(cl)) return true;
       const ids = Object.keys(c.items);
       const i = corpseCellAt(cl.x, cl.y);
-      if (cl.dbl && i >= 0 && i < ids.length) pushIntent({ t: 'takeCorpse', id: ids[i] });
+      if (cl.dbl && i >= 0 && i < ids.length) pushIntent({ t: 'takeCorpse', tx: c.tx, ty: c.ty, id: ids[i] });
       return false; // the window ate this click
     });
   }
@@ -1049,14 +1388,14 @@ function processInput(dt) {
     if (c.b === 2) { // right-click: open your corpse, else lock for attack (no follow)
       const wx = Math.floor((c.x + cam.x) / TS), wy = Math.floor((c.y + cam.y) / TS);
       const co = corpseAt(wx, wy);
-      if (co && nearHero(wx, wy)) { game.corpseOpen = co; sfx('Decision1'); }
+      if (co && !co.decayed && nearHero(wx, wy)) { game.corpseOpen = co; sfx('Decision1'); }
       else pushIntent({ t: 'lockAt', x: c.x + cam.x, y: c.y + cam.y });
     } else if (c.b === 0 && c.alt) { // Alt+click locks an enemy AND follows it
       pushIntent({ t: 'followAt', x: c.x + cam.x, y: c.y + cam.y });
     } else if (c.b === 0 && !game.invDrag) {
       const wx = Math.floor((c.x + cam.x) / TS), wy = Math.floor((c.y + cam.y) / TS);
       const co = corpseAt(wx, wy);
-      if (co && nearHero(wx, wy) && c.dbl) { game.corpseOpen = co; sfx('Decision1'); } // open your remains
+      if (co && !co.decayed && nearHero(wx, wy) && c.dbl) { game.corpseOpen = co; sfx('Decision1'); } // open your remains
       else if (floorAt(wx, wy).length && nearHero(wx, wy)) {
         // loot in reach: double-click pockets it, a press starts a drag
         if (c.dbl) pushIntent({ t: 'takeLoot', tx: wx, ty: wy });
@@ -1188,4 +1527,3 @@ Promise.all(IMAGES.map(n => new Promise((res, rej) => {
   ctx.fillStyle = '#fff';
   ctx.fillText('Failed to load assets: ' + e, 10, 20);
 });
-
