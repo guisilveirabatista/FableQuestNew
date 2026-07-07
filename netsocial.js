@@ -78,11 +78,12 @@ function chatPanelBox() {
 
 function drawChatPanel() {
   const b = chatPanelBox();
-  // only show the panel when there's something to see or you're typing
-  if (!game.chatInput && (!game.chat || game.chat.length === 0)) return;
   drawWindow(b.x, b.y, b.w, b.h);
   text('Chat', b.x + 8, b.y + 4, '#bcd');
   const lines = (game.chat || []).slice(-b.rows);
+  if (lines.length === 0 && !game.chatInput) { // empty: show how to use it
+    text('Press Enter to chat  ·  /help for commands', b.x + 8, b.y + 15, '#7f9fb8');
+  }
   lines.forEach((c, i) => {
     const y = b.y + 15 + i * b.lh;
     let s = c.text, col = CHAT_COLORS[c.scope] || '#fff';
