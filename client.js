@@ -49,14 +49,28 @@ const TREE = [288, 160, 32, 32]; // big tree, 2x2 tiles, base row at bottom
 // ---------------------------------------------------------------- input
 const held = {};
 let queue = [];
+let keyTap = new Set();
 const CONFIRM = ['Enter', ' ', 'z', 'Z'];
-const CANCEL = ['Escape', 'x', 'X'];
+const CANCEL = ['Escape'];
+var MENU_KEYS = ['x'];
+var MAP_KEYS = ['m'];
+var CHAT_TOGGLE_KEYS = ['c'];
+var WINDOW_SHORTCUTS = [
+  { keys: ['u'], menu: 'Skills' },
+  { keys: ['o'], menu: 'Attribs' },
+  { keys: ['p'], menu: 'Status' },
+  { keys: ['y'], menu: 'Quest' },
+];
 const KEY_DIR = { ArrowUp: 'up', w: 'up', ArrowDown: 'down', s: 'down',
   ArrowLeft: 'left', a: 'left', ArrowRight: 'right', d: 'right' };
 let dirOrder = []; // held direction keys, most-recently-pressed last
+function normKey(k) { return k && k.length === 1 ? k.toLowerCase() : k; }
 addEventListener('keydown', e => {
   if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' ', 'Tab'].includes(e.key)) e.preventDefault();
-  if (!held[e.key]) queue.push(e.key);
+  if (!held[e.key]) {
+    queue.push(e.key);
+    keyTap.add(normKey(e.key));
+  }
   held[e.key] = true;
   const d = KEY_DIR[e.key]; // newest direction takes over; releasing it falls back
   if (d && !dirOrder.includes(d)) dirOrder.push(d);
@@ -70,6 +84,7 @@ addEventListener('keyup', e => {
     dirOrder = dirOrder.filter(x => x !== d);
 });
 function pressed(keys) { return queue.some(k => keys.includes(k)); }
+function keyTapped(keys) { return keys.some(k => keyTap.has(normKey(k))); }
 
 // mouse: button 0 walks (click-to-move), button 2 locks a target.
 // In menus the same events drive the inventory: click, double-click, drag.
@@ -1314,6 +1329,42 @@ function logOut() {
   game.titleCursor = 0;
   syncMusic();
 }
+function clearMenuShortcutUi() {
+  game.mapOpen = false;
+  game.shop = null;
+  game.itemPopup = null;
+  game.invFocus = null;
+  game.invDrag = null;
+  game.lootDrag = null;
+}
+function openRootMenu(cursor = 0) {
+  clearMenuShortcutUi();
+  game.menu = { mode: 'root', cursor };
+  sfx('Decision1');
+}
+function openMenuSection(sel) {
+  clearMenuShortcutUi();
+  game.menu = { mode: 'root', cursor: Math.max(0, ROOT_MENU.indexOf(sel)) };
+  rootMenuSelect(sel);
+}
+function menuShortcutBlocked() {
+  return !!(game.death || game.shop || game.dialogue || game.itemPopup || game.corpseOpen || game.invFocus);
+}
+function handleWindowShortcuts() {
+  if (menuShortcutBlocked()) return false;
+  if (keyTapped(MENU_KEYS)) {
+    if (game.menu) { game.menu = null; sfx('Cancel1'); }
+    else openRootMenu();
+    return true;
+  }
+  for (const sc of WINDOW_SHORTCUTS) {
+    if (keyTapped(sc.keys)) {
+      openMenuSection(sc.menu);
+      return true;
+    }
+  }
+  return false;
+}
 function rootMenuSelect(sel) {
   const m = game.menu;
   if (sel === 'Inventory') { game.invOpen = !game.invOpen; game.menu = null; sfx('Decision1'); }
@@ -1813,7 +1864,11 @@ function processInput(dt) {
     updateDeathPopup();
     return;
   }
-  if (pressed(['m', 'M'])) {
+  if (handleWindowShortcuts()) {
+    pushIntent({ t: 'moveDir', dir: null });
+    return;
+  }
+  if (keyTapped(MAP_KEYS)) {
     pushIntent({ t: 'moveDir', dir: null });
     toggleMapWindow();
     return;
@@ -1909,8 +1964,6 @@ function processInput(dt) {
   if (game.lootDrag && !mouse.down) game.lootDrag = null;
   if (pressed(CANCEL)) {
     if (game.invFocus) { game.invFocus = null; sfx('Cancel1'); return; }
-    game.menu = { mode: 'root', cursor: 0 };
-    sfx('Decision1');
     return;
   }
   if (game.invFocus) { updateInvKeys(); return; } // arrows/Enter/Q work the panel
@@ -1987,6 +2040,7 @@ function loop(ts) {
     }
   }
   queue = [];
+  keyTap.clear();
   clicks = [];
   releases = [];
   wheelY = 0;

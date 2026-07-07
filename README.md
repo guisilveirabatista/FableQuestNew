@@ -22,7 +22,10 @@ Open `index.html` in a browser (double-click it, or `open index.html`).
 | Tab | Lock on to the nearest enemy (press again to cycle) |
 | I | Show/hide the inventory panel (body + backpack, docked on the right) |
 | E | Focus the inventory panel for keyboard use (cycles backpack → body → off) |
-| Esc / X | Open the game menu (Inventory, Skills, Attribs, Status, Quest, Save, Load, Music, Autoloot, Log, To Title) |
+| X | Open/close the game menu |
+| U / O / P / Y | Open Skills / Attribs / Status / Quest |
+| C | Show/hide the chat window in netplay |
+| Esc | Back/cancel the active window |
 
 While a target is **locked** (yellow marker) your sword strikes by itself when
 the enemy is in reach and fireballs home in on it, but the hero holds position.

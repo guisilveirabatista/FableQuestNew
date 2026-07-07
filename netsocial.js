@@ -19,11 +19,17 @@ function pushChatLine(line) {
 }
 
 function openChat(prefill) {
+  game.chatOpen = true;
   game.chatInput = { text: prefill || '' };
   queue = queue.filter(k => k !== 'Enter'); // don't leak the opening Enter into the field
   sfx('Cursor1');
 }
 function closeChat() { game.chatInput = null; }
+function toggleChatWindow() {
+  game.chatOpen = game.chatOpen === false;
+  if (!game.chatOpen) closeChat();
+  sfx(game.chatOpen ? 'Decision1' : 'Cancel1');
+}
 
 function sendChat() {
   const t = (game.chatInput.text || '').trim();
@@ -77,9 +83,10 @@ function chatPanelBox() {
 }
 
 function drawChatPanel() {
+  if (game.chatOpen === false && !game.chatInput) return;
   const b = chatPanelBox();
   drawWindow(b.x, b.y, b.w, b.h);
-  text('Chat', b.x + 8, b.y + 4, '#bcd');
+  text('Chat  C:hide', b.x + 8, b.y + 4, '#bcd');
   const lines = (game.chat || []).slice(-b.rows);
   if (lines.length === 0 && !game.chatInput) { // empty: show how to use it
     text('Press Enter to chat  ·  /help for commands', b.x + 8, b.y + 15, '#7f9fb8');

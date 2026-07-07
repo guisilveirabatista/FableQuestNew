@@ -23,7 +23,7 @@ function netStart(url) {
   game.scene = 'map';
   game.login = { user: '', pass: '', field: 'user', error: '', busy: false }; // login screen until welcome
   // social (Phase 6)
-  game.chat = []; game.chatInput = null; game.party = null; game.trade = null;
+  game.chat = []; game.chatOpen = true; game.chatInput = null; game.party = null; game.trade = null;
   game.socialPrompt = null; game.youPvp = false;
 
   const ws = new WebSocket(url);
@@ -244,7 +244,12 @@ function netFrame(frameDt) {
   } else if (game.trade) {
     updateTradeWindow(); // the trade window owns clicks while it's open
     uiCaptured = true;
-  } else if (pressed(['m', 'M'])) {
+  } else if (typeof toggleChatWindow === 'function' && keyTapped(CHAT_TOGGLE_KEYS)) {
+    toggleChatWindow();
+    uiCaptured = true;
+  } else if (handleWindowShortcuts()) {
+    uiCaptured = true;
+  } else if (keyTapped(MAP_KEYS)) {
     toggleMapWindow();
     uiCaptured = true;
   } else if (game.mapOpen) {
@@ -282,13 +287,11 @@ function netFrame(frameDt) {
       });
     }
     if (game.invOpen && !game.itemPopup) updateInvPanel(); // mouse drag/click -> item intents
-    if (!game.invOpen && !game.invFocus && !game.itemPopup && pressed(CANCEL)) {
-      game.menu = { mode: 'root', cursor: 0 }; sfx('Decision1'); // Esc opens the menu
-    }
   }
 
   // movement is blocked while a panel owns the keyboard
-  const captured = uiCaptured || hadBlockingUi || game.death || game.mapOpen || game.menu || game.shop || game.invFocus || game.itemPopup;
+  const captured = uiCaptured || hadBlockingUi || game.death || game.mapOpen || game.menu || game.shop ||
+    game.invFocus || game.itemPopup || game.chatInput || game.trade;
   const dir = captured ? '' : (dirHeld() || '');
   if (dir !== net.lastDir) {
     net.lastDir = dir;
@@ -297,7 +300,9 @@ function netFrame(frameDt) {
   }
 
   if (captured) {
-    if (game.invFocus) updateInvKeys(); // arrows/Enter/Q drive the focused panel
+    if (game.invFocus && keyTapped(MENU_KEYS)) { game.invFocus = null; openRootMenu(); }
+    else if (game.invFocus && pressed(CANCEL)) { game.invFocus = null; sfx('Cancel1'); }
+    else if (game.invFocus) updateInvKeys(); // arrows/Enter/Q drive the focused panel
   } else {
     updateSocialPrompt(); // Accept/Decline an incoming party invite or trade request
     if (pressed(['Enter'])) openChat(); // Enter opens chat (Space/Z still attack)
