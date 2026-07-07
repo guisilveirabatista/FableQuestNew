@@ -51,3 +51,17 @@ Agility, Inteligence, Vitality, Strength, Dexterity, Magic Power, Luck. Those at
 - Can you make the list of items be scrollable in the shops? Right now the list is so big that is pushing the labels under the buttons. The scroll should only be for the items, not the labels under it.
 
 - If I try to buy a bigger amount than what I can pay for, I should be warned that I don't have enough gold for that purchase.
+
+- I should be able to equip the weapon on either hand
+- When I'm next to an enemy attacking him and I have the "follow" mode activated, my character should turn his body to face the enemy, this is a nice detail to have.
+- We can remove the label with the player name from his head.
+- Remove the possibility to cast spells when not locked in an enemy.
+- There is a bug when I close the chat and I open it again, it show the logs. They should store messages together with logs and not confuse the windows.
+
+- If I have a sword equipped, the animation of hititng the enemy should be the slash from assets/slash.png. There are two different slash animations in this sprite sheet, each with 3 frames, use the first one. You can get how the animation is done by comparing to the punch animation.
+
+- I shouldn't be able to attack using the space on the keyboard. the melee attack already happens automatically when I'm next to an enemy and with lock in on them.
+
+- Backgroung music off by default.
+
+- Toggle logging with letter L

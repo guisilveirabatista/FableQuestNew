@@ -23,7 +23,7 @@ Open `index.html` in a browser (double-click it, or `open index.html`).
 | I | Show/hide the inventory panel (body + backpack, docked on the right) |
 | E | Focus the inventory panel for keyboard use (cycles backpack → body → off) |
 | X | Open/close the game menu |
-| U / O / P / Y | Open Skills / Attribs / Status / Quest |
+| P / Y | Open Status / Quest |
 | C | Show/hide the chat window in netplay |
 | Esc | Back/cancel the active window |
 

@@ -18,7 +18,7 @@ function netStart(url) {
   game.players = [];
   game.enemies = [];
   game.invOpen = false; // hidden by default; press I to open (bag comes from the server)
-  game.logOpen = false; // netplay routes reward messages into the chat feed instead
+  game.logOpen = false;
   game.menu = null;
   game.scene = 'map';
   game.login = { user: '', pass: '', field: 'user', error: '', busy: false }; // login screen until welcome
@@ -147,6 +147,7 @@ function onSnapshot(m) {
   net.prevHP = you.hp;
   h.hp = you.hp; h.maxhp = you.maxhp; h.mp = you.mp; h.maxmp = you.maxmp;
   h.lv = you.lv; h.exp = you.exp; h.gold = you.gold; h.kills = you.kills;
+  h.combatLogoutT = Math.max(0, you.combatLog || 0);
   h.dead = !!you.dead;
   if (h.dead) {
     if (!game.death || game.death.cause !== you.deathCause) {
@@ -161,7 +162,7 @@ function onSnapshot(m) {
   if (m.attr) h.attr = m.attr;  // character sheet (Attribs/Status screens)
   game.autoloot = !!m.autoloot;
   game.youPvp = !!you.pvp;
-  if (m.log) for (const s of m.log) pushChatLine({ scope: 'reward', text: s });
+  if (m.log) for (const s of m.log) logMsg(s);
   if (m.chat) for (const c of m.chat) { pushChatLine(c); if (c.scope !== 'reward' && c.scope !== 'system') sfx('Cursor1'); }
   // party / trade windows come straight from the server
   game.party = m.party || null;
@@ -305,23 +306,20 @@ function netFrame(frameDt) {
     else if (game.invFocus) updateInvKeys(); // arrows/Enter/Q drive the focused panel
   } else {
     updateSocialPrompt(); // Accept/Decline an incoming party invite or trade request
-    if (pressed(['Enter'])) openChat(); // Enter opens chat (Space/Z still attack)
-    if (pressed([' ', 'z', 'Z'])) { // talk to a shopkeeper if facing one, else swing
-      if (!netInteract()) {
-        netSend(net, { t: 'attack' });
-        game.slashFx = { t: 0, dir: h.dir, punch: true, dur: 0.24 };
-        sfx('Blow1');
-      }
-    }
+    if (pressed(['Enter'])) openChat();
+    if (pressed([' ', 'z', 'Z'])) netInteract();
     if (pressed(['Tab'])) netSend(net, { t: 'cycleLock' });
     if (pressed(['f', 'F'])) netSend(net, { t: 'toggleFollow' }); // toggle Follow on the lock
     for (let i = 0; i < 5; i++) if (pressed([String(i + 1)])) { // cast hotbar skill
+      const sk = h.slots && h.slots[i];
+      const skill = sk && SKILLS[sk];
+      if (!skill || h.mp < skill.mp || (sk !== 'heal' && !liveEnemyLock())) { sfx('Buzzer1'); continue; }
       netSend(net, { t: 'cast', slot: i });
-      const sk = h.slots && h.slots[i]; // optimistic local effect; damage is server-side
-      if (sk === 'spin') { game.slashFx = { t: 0, spin: true, dur: 0.3 }; sfx('Sword1'); }
-      else if (sk === 'heal') { game.healFx = 0.5; sfx('Recovery1'); }
-      else if (sk === 'fire') sfx('Flame1');
-      else if (sk === 'bolt') sfx('Thunder4');
+      // optimistic local effect; damage and MP spending remain server-side
+      if (sk === 'spin') { game.atkCool = 1.3 / stats().aspd; game.slashFx = { t: 0, spin: true, dur: 0.3 }; sfx('Sword1'); }
+      else if (sk === 'heal') { game.atkCool = 0.4; game.healFx = 0.5; sfx('Recovery1'); }
+      else if (sk === 'fire') { game.atkCool = 0.4; sfx('Flame1'); }
+      else if (sk === 'bolt') { game.atkCool = 0.5; sfx('Thunder4'); }
     }
     const cam = camPos();
     for (const c of clicks) {
@@ -371,6 +369,7 @@ function netFrame(frameDt) {
   let ticks = 0;
   while (net.acc >= FIXED && ticks < 5) { snapshotPrev(); stepHero(FIXED); net.acc -= FIXED; ticks++; }
   if (ticks === 5) net.acc = 0;
+  predictNetMeleeFx();
 
   // 3) ease remote players and enemies toward their snapshot positions
   const k = Math.min(1, frameDt * 14);
@@ -381,9 +380,12 @@ function netFrame(frameDt) {
   for (const p of game.pops) p.t += frameDt;
   game.pops = game.pops.filter(p => p.t < 0.8);
   game.iframes = Math.max(0, game.iframes - frameDt);
+  game.atkCool = Math.max(0, game.atkCool - frameDt);
   game.healFx = Math.max(0, game.healFx - frameDt);
+  h.combatLogoutT = Math.max(0, (h.combatLogoutT || 0) - frameDt);
   if (game.slashFx && (game.slashFx.t += frameDt) >= (game.slashFx.dur || 0.18)) game.slashFx = null;
   for (const e of game.enemies) { e.flash = Math.max(0, e.flash - frameDt); e.hurtT += frameDt; }
+  faceFollowTargetIfInReach();
 
   // 4) draw the world (hero interpolated by the leftover accumulator)
   const a = Math.max(0, Math.min(1, net.acc / FIXED));
@@ -391,6 +393,15 @@ function netFrame(frameDt) {
   drawMap();
   clearInterp();
   drawNetSocial(); // chat feed, party frames, name tags, trade window, prompts
+}
+
+function predictNetMeleeFx() {
+  const h = game.hero, en = game.lock;
+  if (!en || h.dead || game.death || game.atkCool > 0 || en.dead || en.dying > 0) return;
+  const dir = faceToward(en);
+  if (!slashReaches(dir, en)) return;
+  game.atkCool = 1.0 / stats().aspd;
+  beginMeleeFx(dir);
 }
 
 function netSend(net, obj) {
@@ -413,9 +424,4 @@ function drawNetOverlay() {
   const online = 1 + game.players.length;
   drawWindow(W / 2 - 70, 4, 140, 24);
   text(`ONLINE  ${net.id || '?'}  (${online} here)`, W / 2 - 60, 12, net.connected ? '#9f9' : '#f76');
-  // float each other player's id above their head
-  for (const p of game.players) {
-    const cam = camPos();
-    text(p.id, Math.round(p.px + 8 - cam.x - 4), Math.round(p.py - 18 - cam.y), '#9cf');
-  }
 }

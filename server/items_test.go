@@ -34,6 +34,20 @@ func TestTwoHandedKicksOutShield(t *testing.T) {
 	}
 }
 
+func TestOneHandedWeaponCanEquipOffHand(t *testing.T) {
+	p := heroAt("field", 15, 10)
+	p.bag["sword1"] = 2
+	if !equipTo(p, "sword1", "main") {
+		t.Fatal("should be able to equip a one-handed sword into the main hand")
+	}
+	if !equipTo(p, "sword1", "off") {
+		t.Fatal("should be able to equip a one-handed sword into the off hand")
+	}
+	if p.equip["main"] != "sword1" || p.equip["off"] != "sword1" {
+		t.Fatalf("expected swords in both hands, got main=%q off=%q", p.equip["main"], p.equip["off"])
+	}
+}
+
 func TestUseHeal(t *testing.T) {
 	p := heroAt("field", 15, 10)
 	p.hp = 5

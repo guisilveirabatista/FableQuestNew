@@ -251,18 +251,17 @@ function updateSocialPrompt() {
   });
 }
 
-// ---- name tags + PvP markers over heads --------------------------------------
+// ---- PvP markers over heads --------------------------------------------------
 
 function drawNameTags() {
   const cam = camPos();
-  const tag = (px, py, name, pvp, self) => {
+  const tag = (px, py, pvp) => {
     const sx = Math.round(px + 8 - cam.x), sy = Math.round(py - 14 - cam.y);
-    if (name) text(name, sx - Math.round(textWidth(name) / 2), sy, self ? '#ffe080' : '#bcd');
     if (pvp) text('⚔', sx - 3, sy - 9, '#f66');
   };
-  for (const pl of (game.players || [])) if (!pl.dead) tag(pl.px, pl.py, pl.name || pl.id, pl.pvp, false);
+  for (const pl of (game.players || [])) if (!pl.dead) tag(pl.px, pl.py, pl.pvp);
   const h = game.hero;
-  if (!h.dead) tag(h.px, h.py, game.net && game.net.id, game.youPvp, true);
+  if (!h.dead) tag(h.px, h.py, game.youPvp);
 }
 
 // ---- the one entry point called from netFrame after drawMap -----------------

@@ -47,6 +47,18 @@ func TestCastBoltNoTargetIsFree(t *testing.T) {
 	}
 }
 
+func TestCastSpellRequiresEnemyLock(t *testing.T) {
+	h := newHub()
+	p := heroAt("field", 15, 10)
+	en := slimeAt(1, 16, 10)
+	h.enemies["field"] = []*enemy{en}
+	mp0 := p.mp
+	h.castSlot(p, 3) // slot 3 = bolt
+	if p.mp != mp0 || en.hp != en.maxhp {
+		t.Fatalf("bolt without a lock should do nothing (mp %v -> %v, hp %d/%d)", mp0, p.mp, en.hp, en.maxhp)
+	}
+}
+
 func TestManaGating(t *testing.T) {
 	h := newHub()
 	p := heroAt("field", 15, 10)
@@ -71,6 +83,20 @@ func TestCastHeal(t *testing.T) {
 	}
 	if p.mp != mp0-skillMP["heal"] {
 		t.Fatalf("heal should cost %v MP (now %v)", skillMP["heal"], p.mp)
+	}
+}
+
+func TestCastHealAtFullHealthStillCostsMP(t *testing.T) {
+	h := newHub()
+	p := heroAt("field", 15, 10)
+	p.hp = float64(p.maxhp)
+	mp0 := p.mp
+	h.castSlot(p, 1) // slot 1 = heal
+	if p.hp != float64(p.maxhp) {
+		t.Fatalf("full-health heal should not over-heal (hp %v/%d)", p.hp, p.maxhp)
+	}
+	if p.mp != mp0-skillMP["heal"] {
+		t.Fatalf("full-health heal should still cost %v MP (had %v, now %v)", skillMP["heal"], mp0, p.mp)
 	}
 }
 

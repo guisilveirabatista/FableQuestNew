@@ -28,30 +28,35 @@ var errNoZone = errors.New("no zone owns the requested map")
 type Gateway struct {
 	zones map[string]string // map id -> zone TCP address
 
-	mu     sync.Mutex
-	online map[string]bool // one live session per account
+	mu          sync.Mutex
+	online      map[string]int // one live client session per account
+	nextSession int
 }
 
 func newGateway(zones map[string]string) *Gateway {
-	return &Gateway{zones: zones, online: map[string]bool{}}
+	return &Gateway{zones: zones, online: map[string]int{}}
 }
 
 func (gw *Gateway) zoneFor(mapID string) string { return gw.zones[mapID] }
 
 // tryOnline atomically claims a session for user, or reports it already taken.
-func (gw *Gateway) tryOnline(user string) bool {
+func (gw *Gateway) tryOnline(user string) (int, bool) {
 	gw.mu.Lock()
 	defer gw.mu.Unlock()
-	if gw.online[user] {
-		return false
+	if gw.online[user] != 0 {
+		return 0, false
 	}
-	gw.online[user] = true
-	return true
+	gw.nextSession++
+	token := gw.nextSession
+	gw.online[user] = token
+	return token, true
 }
 
-func (gw *Gateway) setOffline(user string) {
+func (gw *Gateway) setOffline(user string, token int) {
 	gw.mu.Lock()
-	delete(gw.online, user)
+	if gw.online[user] == token {
+		delete(gw.online, user)
+	}
 	gw.mu.Unlock()
 }
 
@@ -75,6 +80,7 @@ func (gw *Gateway) serveWS(w http.ResponseWriter, r *http.Request) {
 
 	var user string
 	var char *charState
+	var token int
 login:
 	for {
 		op, data, err := c.ReadMessage()
@@ -111,20 +117,21 @@ login:
 				loginErr("login failed")
 				continue
 			}
-			if !gw.tryOnline(m.User) {
+			tok, ok := gw.tryOnline(m.User)
+			if !ok {
 				loginErr("already logged in")
 				continue
 			}
-			user, char = m.User, ch
+			user, char, token = m.User, ch, tok
 			break login
 		}
 	}
-	defer gw.setOffline(user)
+	defer gw.setOffline(user, token)
 	if char == nil {
 		char = initialCharState()
 	}
 
-	s := &gwSession{gw: gw, user: user, client: c, char: char}
+	s := &gwSession{gw: gw, user: user, token: token, client: c, char: char}
 	if err := s.connect(char); err != nil { // dial the zone owning the starting map
 		log.Printf("gateway: connect %s: %v", user, err)
 		loginErr("world unavailable, try again")
@@ -145,6 +152,7 @@ login:
 type gwSession struct {
 	gw     *Gateway
 	user   string
+	token  int
 	client *wsConn
 
 	mu      sync.Mutex
@@ -295,7 +303,8 @@ func (s *gwSession) sendToZone(b []byte) {
 }
 
 // beginLeave (once) tells the current zone the client is gone so it emits a final
-// state snapshot and drops the player; zoneLoop persists it and then exits.
+// state snapshot once combat logout allows it. The account is released
+// immediately so a reconnect can reattach to the lingering zone character.
 func (s *gwSession) beginLeave() {
 	s.mu.Lock()
 	if s.closing {
@@ -305,6 +314,7 @@ func (s *gwSession) beginLeave() {
 	s.closing = true
 	link := s.link
 	s.mu.Unlock()
+	s.gw.setOffline(s.user, s.token)
 	if link != nil {
 		link.WriteJSON(ctrlMsg{T: "leave"})
 	}

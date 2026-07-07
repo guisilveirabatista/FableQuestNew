@@ -190,6 +190,7 @@ func (h *Hub) followDir(p *Player) string {
 	}
 	dx, dy := en.tx-p.tx, en.ty-p.ty
 	if abs(dx) <= 1 && abs(dy) <= 1 && !(dx != 0 && dy != 0) {
+		p.dir = faceToward(p, en)
 		return "" // orthogonally adjacent (or on top): in reach, stop
 	}
 	hd, vd := "left", "up"

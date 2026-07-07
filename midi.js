@@ -5,7 +5,7 @@
 
 const MidiPlayer = (() => {
   let ac = null, master = null, noise = null;
-  let song = null, timer = null, enabled = true;
+  let song = null, timer = null, enabled = false;
   let voices = [];
   const chan = [];
 

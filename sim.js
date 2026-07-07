@@ -101,6 +101,7 @@ function resetGame() {
   game.death = null;
   game.log = [];
   game.logOpen = true;
+  game.hero.combatLogoutT = 0;
 }
 // combat/reward log — shown in the toggleable bottom-left window
 function logMsg(str) {
@@ -286,7 +287,7 @@ function interact() { // returns true if something was there to talk to / read
   }
   if (cur().props.some(([t, x, y]) => t === 'sign' && x === fx && y === fy)) {
     sfx('Decision1');
-    say(['Monsters roam the grass! Swing your sword with SPACE, cast skills with 1-5.',
+    say(['Monsters roam the grass! Lock onto a foe and step into reach to swing automatically. Cast skills with 1-5.',
       'TAB or right-click locks on to a foe: in reach your sword strikes by itself, and fire seeks the mark!',
       'The path east leads to town — shops, safety, no monsters. Slay 5 and see the Elder by the well.']);
     return true;
@@ -301,8 +302,8 @@ function interact() { // returns true if something was there to talk to / read
 
 // ---------------------------------------------------------------- action combat
 // Enemies roam the grass in real time (charas from the RTP monster charset).
-// They chase the hero on sight; touching one hurts. CONFIRM slashes the faced
-// tile, FIRE lobs a fireball. The dirt path stays monster-free.
+// They chase the hero on sight; touching one hurts. Lock-on auto-melee slashes
+// in reach, FIRE lobs a fireball. The dirt path stays monster-free.
 const ENEMIES = {
   // flee: below this fraction of max HP the monster runs from you instead
   slime: { name: 'Slime', cx: 0, cy: 0, hp: 10, atk: 4, def: 1, exp: 4, gold: 6, speed: 30, wait: [0.5, 1.1], range: 4, flee: 0 },
@@ -535,19 +536,27 @@ function killEnemy(en) {
   }
 }
 
-function slash() {
+function equippedCuttingWeapon(h = game.hero) {
+  const eq = h.equip || {};
+  return ['main', 'off'].map(slot => eq[slot]).map(id => id && ITEMS[id]).find(it => it && it.cut);
+}
+function beginMeleeFx(dir = game.hero.dir) {
   const h = game.hero;
-  const wpn = h.equip.main && ITEMS[h.equip.main];
-  game.atkCool = 1.0 / stats().aspd; // ponderous at Lv.1 — Agility speeds it up
+  h.dir = dir || h.dir;
   // the slicing streak belongs to cutting weapons; bare fists (or anything
   // blunt) land an impact burst instead
-  if (wpn && wpn.cut) {
+  if (equippedCuttingWeapon(h)) {
     game.slashFx = { t: 0, dir: h.dir };
     sfx('Sword1');
   } else {
     game.slashFx = { t: 0, dir: h.dir, punch: true, dur: 0.24 };
     sfx('Blow1');
   }
+}
+function slash() {
+  const h = game.hero;
+  game.atkCool = 1.0 / stats().aspd; // ponderous at Lv.1 — Agility speeds it up
+  beginMeleeFx(h.dir);
   for (const en of game.enemies) {
     if (en.dying > 0 || en.dead) continue;
     if (slashReaches(h.dir, en)) meleeHit(en);
@@ -586,37 +595,41 @@ function castSlot(i) {
   const h = game.hero, id = h.slots[i];
   if (game.atkCool > 0) return;
   if (!id || h.mp < SKILLS[id].mp) { sfx('Buzzer1'); return; }
+  if (id !== 'heal' && !liveEnemyLock()) { sfx('Buzzer1'); return; }
   if (SKILLS[id].cast()) h.mp -= SKILLS[id].mp;
   else sfx('Buzzer1');
 }
 
+function liveEnemyLock() {
+  return game.lock && !game.lock.dead && game.lock.dying <= 0 ? game.lock : null;
+}
+
 function castFire() {
   const h = game.hero;
+  const t = liveEnemyLock();
+  if (!t) return false;
   game.atkCool = 0.4;
   sfx('Flame1');
-  let [dx, dy] = DIRV[h.dir];
-  if (game.lock) {
-    const m = Math.hypot(game.lock.px - h.px, game.lock.py - h.py) || 1;
-    dx = (game.lock.px - h.px) / m; dy = (game.lock.py - h.py) / m;
-  }
-  game.projectiles.push({ x: h.px + 8 + dx * 8, y: h.py + 8 + dy * 8, dx, dy, target: game.lock, dist: 0, t: 0 });
+  const m = Math.hypot(t.px - h.px, t.py - h.py) || 1;
+  const dx = (t.px - h.px) / m, dy = (t.py - h.py) / m;
+  game.projectiles.push({ x: h.px + 8 + dx * 8, y: h.py + 8 + dy * 8, dx, dy, target: t, dist: 0, t: 0 });
   return true;
 }
 
 function castHeal() {
   const h = game.hero;
-  if (h.hp >= h.maxhp) return false;
   const heal = Math.min(15, h.maxhp - Math.floor(h.hp));
   h.hp = Math.min(h.maxhp, h.hp + 15);
   game.atkCool = 0.4;
   game.healFx = 0.5;
   sfx('Recovery1');
-  addPop('+' + heal, h.px + 8, h.py - 14, '#9f9');
+  if (heal > 0) addPop('+' + heal, h.px + 8, h.py - 14, '#9f9');
   return true;
 }
 
 function castSpin() {
   const h = game.hero;
+  if (!liveEnemyLock()) return false;
   game.atkCool = 1.3 / stats().aspd;
   game.slashFx = { t: 0, spin: true, dur: 0.3 };
   sfx('Sword1');
@@ -629,16 +642,7 @@ function castSpin() {
 
 function castBolt() {
   const h = game.hero;
-  let t = game.lock;
-  if (!t || t.dead || t.dying > 0) { // no lock: nearest foe within 6 tiles
-    let bd = 6 * TS;
-    t = null;
-    for (const en of game.enemies) {
-      if (en.dead || en.dying > 0) continue;
-      const d = Math.hypot(en.px - h.px, en.py - h.py);
-      if (d < bd) { bd = d; t = en; }
-    }
-  }
+  const t = liveEnemyLock();
   if (!t) return false;
   game.atkCool = 0.5;
   game.bolts.push({ x: t.px + 8, y: t.py + 4, t: 0 });
@@ -696,14 +700,16 @@ const ITEMS = {
 // a two-handed weapon needs both arms, so it kicks out (and blocks) the shield.
 const BODY_SLOTS = ['head', 'main', 'torso', 'off', 'legs', 'acc1', 'boots', 'acc2'];
 function canPlace(id, slot) {
-  const want = ITEMS[id].slot;
+  const it = ITEMS[id], want = it && it.slot;
   if (!want) return false;
   if (want === 'acc') return slot === 'acc1' || slot === 'acc2';
+  if (want === 'main') return slot === 'main' || (!it.twoH && slot === 'off');
   return want === slot;
 }
 function slotFor(id) { // natural slot for keyboard/double-click equip
-  const want = ITEMS[id].slot;
+  const it = ITEMS[id], want = it && it.slot;
   if (want === 'acc') return !game.hero.equip.acc1 ? 'acc1' : 'acc2';
+  if (want === 'main' && !it.twoH && game.hero.equip.main) return 'off';
   return want;
 }
 function unequipSlot(slot) {
@@ -715,7 +721,10 @@ function unequipSlot(slot) {
 function equipTo(id, slot) {
   const h = game.hero;
   if (!canPlace(id, slot) || !(h.bag[id] > 0)) return false;
-  if (ITEMS[id].twoH) unequipSlot('off'); // both hands on the claymore
+  if (ITEMS[id].twoH) { // both hands on the claymore
+    unequipSlot('main');
+    unequipSlot('off');
+  }
   if (slot === 'off' && h.equip.main && ITEMS[h.equip.main].twoH) unequipSlot('main');
   unequipSlot(slot);
   h.bag[id]--;
@@ -895,9 +904,8 @@ function applyIntent(it) {
       game.moveDir = it.dir; if (it.dir) game.path = null; break;
     case 'moveTo':                                    // click-to-move (cancels follow)
       game.follow = false; startPathTo(it.tx, it.ty); break;
-    case 'confirm':                                   // talk/read, else swing
+    case 'confirm':                                   // talk/read only; melee is lock-on automatic
       if (interact()) game.path = null;
-      else if (game.atkCool <= 0) slash();
       break;
     case 'cast': castSlot(it.slot); break;
     case 'cycleLock': cycleLock(); break;
@@ -972,6 +980,7 @@ function advanceWorld(dt) {
   game.bolts.forEach(b => b.t += dt);
   game.bolts = game.bolts.filter(b => b.t < 0.25);
   if (game.lock && (game.lock.dead || game.lock.dying > 0)) { game.lock = null; game.follow = false; }
+  faceFollowTargetIfInReach();
   // locked on and in reach: the sword strikes by itself, menus or not
   if (game.lock && game.atkCool <= 0) {
     const dir = faceToward(game.lock);
@@ -979,6 +988,22 @@ function advanceWorld(dt) {
   }
 
   stepHero(dt);
+  faceFollowTargetIfInReach();
+}
+
+function liveFollowLock() {
+  return game.follow && game.lock && !game.lock.dead && game.lock.dying <= 0 ? game.lock : null;
+}
+function followLockInReach(en) {
+  const h = game.hero, dx = en.tx - h.tx, dy = en.ty - h.ty;
+  return Math.abs(dx) <= 1 && Math.abs(dy) <= 1 && !(dx !== 0 && dy !== 0);
+}
+function faceFollowTargetIfInReach() {
+  const h = game.hero, en = liveFollowLock();
+  if (!en || h.moving || !followLockInReach(en)) return false;
+  h.dir = faceToward(en);
+  h.anim = 1;
+  return true;
 }
 
 function updateCorpses(dt) {
@@ -1046,6 +1071,7 @@ function stepHero(dt) {
       // follow mode (F): keep walking after the locked target until in reach
       const en = game.lock;
       const dx = en.tx - h.tx, dy = en.ty - h.ty;
+      h.dir = faceToward(en);
       if (Math.max(Math.abs(dx), Math.abs(dy)) > 1 || (dx !== 0 && dy !== 0)) {
         const hd = dx > 0 ? 'right' : 'left', vd = dy > 0 ? 'down' : 'up';
         const dirs = Math.abs(dx) > Math.abs(dy) ? [hd, vd] : [vd, hd];

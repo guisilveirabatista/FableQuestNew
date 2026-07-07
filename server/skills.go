@@ -27,12 +27,17 @@ type bolt struct {
 }
 
 // castSlot fires the skill in hotbar slot i, spending MP only on success.
+// Heal counts as a success even at full HP, matching classic RPG behavior where
+// the spell is cast and paid for even if there is nothing to restore.
 func (h *Hub) castSlot(p *Player, i int) {
 	if i < 0 || i >= len(p.slots) {
 		return
 	}
 	id := p.slots[i]
 	if p.atkCool > 0 || id == "" || p.mp < skillMP[id] {
+		return
+	}
+	if id != "heal" && h.liveEnemyLock(p) == nil {
 		return
 	}
 	ok := false
@@ -51,35 +56,41 @@ func (h *Hub) castSlot(p *Player, i int) {
 	}
 }
 
-func (h *Hub) castFire(p *Player) bool {
-	p.atkCool = 0.4
-	d := dirVec[p.dir]
-	dx, dy := float64(d[0]), float64(d[1])
-	targetID := 0
-	if t := h.enemyByID(p.mapID, p.lockID); t != nil { // home in on the lock
-		m := math.Hypot(t.px-p.px, t.py-p.py)
-		if m == 0 {
-			m = 1
-		}
-		dx, dy = (t.px-p.px)/m, (t.py-p.py)/m
-		targetID = t.id
+func (h *Hub) liveEnemyLock(p *Player) *enemy {
+	en := h.enemyByID(p.mapID, p.lockID)
+	if en == nil || en.dead || en.dying > 0 {
+		return nil
 	}
+	return en
+}
+
+func (h *Hub) castFire(p *Player) bool {
+	t := h.liveEnemyLock(p)
+	if t == nil {
+		return false
+	}
+	p.atkCool = 0.4
+	m := math.Hypot(t.px-p.px, t.py-p.py)
+	if m == 0 {
+		m = 1
+	}
+	dx, dy := (t.px-p.px)/m, (t.py-p.py)/m
 	h.projectiles[p.mapID] = append(h.projectiles[p.mapID], &projectile{
-		ownerID: p.id, x: p.px + 8 + dx*8, y: p.py + 8 + dy*8, dx: dx, dy: dy, targetID: targetID, boom: -1,
+		ownerID: p.id, x: p.px + 8 + dx*8, y: p.py + 8 + dy*8, dx: dx, dy: dy, targetID: t.id, boom: -1,
 	})
 	return true
 }
 
 func (h *Hub) castHeal(p *Player) bool {
-	if p.hp >= float64(p.maxhp) {
-		return false
-	}
 	p.hp = math.Min(float64(p.maxhp), p.hp+15)
 	p.atkCool = 0.4
 	return true
 }
 
 func (h *Hub) castSpin(p *Player) bool {
+	if h.liveEnemyLock(p) == nil {
+		return false
+	}
 	p.atkCool = 1.3 / statsOf(p).aspd
 	for _, en := range h.enemies[p.mapID] {
 		if en.dying > 0 || en.dead {
@@ -94,19 +105,7 @@ func (h *Hub) castSpin(p *Player) bool {
 }
 
 func (h *Hub) castBolt(p *Player) bool {
-	target := h.enemyByID(p.mapID, p.lockID)
-	if target == nil || target.dead || target.dying > 0 { // no lock: nearest within 6 tiles
-		best := float64(6 * TS)
-		target = nil
-		for _, en := range h.enemies[p.mapID] {
-			if en.dead || en.dying > 0 {
-				continue
-			}
-			if d := math.Hypot(en.px-p.px, en.py-p.py); d < best {
-				best, target = d, en
-			}
-		}
-	}
+	target := h.liveEnemyLock(p)
 	if target == nil {
 		return false
 	}

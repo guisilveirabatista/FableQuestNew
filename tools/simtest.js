@@ -43,10 +43,25 @@ tick(80, () => ({ t: 'moveDir', dir: 'right' }));
 check(game.hero.tx > startX, `hero walked right via moveDir intents (${startX} -> ${game.hero.tx})`);
 pushIntent({ t: 'moveDir', dir: null }); stepWorld(FIXED); // stop
 
-// ---- combat resolves server-side: face a slime and swing. Max out Dexterity
-// so precision is 100% (no RNG misses — a miss is legitimate sim behavior, just
-// not what we're asserting here), and give a few swings in case of a crit-less
-// low roll leaving it barely alive.
+// ---- confirm/talk no longer performs a manual melee attack. Swinging is now
+// automatic only while locked onto a target in reach.
+resetGame();
+game.scene = 'map';
+switchMap('field', 9, 12);
+game.hero.attr.dex = 20;
+game.hero.dir = 'right';
+game.enemies = [{
+  kind: 'slime', tx: 10, ty: 12, px: 10 * 16, py: 12 * 16, dir: 'left',
+  anim: 1, moving: false, wait: 99, hp: 10, maxhp: 10,
+  flash: 0, dying: 0, stun: 0, hurtT: 9, lunge: 0,
+}];
+pushIntent({ t: 'confirm' }); stepWorld(FIXED);
+check(game.enemies[0].hp === 10 && game.enemies[0].dying <= 0, 'confirm key does not perform a manual melee attack');
+
+// ---- combat resolves server-side: lock a slime and let auto-melee swing. Max
+// out Dexterity so precision is 100% (no RNG misses — a miss is legitimate sim
+// behavior, just not what we're asserting here), and give a few swings in case
+// of a crit-less low roll leaving it barely alive.
 resetGame();
 game.scene = 'map';
 switchMap('field', 9, 12);
@@ -61,9 +76,26 @@ const target = game.enemies[0];
 const hpBefore = target.hp;
 for (let i = 0; i < 4 && target.hp === hpBefore && target.dying <= 0; i++) {
   game.atkCool = 0;                   // ready the next swing
-  pushIntent({ t: 'confirm' }); stepWorld(FIXED);
+  game.lock = target;
+  stepWorld(FIXED);
 }
-check(target.hp < hpBefore || target.dying > 0, `sword hit resolved in the sim (${hpBefore} -> ${target.hp})`);
+check(target.hp < hpBefore || target.dying > 0, `auto-melee hit resolved in the sim (${hpBefore} -> ${target.hp})`);
+
+// ---- equipped swords use the slash sprite effect, including one-handed swords
+// placed in the off hand.
+resetGame();
+game.scene = 'map';
+switchMap('field', 9, 12);
+game.hero.attr.dex = 20;
+game.hero.equip.off = 'sword1';
+game.enemies = [{
+  kind: 'slime', tx: 10, ty: 12, px: 10 * 16, py: 12 * 16, dir: 'left',
+  anim: 1, moving: false, wait: 99, hp: 999, maxhp: 999,
+  flash: 0, dying: 0, stun: 0, hurtT: 9, lunge: 0,
+}];
+game.lock = game.enemies[0];
+stepWorld(FIXED);
+check(game.slashFx && !game.slashFx.punch, 'equipped sword uses the slash sprite effect');
 
 // ---- inventory rules run server-side: buying costs gold, equipping consumes it
 resetGame();

@@ -19,7 +19,10 @@ import (
 var spawnSpread bool // dev: scatter players across the field (load-testing AoI)
 var store Store      // persistence backend (file or Postgres)
 
-const tickHz = 20
+const (
+	tickHz              = 20
+	combatLogoutSeconds = 120.0
+)
 
 func clampInt(v, lo, hi int) int {
 	if v < lo {
@@ -86,6 +89,7 @@ type playerView struct {
 	Dead       bool     `json:"dead"`
 	DeathCause string   `json:"deathCause"`
 	Pvp        bool     `json:"pvp"`
+	CombatLog  float64  `json:"combatLog"`
 }
 type projView struct {
 	X    float64 `json:"x"`
@@ -201,6 +205,8 @@ type Player struct {
 	deathCause       string
 	aoiW, aoiH       int   // area-of-interest half-extents in tiles (from the client viewport)
 	pendingHandoff   *exit // zone mode: stepped onto an exit to a map this zone doesn't own
+	combatLogoutT    float64
+	logoutPending    bool // gateway client left; keep simulating until combat logout allows removal
 
 	// social (Phase 6)
 	pvp         bool // opted in to player-vs-player
@@ -214,7 +220,7 @@ type Player struct {
 
 func (p *Player) view() playerView {
 	return playerView{p.id, p.tx, p.ty, p.px, p.py, p.dir, p.moving, p.anim,
-		p.hp, p.maxhp, p.mp, p.maxmp, p.lv, p.exp, p.gold, p.kills, p.lockID, p.slots, p.follow, p.dead, p.deathCause, p.pvp}
+		p.hp, p.maxhp, p.mp, p.maxmp, p.lv, p.exp, p.gold, p.kills, p.lockID, p.slots, p.follow, p.dead, p.deathCause, p.pvp, p.combatLogoutT}
 }
 
 func (p *Player) logMsg(msg string) {
@@ -281,18 +287,33 @@ func (h *Hub) ownsMap(mapID string) bool {
 	return h.ownedMaps == nil || h.ownedMaps[mapID]
 }
 
-// online reports whether an account is already connected (one session each).
+// online reports whether an account has a live client connection. A disconnected
+// player may still be lingering in the world during the combat logout timer, and
+// that character is allowed to reattach.
 func (h *Hub) online(user string) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	_, ok := h.players[user]
-	return ok
+	p, ok := h.players[user]
+	return ok && p.conn != nil && !p.logoutPending
 }
 
 // addPlayer brings an authenticated account into the world, loading its saved
 // character (ch) or making a fresh one (ch == nil). The player id is the username.
 func (h *Hub) addPlayer(c netConn, user string, ch *charState) *Player {
 	h.mu.Lock()
+	if p := h.players[user]; p != nil && (p.conn == nil || p.logoutPending) {
+		old := p.conn
+		p.conn = c
+		p.logoutPending = false
+		p.moveDir = ""
+		p.logMsg("Reconnected.")
+		log.Printf("~ %s reconnected (%d online)", p.id, h.connectedCountLocked())
+		h.mu.Unlock()
+		if old != nil && old != c {
+			old.Close()
+		}
+		return p
+	}
 	defer h.mu.Unlock()
 	p := &Player{id: user, username: user, conn: c, dir: "down", aoiW: 22, aoiH: 16}
 	if ch != nil {
@@ -316,6 +337,16 @@ func (h *Hub) addPlayer(c netConn, user string, ch *charState) *Player {
 	return p
 }
 
+func (h *Hub) connectedCountLocked() int {
+	n := 0
+	for _, p := range h.players {
+		if p.conn != nil && !p.logoutPending {
+			n++
+		}
+	}
+	return n
+}
+
 // savePlayer persists a player's character (copying state under the lock so it's
 // safe against the tick), then writes to the store off-lock.
 func (h *Hub) savePlayer(p *Player) {
@@ -332,16 +363,120 @@ func (h *Hub) savePlayer(p *Player) {
 
 func (h *Hub) remove(p *Player) {
 	h.mu.Lock()
+	var conn netConn
 	// identity check: a handoff may already have dropped p and a new session for
 	// the same id could have joined (another zone link) — don't evict that one.
 	if cur, ok := h.players[p.id]; ok && cur == p {
+		conn = p.conn
 		h.cancelTrade(p)
 		h.leaveParty(p)
 		delete(h.players, p.id)
 		log.Printf("- %s left (%d online)", p.id, len(h.players))
 	}
 	h.mu.Unlock()
-	p.conn.Close()
+	if conn != nil {
+		conn.Close()
+	}
+}
+
+func (h *Hub) markCombat(p *Player) {
+	if p != nil && !p.dead {
+		p.combatLogoutT = combatLogoutSeconds
+	}
+}
+
+func (h *Hub) shouldLingerAfterDisconnect(p *Player) bool {
+	return p != nil && !p.dead && p.combatLogoutT > 0
+}
+
+func saveCharacter(user string, ch *charState) {
+	if store == nil || ch == nil {
+		return
+	}
+	if err := store.Save(user, ch); err != nil {
+		log.Printf("save %s: %v", user, err)
+	}
+}
+
+func noCacheFileServer(root string) http.Handler {
+	fs := http.FileServer(http.Dir(root))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		fs.ServeHTTP(w, r)
+	})
+}
+
+type saveReq struct {
+	user      string
+	ch        *charState
+	conn      netConn
+	sendState bool
+}
+
+func (h *Hub) reapOfflineLocked() []saveReq {
+	var saves []saveReq
+	for id, p := range h.players {
+		if p.logoutPending {
+			if h.shouldLingerAfterDisconnect(p) {
+				continue
+			}
+			h.cancelTrade(p)
+			h.leaveParty(p)
+			saves = append(saves, saveReq{user: p.username, ch: charStateOf(p), conn: p.conn, sendState: true})
+			delete(h.players, id)
+			log.Printf("- %s combat logout complete (%d online)", p.id, h.connectedCountLocked())
+			continue
+		}
+		if p.conn != nil || h.shouldLingerAfterDisconnect(p) {
+			continue
+		}
+		h.cancelTrade(p)
+		h.leaveParty(p)
+		saves = append(saves, saveReq{user: p.username, ch: charStateOf(p)})
+		delete(h.players, id)
+		log.Printf("- %s combat logout complete (%d online)", p.id, h.connectedCountLocked())
+	}
+	return saves
+}
+
+func (h *Hub) disconnect(p *Player, expected netConn) {
+	var conn netConn
+	var saveUser string
+	var saveState *charState
+	h.mu.Lock()
+	cur, ok := h.players[p.id]
+	if !ok || cur != p || (expected != nil && p.conn != expected) {
+		h.mu.Unlock()
+		if expected != nil {
+			expected.Close()
+		}
+		return
+	}
+	conn = p.conn
+	h.cancelTrade(p)
+	h.leaveParty(p)
+	p.conn = nil
+	p.logoutPending = false
+	p.moveDir = ""
+	p.lockID = 0
+	p.follow = false
+	clearPath(p)
+	if h.shouldLingerAfterDisconnect(p) {
+		log.Printf("~ %s disconnected in combat; lingering %.0fs (%d online)", p.id, p.combatLogoutT, h.connectedCountLocked())
+		h.mu.Unlock()
+		if conn != nil {
+			conn.Close()
+		}
+		return
+	}
+	saveUser, saveState = p.username, charStateOf(p)
+	delete(h.players, p.id)
+	log.Printf("- %s left (%d online)", p.id, h.connectedCountLocked())
+	h.mu.Unlock()
+	if conn != nil {
+		conn.Close()
+	}
+	saveCharacter(saveUser, saveState)
 }
 
 // run is the authoritative loop: advance every player, then push each a snapshot
@@ -358,10 +493,12 @@ func (h *Hub) run() {
 		tickStart := time.Now()
 		type outbound struct {
 			p    *Player
+			conn netConn
 			data []byte
 		}
 		var outs []outbound
 		var handoffOuts []outbound
+		var finalSaves []saveReq
 
 		h.mu.Lock()
 		// 1) drain each player's intent inbox (move / attack / lock)
@@ -383,6 +520,7 @@ func (h *Hub) run() {
 			p.atkCool = max(0, p.atkCool-dt)
 			p.iframes = max(0, p.iframes-dt)
 			p.chatCool = max(0, p.chatCool-dt)
+			p.combatLogoutT = max(0, p.combatLogoutT-dt)
 			p.mp = math.Min(float64(p.maxmp), p.mp+dt*0.35)
 			p.hp = math.Min(float64(p.maxhp), p.hp+dt*0.4)
 			// drop a stale lock/follow (target died or left the map)
@@ -410,7 +548,7 @@ func (h *Hub) run() {
 				ch := charStateOf(p)
 				ch.MapID, ch.Tx, ch.Ty = ex.to, ex.tx, ex.ty
 				b, _ := json.Marshal(handoffMsg{T: "handoff", To: ex.to, Tx: ex.tx, Ty: ex.ty, Char: ch})
-				handoffOuts = append(handoffOuts, outbound{p, b})
+				handoffOuts = append(handoffOuts, outbound{p: p, conn: p.conn, data: b})
 				h.cancelTrade(p) // trade partners are left behind on the old map
 				h.leaveParty(p)  // cross-zone parties aren't supported yet
 				delete(h.players, id)
@@ -435,6 +573,7 @@ func (h *Hub) run() {
 		h.updateProjectiles(dt)
 		h.updateCorpses(dt)
 		h.updateTrades() // drop trades whose partners drifted apart or died
+		finalSaves = h.reapOfflineLocked()
 		// 3) build per-map views
 		pViews := map[string][]playerView{}
 		for _, p := range h.players {
@@ -478,6 +617,9 @@ func (h *Hub) run() {
 		//    (its viewport + a margin), so bandwidth scales with what you can see
 		//    rather than with the whole map's population.
 		for _, p := range h.players {
+			if p.conn == nil || p.logoutPending {
+				continue
+			}
 			aw, ah := float64(p.aoiW*TS), float64(p.aoiH*TS)
 			near := func(ex, ey float64) bool { return math.Abs(p.px-ex) <= aw && math.Abs(p.py-ey) <= ah }
 			nearT := func(tx, ty int) bool { return abs(p.tx-tx) <= p.aoiW && abs(p.ty-ty) <= p.aoiH }
@@ -533,20 +675,33 @@ func (h *Hub) run() {
 				Invite:   p.partyID == 0 && p.partyInvite != 0 && h.parties[p.partyInvite] != nil,
 				TradeReq: p.tradeReq,
 			})
-			outs = append(outs, outbound{p, data})
+			outs = append(outs, outbound{p: p, conn: p.conn, data: data})
 		}
 		h.mu.Unlock()
 
+		for _, s := range finalSaves {
+			if s.sendState && s.conn != nil {
+				b, _ := json.Marshal(stateMsg{T: "state", Char: s.ch})
+				s.conn.WriteText(b)
+				s.conn.Close()
+			}
+			saveCharacter(s.user, s.ch)
+		}
 		for _, o := range outs {
 			mBytes += len(o.data)
-			if err := o.p.conn.WriteText(o.data); err != nil {
-				h.remove(o.p)
+			if o.conn == nil {
+				continue
+			}
+			if err := o.conn.WriteText(o.data); err != nil {
+				h.disconnect(o.p, o.conn)
 			}
 		}
 		// deliver handoffs (the gateway closes the old link once it reconnects the
 		// player to the destination zone).
 		for _, o := range handoffOuts {
-			o.p.conn.WriteText(o.data)
+			if o.conn != nil {
+				o.conn.WriteText(o.data)
+			}
 			o.p.pendingHandoff = nil
 		}
 
@@ -581,7 +736,9 @@ func (h *Hub) run() {
 			}
 			saves := make([]sv, 0, len(h.players))
 			for _, p := range h.players {
-				saves = append(saves, sv{p.username, charStateOf(p)})
+				if p.conn != nil && !p.logoutPending {
+					saves = append(saves, sv{p.username, charStateOf(p)})
+				}
 			}
 			h.mu.Unlock()
 			go func() {
@@ -766,8 +923,7 @@ readloop:
 		}
 	}
 	if p != nil {
-		h.savePlayer(p) // persist on disconnect
-		h.remove(p)
+		h.disconnect(p, c)
 	}
 }
 
@@ -801,7 +957,7 @@ func main() {
 		go hub.run()
 		mux := http.NewServeMux()
 		mux.HandleFunc("/ws", hub.serveWS)
-		mux.Handle("/", http.FileServer(http.Dir(*webRoot)))
+		mux.Handle("/", noCacheFileServer(*webRoot))
 		log.Printf("Fable Quest server (solo) on %s (web root %q), tick %d Hz", *addr, *webRoot, tickHz)
 		if err := http.ListenAndServe(*addr, mux); err != nil {
 			log.Fatal(err)
@@ -832,7 +988,7 @@ func main() {
 		gw := newGateway(zoneRoutes)
 		mux := http.NewServeMux()
 		mux.HandleFunc("/ws", gw.serveWS)
-		mux.Handle("/", http.FileServer(http.Dir(*webRoot)))
+		mux.Handle("/", noCacheFileServer(*webRoot))
 		log.Printf("Fable Quest gateway on %s (web root %q), zones %v", *addr, *webRoot, map[string]string(zoneRoutes))
 		if err := http.ListenAndServe(*addr, mux); err != nil {
 			log.Fatal(err)

@@ -172,6 +172,7 @@ func (h *Hub) hitEnemy(p *Player, en *enemy, dmg int, crit bool) {
 		dmg *= 2
 	}
 	en.hp -= dmg
+	h.markCombat(p)
 	en.flash = 0.3
 	en.stun = 0.45
 	en.hurtT = 0
@@ -240,6 +241,7 @@ func (h *Hub) attackHero(en *enemy, p *Player) {
 		dmg = 1
 	}
 	p.hp -= float64(dmg)
+	h.markCombat(p)
 	p.iframes = 1
 	if p.hp <= 0 {
 		h.playerDie(p, enemyKinds[en.kind].name)
@@ -261,6 +263,7 @@ func (h *Hub) playerDie(p *Player, cause string) {
 	clearPath(p)
 	p.lockID = 0
 	p.follow = false
+	p.combatLogoutT = 0
 }
 
 func (h *Hub) respawnPlayer(p *Player) {
@@ -281,6 +284,7 @@ func (h *Hub) respawnPlayer(p *Player) {
 	clearPath(p)
 	p.lockID = 0
 	p.follow = false
+	p.combatLogoutT = 0
 }
 
 // ---- lock-on ---------------------------------------------------------------

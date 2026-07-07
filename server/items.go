@@ -116,25 +116,33 @@ func removeItem(p *Player, id string, n int) {
 
 // canPlace: does item id fit body slot? ('acc' items take either accessory slot)
 func canPlace(id, slot string) bool {
-	want := items[id].slot
+	it := items[id]
+	want := it.slot
 	if want == "" {
 		return false
 	}
 	if want == "acc" {
 		return slot == "acc1" || slot == "acc2"
 	}
+	if want == "main" {
+		return slot == "main" || (!it.twoH && slot == "off")
+	}
 	return want == slot
 }
 
 // slotFor: the natural slot for a keyboard/double-click equip.
 func slotFor(p *Player, id string) string {
-	if items[id].slot == "acc" {
+	it := items[id]
+	if it.slot == "acc" {
 		if p.equip["acc1"] == "" {
 			return "acc1"
 		}
 		return "acc2"
 	}
-	return items[id].slot
+	if it.slot == "main" && !it.twoH && p.equip["main"] != "" {
+		return "off"
+	}
+	return it.slot
 }
 
 func unequipSlot(p *Player, slot string) {
@@ -151,6 +159,7 @@ func equipTo(p *Player, id, slot string) bool {
 		return false
 	}
 	if items[id].twoH { // both hands on a two-hander
+		unequipSlot(p, "main")
 		unequipSlot(p, "off")
 	}
 	if slot == "off" && p.equip["main"] != "" && items[p.equip["main"]].twoH {

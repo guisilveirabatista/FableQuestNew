@@ -92,13 +92,10 @@ func (h *Hub) serveLink(link *framedConn) {
 			ch := charStateOf(p)
 			h.mu.Unlock()
 			link.WriteJSON(stateMsg{T: "state", Char: ch})
-		case "leave": // client disconnected on the gateway: final save, then drop
-			h.mu.Lock()
-			ch := charStateOf(p)
-			h.mu.Unlock()
-			link.WriteJSON(stateMsg{T: "state", Char: ch})
-			h.remove(p)
-			link.Close()
+		case "leave": // client disconnected on the gateway: wait out combat logout if needed
+			if h.beginZoneLeave(p, link) {
+				return // the tick loop will send final state and close this link
+			}
 			return
 		default: // a forwarded client intent
 			p.mu.Lock()
@@ -108,12 +105,31 @@ func (h *Hub) serveLink(link *framedConn) {
 			p.mu.Unlock()
 		}
 	}
-	h.remove(p) // link died (gateway closed it, e.g. after a handoff)
+	h.disconnect(p, link) // link died (gateway closed it, e.g. after a handoff)
 }
 
 // addFromEnter creates the player from a gateway enter and joins it to the hub.
 func (h *Hub) addFromEnter(link *framedConn, em enterMsg) *Player {
 	h.mu.Lock()
+	if p := h.players[em.ID]; p != nil && (p.conn == nil || p.logoutPending) {
+		old := p.conn
+		p.conn = link
+		p.logoutPending = false
+		p.moveDir = ""
+		p.logMsg("Reconnected.")
+		if em.Vw > 0 {
+			p.aoiW = clampInt(em.Vw, 8, 60)
+		}
+		if em.Vh > 0 {
+			p.aoiH = clampInt(em.Vh, 6, 40)
+		}
+		log.Printf("~ %s reattached to zone on %s (%d online)", p.id, p.mapID, h.connectedCountLocked())
+		h.mu.Unlock()
+		if old != nil && old != link {
+			old.Close()
+		}
+		return p
+	}
 	defer h.mu.Unlock()
 	p := &Player{id: em.ID, username: em.ID, conn: link, dir: "down", aoiW: 22, aoiH: 16}
 	applyCharState(p, em.Char)
@@ -126,4 +142,33 @@ func (h *Hub) addFromEnter(link *framedConn, em enterMsg) *Player {
 	h.players[p.id] = p
 	log.Printf("+ %s entered zone on %s (%d here)", p.id, p.mapID, len(h.players))
 	return p
+}
+
+func (h *Hub) beginZoneLeave(p *Player, link netConn) bool {
+	h.mu.Lock()
+	if cur, ok := h.players[p.id]; !ok || cur != p || p.conn != link {
+		h.mu.Unlock()
+		link.Close()
+		return false
+	}
+	h.cancelTrade(p)
+	h.leaveParty(p)
+	p.moveDir = ""
+	p.lockID = 0
+	p.follow = false
+	clearPath(p)
+	if h.shouldLingerAfterDisconnect(p) {
+		p.logoutPending = true
+		log.Printf("~ %s disconnected in combat; lingering %.0fs (%d online)", p.id, p.combatLogoutT, h.connectedCountLocked())
+		h.mu.Unlock()
+		return true
+	}
+	ch := charStateOf(p)
+	delete(h.players, p.id)
+	log.Printf("- %s left zone (%d online)", p.id, h.connectedCountLocked())
+	h.mu.Unlock()
+	b, _ := json.Marshal(stateMsg{T: "state", Char: ch})
+	link.WriteText(b)
+	link.Close()
+	return false
 }

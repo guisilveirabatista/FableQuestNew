@@ -544,6 +544,8 @@ func (h *Hub) pvpHit(attacker, target *Player, dmg int, crit, magic bool) {
 		dmg = 1
 	}
 	target.hp -= float64(dmg)
+	h.markCombat(attacker)
+	h.markCombat(target)
 	target.iframes = 0.5
 	if target.hp <= 0 {
 		attacker.gold += target.gold / 10 // a small bounty (from thin air, not the victim)

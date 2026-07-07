@@ -7,6 +7,8 @@
 
 const cv = document.getElementById('screen');
 const ctx = cv.getContext('2d');
+cv.tabIndex = 0;
+cv.style.outline = 'none';
 
 // pick the smallest integer scale that keeps the viewport within the map
 const SCALE = Math.max(1, Math.ceil(Math.max(
@@ -48,6 +50,7 @@ const TREE = [288, 160, 32, 32]; // big tree, 2x2 tiles, base row at bottom
 
 // ---------------------------------------------------------------- input
 const held = {};
+const heldInput = {};
 let queue = [];
 let keyTap = new Set();
 const CONFIRM = ['Enter', ' ', 'z', 'Z'];
@@ -55,34 +58,95 @@ const CANCEL = ['Escape'];
 var MENU_KEYS = ['x'];
 var MAP_KEYS = ['m'];
 var CHAT_TOGGLE_KEYS = ['c'];
+var LOG_TOGGLE_KEYS = ['l'];
 var WINDOW_SHORTCUTS = [
-  { keys: ['u'], menu: 'Skills' },
-  { keys: ['o'], menu: 'Attribs' },
   { keys: ['p'], menu: 'Status' },
   { keys: ['y'], menu: 'Quest' },
 ];
 const KEY_DIR = { ArrowUp: 'up', w: 'up', ArrowDown: 'down', s: 'down',
   ArrowLeft: 'left', a: 'left', ArrowRight: 'right', d: 'right' };
+const CAPTURE_KEYS = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' ', 'Tab',
+  ...MENU_KEYS, ...MAP_KEYS, ...CHAT_TOGGLE_KEYS, ...LOG_TOGGLE_KEYS, ...WINDOW_SHORTCUTS.flatMap(sc => sc.keys)];
 let dirOrder = []; // held direction keys, most-recently-pressed last
 function normKey(k) { return k && k.length === 1 ? k.toLowerCase() : k; }
-addEventListener('keydown', e => {
-  if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' ', 'Tab'].includes(e.key)) e.preventDefault();
-  if (!held[e.key]) {
-    queue.push(e.key);
-    keyTap.add(normKey(e.key));
+function eventInputIds(e) {
+  const ids = [normKey(e.key)];
+  if (/^Key[A-Z]$/.test(e.code || '')) ids.push(e.code.slice(3).toLowerCase());
+  else if (e.code === 'Space') ids.push(' ');
+  else if (e.code && e.code.startsWith('Arrow')) ids.push(e.code);
+  return [...new Set(ids.filter(Boolean))];
+}
+function eventHoldId(e) { return e.code || e.key; }
+function focusGame() { if (document.activeElement !== cv) cv.focus({ preventScroll: true }); }
+function clearKeys() {
+  for (const k in held) held[k] = false;
+  for (const k in heldInput) heldInput[k] = false;
+  dirOrder = [];
+}
+function hasInputKey(ids, keys) { return keys.some(k => ids.includes(normKey(k))); }
+function tryImmediateShortcut(ids) {
+  if (typeof game === 'undefined' || game.scene !== 'map' || game.login || game.chatInput) return false;
+  if (typeof toggleChatWindow === 'function' && game.net && hasInputKey(ids, CHAT_TOGGLE_KEYS)) {
+    toggleChatWindow();
+    return true;
   }
-  held[e.key] = true;
-  const d = KEY_DIR[e.key]; // newest direction takes over; releasing it falls back
+  if (game.trade) return false;
+  if (hasInputKey(ids, MAP_KEYS) && !game.death) {
+    toggleMapWindow();
+    return true;
+  }
+  if (hasInputKey(ids, LOG_TOGGLE_KEYS) && !game.death) {
+    toggleLogWindow();
+    return true;
+  }
+  if (menuShortcutBlocked()) return false;
+  if (hasInputKey(ids, MENU_KEYS)) {
+    if (game.menu) { game.menu = null; sfx('Cancel1'); }
+    else openRootMenu();
+    return true;
+  }
+  for (const sc of WINDOW_SHORTCUTS) {
+    if (hasInputKey(ids, sc.keys)) {
+      openMenuSection(sc.menu);
+      return true;
+    }
+  }
+  return false;
+}
+addEventListener('keydown', e => {
+  const ids = eventInputIds(e);
+  const modified = e.altKey || e.ctrlKey || e.metaKey;
+  if (!modified && ids.some(k => CAPTURE_KEYS.includes(k))) e.preventDefault();
+  if (modified) return;
+  focusGame();
+  const holdId = eventHoldId(e);
+  const fresh = !held[holdId];
+  if (fresh && tryImmediateShortcut(ids)) {
+    held[holdId] = true;
+    ids.forEach(k => { heldInput[k] = true; });
+    return;
+  }
+  if (!held[holdId]) {
+    queue.push(e.key);
+    ids.forEach(k => keyTap.add(k));
+  }
+  held[holdId] = true;
+  ids.forEach(k => { heldInput[k] = true; });
+  const d = ids.map(k => KEY_DIR[k]).find(Boolean); // newest direction takes over; releasing it falls back
   if (d && !dirOrder.includes(d)) dirOrder.push(d);
   if (!audioOk) { audioOk = true; syncMusic(); }
 });
 addEventListener('keyup', e => {
-  held[e.key] = false;
-  const d = KEY_DIR[e.key];
+  const ids = eventInputIds(e);
+  held[eventHoldId(e)] = false;
+  ids.forEach(k => { heldInput[k] = false; });
+  const d = ids.map(k => KEY_DIR[k]).find(Boolean);
   // drop the direction only if no other still-held key maps to it (w vs Arrow)
-  if (d && !Object.keys(KEY_DIR).some(k => KEY_DIR[k] === d && held[k]))
+  if (d && !Object.keys(KEY_DIR).some(k => KEY_DIR[k] === d && heldInput[k]))
     dirOrder = dirOrder.filter(x => x !== d);
 });
+addEventListener('blur', clearKeys);
+document.addEventListener('visibilitychange', () => { if (document.hidden) clearKeys(); });
 function pressed(keys) { return queue.some(k => keys.includes(k)); }
 function keyTapped(keys) { return keys.some(k => keyTap.has(normKey(k))); }
 
@@ -108,6 +172,7 @@ cv.addEventListener('wheel', e => {
 }, { passive: false });
 cv.addEventListener('mousedown', e => {
   e.preventDefault();
+  focusGame();
   const p = canvasXY(e);
   Object.assign(mouse, p);
   if (e.button === 0) mouse.down = true;
@@ -1308,6 +1373,10 @@ function optionLabel(s) {
     : s === 'Mini Map' ? 'Mini Map: ' + (game.minimapOpen ? 'On' : 'Off')
     : s === 'Log' ? 'Log: ' + (game.logOpen ? 'On' : 'Off') : s;
 }
+function toggleLogWindow() {
+  game.logOpen = !game.logOpen;
+  sfx(game.logOpen ? 'Decision1' : 'Cancel1');
+}
 function toggleOption(sel) {
   if (sel === 'Music') {
     MidiPlayer.setEnabled(!MidiPlayer.isEnabled());
@@ -1315,15 +1384,22 @@ function toggleOption(sel) {
     sfx('Decision1');
   } else if (sel === 'Autoloot') { pushIntent({ t: 'setAutoloot', v: !game.autoloot }); sfx('Decision1'); }
   else if (sel === 'Mini Map') { game.minimapOpen = !game.minimapOpen; sfx('Decision1'); }
-  else if (sel === 'Log') { game.logOpen = !game.logOpen; sfx('Decision1'); }
+  else if (sel === 'Log') toggleLogWindow();
 }
 function logOut() {
-  sfx('Decision1');
   if (game.net) {
+    const left = Math.ceil(game.hero.combatLogoutT || 0);
+    if (left > 0) {
+      sfx('Buzzer1');
+      logMsg(`You cannot log out during combat. Wait ${left}s.`);
+      return;
+    }
+    sfx('Decision1');
     if (game.net.ws) game.net.ws.close();
     location.reload();
     return;
   }
+  sfx('Decision1');
   game.menu = null;
   game.scene = 'title';
   game.titleCursor = 0;
@@ -1545,7 +1621,8 @@ function drawMenu() {
   drawWindow(rb.x, rb.y, rb.w, rb.h);
   ROOT_MENU.forEach((s, i) => {
     if (m.mode === 'root' && m.cursor === i) drawCursor(rb.x + 6, rb.y + 6 + i * 16, rb.w - 12, 16);
-    text(s, rb.x + 14, rb.y + 10 + i * 16);
+    const left = s === 'Log Out' && game.net ? Math.ceil(h.combatLogoutT || 0) : 0;
+    text(left > 0 ? `Log Out ${left}s` : s, rb.x + 14, rb.y + 10 + i * 16, left > 0 ? '#999' : '#fff');
   });
   if (m.mode === 'skills') {
     const ids = Object.keys(SKILLS);
@@ -2060,6 +2137,7 @@ Promise.all(IMAGES.map(n => new Promise((res, rej) => {
     const v = p.get('net');
     const url = v === '1' ? (location.protocol === 'https:' ? 'wss' : 'ws') + '://' + location.host + '/ws' : v;
     netStart(url);
+    focusGame();
     requestAnimationFrame(loop);
     return;
   }
@@ -2074,6 +2152,7 @@ Promise.all(IMAGES.map(n => new Promise((res, rej) => {
       maxhp: ENEMIES[p.get('enemy')].hp, flash: 0, dying: 0, stun: 0, hurtT: 9, lunge: 0,
     });
   }
+  focusGame();
   requestAnimationFrame(loop);
 }).catch(e => {
   ctx.fillStyle = '#fff';

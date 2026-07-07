@@ -134,3 +134,19 @@ func TestFollowChasesLockedEnemy(t *testing.T) {
 		t.Fatalf("follow should have chased the enemy to within reach (start %d, ended %d away)", start, d)
 	}
 }
+
+func TestFollowFacesAdjacentLockedEnemy(t *testing.T) {
+	h := newHub()
+	p := heroAt("field", 15, 10)
+	p.dir = "left"
+	p.follow = true
+	en := slimeAt(1, 16, 10)
+	h.enemies["field"] = []*enemy{en}
+	p.lockID = en.id
+	if dir := h.followDir(p); dir != "" {
+		t.Fatalf("adjacent follow target should not require movement, got %q", dir)
+	}
+	if p.dir != "right" {
+		t.Fatalf("adjacent follow target should turn the player right, got %q", p.dir)
+	}
+}
