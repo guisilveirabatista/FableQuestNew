@@ -181,8 +181,10 @@ func sign(v float64) float64 {
 }
 
 // followDir returns the step the player should take to chase its locked target,
-// or "" when it's already in reach or has no clear step (ported from sim.js
-// stepHero's follow branch). Follow mode is set by Alt+click / F.
+// or "" when it's already within one square (just face, no chase) or has no clear step.
+// When within one square and follow active, we face only (avoids blocking the target's walk);
+// chase resumes automatically as soon as target is more than one square away.
+// (ported from sim.js stepHero's follow branch). Follow mode is set by Ctrl+Alt+click / F.
 func (h *Hub) followDir(p *Player) string {
 	if p.followTarget != "" {
 		o := h.players[p.followTarget]
@@ -194,9 +196,9 @@ func (h *Hub) followDir(p *Player) string {
 			return ""
 		}
 		dx, dy := o.tx-p.tx, o.ty-p.ty
-		if abs(dx) <= 1 && abs(dy) <= 1 && !(dx != 0 && dy != 0) {
+		if abs(dx) <= 1 && abs(dy) <= 1 {
 			p.dir = faceTowardPlayer(p, o)
-			return "" // orthogonally adjacent (or on top): in reach, stop
+			return "" // one square around: just face (don't chase, to avoid blocking target's movement); resume chase only when farther
 		}
 		hd, vd := "left", "up"
 		if dx > 0 {
@@ -231,9 +233,9 @@ func (h *Hub) followDir(p *Player) string {
 			return ""
 		}
 		dx, dy := o.tx-p.tx, o.ty-p.ty
-		if abs(dx) <= 1 && abs(dy) <= 1 && !(dx != 0 && dy != 0) {
+		if abs(dx) <= 1 && abs(dy) <= 1 {
 			p.dir = faceTowardPlayer(p, o)
-			return "" // orthogonally adjacent (or on top): in reach, stop
+			return "" // one square around: just face (don't chase, to avoid blocking target's movement); resume chase only when farther
 		}
 		hd, vd := "left", "up"
 		if dx > 0 {
@@ -267,9 +269,9 @@ func (h *Hub) followDir(p *Player) string {
 		return ""
 	}
 	dx, dy := en.tx-p.tx, en.ty-p.ty
-	if abs(dx) <= 1 && abs(dy) <= 1 && !(dx != 0 && dy != 0) {
+	if abs(dx) <= 1 && abs(dy) <= 1 {
 		p.dir = faceToward(p, en)
-		return "" // orthogonally adjacent (or on top): in reach, stop
+		return "" // one square around: just face (don't chase, to avoid blocking target's movement); resume chase only when farther
 	}
 	hd, vd := "left", "up"
 	if dx > 0 {

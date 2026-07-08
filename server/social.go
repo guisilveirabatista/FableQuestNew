@@ -357,7 +357,14 @@ func (h *Hub) tradeAccept(p *Player) {
 	h.systemTo(p, "Trading with "+other.displayName()+".")
 }
 
-func (h *Hub) tradeDecline(p *Player) { p.tradeReq = "" }
+func (h *Hub) tradeDecline(p *Player) {
+	if req := p.tradeReq; req != "" {
+		if o := h.findPlayerByName(req); o != nil {
+			h.systemTo(o, p.displayName()+" declined the trade.")
+		}
+	}
+	p.tradeReq = ""
+}
 
 // tradeSide returns the offer maps for p (self) within trade t.
 func tradeSide(t *trade, p *Player) (items map[string]int, gold *int, lock *bool, ok *bool) {

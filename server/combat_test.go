@@ -117,7 +117,7 @@ func TestFollowChasesLockedEnemy(t *testing.T) {
 	en := &enemy{id: 1, kind: "slime", tx: 16, ty: 12, px: 16 * TS, py: 12 * TS, dir: "left", anim: 1, hp: 10, maxhp: 10, hurtT: 9}
 	h.enemies["field"] = []*enemy{en}
 	h.players[p.id] = p
-	// Alt+click far enough to the right to sit over the slime's sprite box
+	// Ctrl+Alt+click equivalent: followAt intent for lock+follow
 	h.applyIntent(p, inMsg{T: "followAt", X: en.px + 8, Y: en.py + 4})
 	if p.lockID != en.id || !p.follow {
 		t.Fatalf("followAt should lock the enemy and turn on follow (lock=%d follow=%v)", p.lockID, p.follow)

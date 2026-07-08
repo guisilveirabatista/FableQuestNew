@@ -128,7 +128,7 @@ func TestFollowAtChasesPlayerOutsideCombatWithoutPvpTarget(t *testing.T) {
 
 	h.applyIntent(a, inMsg{T: "followAt", X: b.px + 8, Y: b.py + 4})
 	if a.followTarget != "b" || a.pvpTarget != "" || a.lockID != 0 || !a.follow {
-		t.Fatalf("followAt should follow without creating a PvP target (followTarget=%q pvpTarget=%q lock=%d follow=%v)",
+		t.Fatalf("followAt (from Ctrl+Alt or menu follow) should follow without creating a PvP target (followTarget=%q pvpTarget=%q lock=%d follow=%v)",
 			a.followTarget, a.pvpTarget, a.lockID, a.follow)
 	}
 	for i := 0; i < 160; i++ {
@@ -136,10 +136,10 @@ func TestFollowAtChasesPlayerOutsideCombatWithoutPvpTarget(t *testing.T) {
 		h.stepPlayer(a, dir, 1.0/tickHz)
 	}
 	if d := abs(a.tx-b.tx) + abs(a.ty-b.ty); d > 1 {
-		t.Fatalf("follow should chase the player target to melee reach, ended %d tiles away", d)
+		t.Fatalf("follow should chase the player target to within one square, ended %d tiles away", d)
 	}
 	if dir := h.followDir(a); dir != "" || a.dir != "right" {
-		t.Fatalf("adjacent player follow should stop and face right, dir=%q facing=%q", dir, a.dir)
+		t.Fatalf("follow target within one square should stop and face right, dir=%q facing=%q", dir, a.dir)
 	}
 }
 
@@ -148,7 +148,7 @@ func TestLockPlayerAtStillRequiresPvp(t *testing.T) {
 	a := mkPlayer(h, "a", "city", 5, 5)
 	b := mkPlayer(h, "b", "city", 6, 5)
 
-	h.applyIntent(a, inMsg{T: "lockPlayerAt", X: b.px + 8, Y: b.py + 4})
+	h.applyIntent(a, inMsg{T: "lockPlayerAt", X: b.px + 8, Y: b.py + 4}) // Ctrl+click equivalent
 
 	if a.pvpTarget != "" || a.followTarget != "" || a.follow {
 		t.Fatalf("safe-zone player lock should not create a target (pvp=%q followTarget=%q follow=%v)",

@@ -246,7 +246,7 @@ type Player struct {
 	lockID           int
 	pvpTarget        string
 	followTarget     string
-	follow           bool // Alt+click / F: chase the locked target
+	follow           bool // Ctrl+Alt+click / F: chase the locked target (follow + attack)
 	log              []string
 	dead             bool
 	deathCause       string
@@ -974,7 +974,7 @@ func (h *Hub) applyIntent(p *Player, m inMsg) {
 		p.lockID = h.enemyAtPoint(p.mapID, m.X, m.Y)
 		p.pvpTarget = ""
 		p.followTarget = ""
-		p.follow = false // right-click locks for attack only, no chasing
+		p.follow = false // Ctrl+click: lock for attack only, no chasing
 	case "lockPlayerAt":
 		if o := h.playerAtPoint(p.mapID, m.X, m.Y, p); o != nil {
 			if h.canPvp(p, o) {
@@ -994,7 +994,7 @@ func (h *Hub) applyIntent(p *Player, m inMsg) {
 			p.lockID = 0
 			p.follow = true
 			p.dir = faceTowardPlayer(p, o)
-		} else if en := h.enemyAtPoint(p.mapID, m.X, m.Y); en != 0 { // Alt+click: lock AND follow
+		} else if en := h.enemyAtPoint(p.mapID, m.X, m.Y); en != 0 { // Ctrl+Alt+click: lock AND follow (for attack)
 			p.lockID = en
 			p.pvpTarget = ""
 			p.followTarget = ""
