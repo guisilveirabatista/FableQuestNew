@@ -450,7 +450,7 @@ const BODY_NAV = { // keyboard moves between slots, roughly matching the doll sh
   main: { right: 'torso', down: 'acc1' },
   torso: { up: 'head', left: 'main', right: 'off', down: 'legs' },
   off: { left: 'torso', down: 'acc2' },
-  legs: { up: 'torso', down: 'boots', left: 'main', right: 'off' },
+  legs: { up: 'torso', down: 'boots' },
   acc1: { right: 'boots', up: 'main' },
   boots: { up: 'legs', left: 'acc1', right: 'acc2' },
   acc2: { left: 'boots', up: 'off' },
@@ -1929,6 +1929,48 @@ function updateTitle() {
   } else sfx('Buzzer1');
 }
 
+function drawCharsel() {
+  // scale the 320x240 title art to cover the screen, biased to keep the castle
+  const s = Math.max(W / 320, H / 240);
+  ctx.drawImage(img.title, (W - 320 * s) / 2, Math.min(0, H - 240 * s), 320 * s, 240 * s);
+  const my = Math.floor(H / 2) - 40;
+  drawWindow(W / 2 - 100, my, 200, 120);
+  text('SELECT A CHARACTER', W / 2 - 60, my + 8, '#ffe080');
+
+  (game.chars || []).forEach((c, i) => {
+    const y = my + 24 + i * 16;
+    if (game.charCursor === i) {
+      drawCursor(W / 2 - 90, y - 2, 180, 16);
+    }
+    text(c.name, W / 2 - 80, y);
+    text('Lv. ' + c.lv, W / 2 + 40, y);
+  });
+
+  drawWindow(W / 2 - 100, my + 128, 98, 20);
+  text('Play', W / 2 - 80, my + 134);
+
+  drawWindow(W / 2 + 2, my + 128, 98, 20);
+  text('Create', W / 2 + 22, my + 134);
+}
+
+function updateCharsel() {
+  if (game.charCursor == null) game.charCursor = 0;
+  if (pressed(['ArrowUp', 'w'])) {
+    game.charCursor = (game.charCursor + (game.chars || []).length - 1) % (game.chars || []).length;
+    sfx('Cursor1');
+  }
+  if (pressed(['ArrowDown', 's'])) {
+    game.charCursor = (game.charCursor + 1) % (game.chars || []).length;
+    sfx('Cursor1');
+  }
+  if (pressed(CONFIRM)) {
+    // This should send a message to the server to select the character
+    // For now, just go to the map
+    game.scene = 'map';
+    syncMusic();
+  }
+}
+
 // ---------------------------------------------------------------- input → intents
 // The client half of the old updateMap(): read raw input, drive the local UI
 // state (menus, panels, dialogue, drag), and translate player actions into
@@ -2096,6 +2138,10 @@ function loop(ts) {
   if (game.scene === 'title') {
     updateTitle();
     if (game.scene === 'title') drawTitle();
+    acc = 0;
+  } else if (game.scene === 'charsel') {
+    updateCharsel();
+    drawCharsel();
     acc = 0;
   } else if (game.scene === 'map') {
     if (game.net) {

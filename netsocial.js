@@ -56,9 +56,16 @@ function handleSlash(t) {
     case '/kick': if (rest) netSend(net, { t: 'partyKick', id: rest }); break;
     case '/trade': if (rest) netSend(net, { t: 'tradeRequest', id: rest }); break;
     case '/pvp': netSend(net, { t: 'setPvp', v: !game.youPvp }); break;
+    case '/friend': if (rest) netSend(net, { t: 'friendRequest', id: rest }); break;
+    case '/unfriend': if (rest) netSend(net, { t: 'unfriend', id: rest }); break;
+    case '/acceptfriend': if (rest) netSend(net, { t: 'friendAccept', id: rest }); break;
+    case '/declinefriend': if (rest) netSend(net, { t: 'friendDecline', id: rest }); break;
+    case '/friends': game.friendsOpen = !game.friendsOpen; sfx('Decision1'); break;
     case '/help':
       pushChatLine({ scope: 'system', text: 'chat: type to say, /w world, /p party' });
       pushChatLine({ scope: 'system', text: '/invite name /join /leave /kick name /trade name /pvp' });
+      pushChatLine({ scope: 'system', text: '/friend name /unfriend name /friends' });
+      pushChatLine({ scope: 'system', text: '/acceptfriend name /declinefriend name' });
       break;
     default: pushChatLine({ scope: 'system', text: 'Unknown command — try /help' });
   }
@@ -123,6 +130,22 @@ function drawPartyFrames() {
     text((m.leader ? '★' : '') + m.name, x + 8, ry, self ? '#ffe080' : '#cfe');
     drawMeter(x + 8, ry + 10, w - 16, 6, m.hp, m.maxhp || 1, hpColor(m.hp, m.maxhp || 1));
     text('L' + (m.lv || 1), x + w - 24, ry, '#9cf');
+  });
+}
+
+function drawFriendsList() {
+  if (!game.friendsOpen) return;
+  const friends = game.friends || [];
+  const w = 120, rowH = 16, x = 4, y = 4 + hudHeight() + 6 + (game.party ? game.party.members.length * 24 + 18 : 0);
+  drawWindow(x, y, w, 12 + friends.length * rowH);
+  text('Friends', x + 8, y + 3, '#bcd');
+  if (friends.length === 0) {
+    text('Empty', x + 8, y + 15, '#999');
+    return;
+  }
+  friends.forEach((f, i) => {
+    const ry = y + 12 + i * rowH;
+    text(f.name, x + 8, ry, f.online ? '#ffe080' : '#999');
   });
 }
 
@@ -269,6 +292,7 @@ function drawNameTags() {
 function drawNetSocial() {
   drawChatPanel();
   drawPartyFrames();
+  drawFriendsList();
   drawNameTags();
   if (game.youPvp) text('PvP ON', W - 60, 6, '#f88');
   if (game.trade) drawTradeWindow();

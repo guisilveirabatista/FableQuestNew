@@ -25,6 +25,7 @@ function netStart(url) {
   // social (Phase 6)
   game.chat = []; game.chatOpen = true; game.chatInput = null; game.party = null; game.trade = null;
   game.socialPrompt = null; game.youPvp = false;
+  game.friends = []; game.friendsOpen = false;
 
   const ws = new WebSocket(url);
   net.ws = ws;
@@ -171,16 +172,22 @@ function onSnapshot(m) {
   else if (m.tradeReq) game.socialPrompt = { kind: 'trade', from: m.tradeReq };
   else if (m.invite) game.socialPrompt = { kind: 'party' };
   else game.socialPrompt = null;
+  game.friends = m.friends || [];
 
   // remote players
   const seen = {};
   for (const v of m.players) {
     seen[v.id] = true;
     let p = net.byId[v.id];
-    if (!p) p = net.byId[v.id] = {
-      id: v.id, name: v.id, px: v.px, py: v.py, tpx: v.px, tpy: v.py,
-      dir: v.dir, moving: v.moving, anim: v.anim, hp: v.hp, maxhp: v.maxhp,
-    };
+    if (!p) {
+      p = net.byId[v.id] = {
+        id: v.id, name: v.id, px: v.px, py: v.py, tpx: v.px, tpy: v.py,
+        dir: v.dir, moving: v.moving, anim: v.anim, hp: v.hp, maxhp: v.maxhp,
+      };
+    }
+    if (p.hp > v.hp) {
+      addPop('-' + Math.round(p.hp - v.hp), v.px + 8, v.py - 12, '#f76');
+    }
     p.tpx = v.px; p.tpy = v.py; p.dir = v.dir; p.moving = v.moving; p.anim = v.anim;
     p.hp = v.hp; p.maxhp = v.maxhp; p.name = v.name || v.id;
     p.dead = !!v.dead; p.pvp = !!v.pvp;
