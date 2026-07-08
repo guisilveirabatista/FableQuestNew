@@ -42,6 +42,68 @@ func expToNextLevel(lv int) int {
 	return lv * 14
 }
 
+func skillAllowedForClass(class, id string) bool {
+	return id != "heal" || class == "Holy"
+}
+
+func hotbarItem(id string) bool {
+	it, ok := items[id]
+	return ok && it.heal > 0
+}
+
+func hotbarEntryAllowed(p *Player, id string) bool {
+	if id == "" {
+		return false
+	}
+	if _, ok := skillMP[id]; ok {
+		return skillAllowedForClass(p.class, id)
+	}
+	return hotbarItem(id)
+}
+
+func defaultSlotsForClass(class string) []string {
+	switch class {
+	case "Holy":
+		return []string{"heal", "bolt", "fire", "spin", ""}
+	case "Knight":
+		return []string{"spin", "potion", "fire", "bolt", ""}
+	case "Lancer":
+		return []string{"spin", "bolt", "potion", "fire", ""}
+	case "Wizard":
+		return []string{"fire", "bolt", "potion", "spin", ""}
+	case "Archer":
+		return []string{"bolt", "fire", "potion", "spin", ""}
+	case "Vampire":
+		return []string{"fire", "spin", "potion", "bolt", ""}
+	default:
+		return []string{"fire", "potion", "spin", "bolt", ""}
+	}
+}
+
+func normalizeSlots(p *Player) {
+	if len(p.slots) == 0 {
+		p.slots = defaultSlotsForClass(p.class)
+	}
+	if len(p.slots) > 5 {
+		p.slots = append([]string(nil), p.slots[:5]...)
+	}
+	for len(p.slots) < 5 {
+		p.slots = append(p.slots, "")
+	}
+	seen := map[string]bool{}
+	for i, id := range p.slots {
+		if id == "heal" && !skillAllowedForClass(p.class, id) {
+			id = "potion"
+		}
+		if id == "" || !hotbarEntryAllowed(p, id) || seen[id] {
+			p.slots[i] = ""
+			continue
+		}
+		p.slots[i] = id
+		seen[id] = true
+	}
+}
+
 // derived is everything the combat math reads, computed from AttrSet (equipment
 // bonuses fold in here from Phase 2d). Go int division floors, matching sim.js.
 type derived struct {
@@ -91,9 +153,13 @@ func spendAttr(p *Player, key string) {
 	recalcMax(p)
 }
 
-// assignSkill moves a skill onto hotbar slot i (or clears it if it's already there).
+// assignSkill moves a skill or usable item onto hotbar slot i (or clears it if it's already there).
 func assignSkill(p *Player, id string, i int) {
+	normalizeSlots(p)
 	if i < 0 || i >= len(p.slots) {
+		return
+	}
+	if !hotbarEntryAllowed(p, id) {
 		return
 	}
 	old := -1
@@ -136,7 +202,7 @@ func skillLevel(p *Player, id string) int {
 
 func upgradeSkill(p *Player, id string) bool {
 	normalizeSkillProgress(p)
-	if _, ok := skillMP[id]; !ok || p.skillPoints <= 0 || p.skillLevels[id] >= maxSkillLevel {
+	if _, ok := skillMP[id]; !ok || !skillAllowedForClass(p.class, id) || p.skillPoints <= 0 || p.skillLevels[id] >= maxSkillLevel {
 		return false
 	}
 	if req := skillTree[id]; req != "" && p.skillLevels[req] < 2 {
@@ -166,7 +232,7 @@ func initHero(p *Player) {
 	if p.cloth == "" {
 		p.cloth = defaultCloth
 	}
-	p.slots = []string{"fire", "heal", "spin", "bolt", ""} // skill hotbar (keys 1-5)
+	p.slots = defaultSlotsForClass("") // skill/item hotbar (keys 1-5)
 	p.skillLevels = map[string]int{"fire": 1, "heal": 1, "spin": 1, "bolt": 1}
 	p.skillPoints = 0
 	p.bag = map[string]int{"potion": 3}
@@ -187,27 +253,22 @@ func validClass(class string) bool {
 }
 
 func applyClassTemplate(p *Player, class string) {
+	p.class = class
 	p.attr = baseAttr
-	p.slots = []string{"fire", "heal", "spin", "bolt", ""}
+	p.slots = defaultSlotsForClass(class)
 	switch class {
 	case "Knight":
 		p.attr.Str, p.attr.Vit = 4, 3
-		p.slots = []string{"spin", "heal", "fire", "bolt", ""}
 	case "Lancer":
 		p.attr.Str, p.attr.Dex, p.attr.Agi = 3, 3, 2
-		p.slots = []string{"spin", "bolt", "heal", "fire", ""}
 	case "Wizard":
 		p.attr.Mag, p.attr.Int = 4, 4
-		p.slots = []string{"fire", "bolt", "heal", "spin", ""}
 	case "Archer":
 		p.attr.Dex, p.attr.Agi, p.attr.Luck = 4, 3, 2
-		p.slots = []string{"bolt", "fire", "heal", "spin", ""}
 	case "Vampire":
 		p.attr.Str, p.attr.Mag, p.attr.Agi = 3, 3, 2
-		p.slots = []string{"fire", "spin", "heal", "bolt", ""}
 	case "Holy":
 		p.attr.Int, p.attr.Vit, p.attr.Mag = 3, 3, 2
-		p.slots = []string{"heal", "bolt", "fire", "spin", ""}
 	}
 	recalcMax(p)
 	p.hp = float64(p.maxhp)
@@ -225,6 +286,7 @@ func (h *Hub) setCharacter(p *Player, name, class string) {
 		applyClassTemplate(p, class)
 	}
 	p.class = class
+	normalizeSlots(p)
 	h.systemTo(p, "Character ready: "+p.displayName()+" the "+p.class+".")
 }
 

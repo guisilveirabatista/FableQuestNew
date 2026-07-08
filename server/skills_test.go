@@ -136,6 +136,8 @@ func TestManaGating(t *testing.T) {
 func TestCastHeal(t *testing.T) {
 	h := newHub()
 	p := heroAt("field", 15, 10)
+	p.class = "Holy"
+	p.slots[1] = "heal"
 	p.hp = 5
 	mp0 := p.mp
 	h.castSlot(p, 1) // slot 1 = heal
@@ -150,6 +152,8 @@ func TestCastHeal(t *testing.T) {
 func TestCastHealAtFullHealthStillCostsMP(t *testing.T) {
 	h := newHub()
 	p := heroAt("field", 15, 10)
+	p.class = "Holy"
+	p.slots[1] = "heal"
 	p.hp = float64(p.maxhp)
 	mp0 := p.mp
 	h.castSlot(p, 1) // slot 1 = heal
@@ -158,6 +162,36 @@ func TestCastHealAtFullHealthStillCostsMP(t *testing.T) {
 	}
 	if p.mp != mp0-skillMP["heal"] {
 		t.Fatalf("full-health heal should still cost %v MP (had %v, now %v)", skillMP["heal"], mp0, p.mp)
+	}
+}
+
+func TestNonHolyCannotCastHeal(t *testing.T) {
+	h := newHub()
+	p := heroAt("field", 15, 10)
+	p.slots[1] = "heal"
+	p.hp = 5
+	mp0 := p.mp
+
+	h.castSlot(p, 1)
+
+	if p.hp != 5 || p.mp != mp0 {
+		t.Fatalf("non-Holy heal should be refused (hp %v mp %v -> %v)", p.hp, mp0, p.mp)
+	}
+}
+
+func TestHotbarPotionUsesBackpackItem(t *testing.T) {
+	h := newHub()
+	p := heroAt("field", 15, 10)
+	p.slots[4] = "potion"
+	p.hp = 5
+
+	h.castSlot(p, 4)
+
+	if p.hp <= 5 {
+		t.Fatalf("hotbar potion should restore HP (still %v)", p.hp)
+	}
+	if p.bag["potion"] != 2 {
+		t.Fatalf("hotbar potion should consume one item (3 -> %d)", p.bag["potion"])
 	}
 }
 

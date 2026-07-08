@@ -50,8 +50,12 @@ func (h *Hub) castSlot(p *Player, i int) {
 	if id == "" {
 		return
 	}
+	if hotbarItem(id) {
+		useItem(p, id)
+		return
+	}
 	cost := skillCost(p, id)
-	if p.atkCool > 0 || cost <= 0 || p.mp < cost {
+	if p.atkCool > 0 || cost <= 0 || !skillAllowedForClass(p.class, id) || p.mp < cost {
 		return
 	}
 	if id != "heal" && h.liveEnemyLock(p) == nil && h.livePvpTarget(p) == nil {

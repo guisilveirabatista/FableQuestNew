@@ -206,6 +206,9 @@ func normalizeEquipment(p *Player) {
 // useItem: eat food or equip gear. Returns true if something happened.
 func useItem(p *Player, id string) bool {
 	it := items[id]
+	if p.bag[id] <= 0 {
+		return false
+	}
 	if it.heal > 0 {
 		if p.hp >= float64(p.maxhp) {
 			return false

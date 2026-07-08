@@ -1,6 +1,6 @@
 'use strict';
-// Phase 1 netplay: a thin client for the Go authoritative movement server.
-// Opt in with ?net=1 (connects to ws://<host>/ws) or ?net=ws://host:port/ws.
+// Server client for the Go authoritative game server.
+// By default it connects to ws://<host>/ws; ?net=ws://host:port/ws overrides it.
 //
 // The client sends only its desired direction (an intent) and never a position.
 // It PREDICTS its own hero locally with the very same movement rules the server
@@ -98,7 +98,7 @@ function updateLoginScreen() {
     if (k === 'Enter') submitLogin();
     else if (k === 'Tab') { L.field = L.field === 'user' ? 'pass' : 'user'; sfx('Cursor1'); }
     else if (k === 'Backspace') L[L.field] = L[L.field].slice(0, -1);
-    else if (k === 'Escape') { location.href = location.pathname; }
+    else if (k === 'Escape') { L.user = ''; L.pass = ''; L.error = ''; sfx('Cancel1'); }
     else if (k.length === 1) {
       if (L.field === 'user') { if (/[a-zA-Z0-9_]/.test(k) && L.user.length < 16) L.user += k; }
       else if (k.charCodeAt(0) >= 32 && k.charCodeAt(0) < 127 && L.pass.length < 64) L.pass += k;
@@ -396,11 +396,14 @@ function onSnapshot(m) {
       game.menu = null; game.shop = null; game.itemPopup = null; game.corpseOpen = null;
     }
   } else if (game.death) game.death = null;
-  if (you.slots) h.slots = you.slots;
+  if (you.slots) {
+    h.slots = you.slots;
+    normalizeHeroSlots(h);
+  }
   h.bag = m.bag || {};          // authoritative inventory drives the panel
   h.equip = m.equip || {};
   h.points = m.points || 0;
-  if (m.attr) h.attr = m.attr;  // character sheet (Attribs/Status screens)
+  if (m.attr) h.attr = m.attr;  // character sheet (Attributes/Status screens)
   game.autoloot = !!m.autoloot;
   game.youPvp = !!you.pvp;
   if (m.log) for (const s of m.log) logMsg(s);
@@ -428,7 +431,8 @@ function onSnapshot(m) {
       addPop('-' + Math.max(1, Math.round(p.hp - v.hp)), v.px + 8, v.py - 12, '#f76');
     }
     p.tpx = v.px; p.tpy = v.py; p.dir = v.dir; p.moving = v.moving; p.anim = v.anim;
-    p.tx = v.tx || p.tx; p.ty = v.ty || p.ty;
+    if (v.tx !== undefined) p.tx = v.tx;
+    if (v.ty !== undefined) p.ty = v.ty;
     p.hp = v.hp; p.maxhp = v.maxhp; p.name = v.name || v.id; p.class = v.class || '';
     p.dead = !!v.dead; p.pvp = !!v.pvp;
   }
@@ -531,20 +535,15 @@ function netFrame(frameDt) {
       sfx('Cursor1');
     }
     if (game.itemPopup && (pressed(CANCEL) || pressed(CONFIRM) || clicked(0))) { game.itemPopup = null; sfx('Cancel1'); }
+    updatePendingCorpseOpen();
+    updatePendingFloorLoot((tx, ty) => netSend(net, { t: 'takeLoot', tx, ty }));
     if (game.corpseOpen && (game.corpseOpen.map !== game.mapId ||
-      game.corpseOpen.decayed || !nearHero(game.corpseOpen.tx, game.corpseOpen.ty))) game.corpseOpen = null;
-    if (game.corpseOpen) {
-      const co = game.corpseOpen;
-      if (pressed(CANCEL)) { game.corpseOpen = null; sfx('Cancel1'); }
-      if (pressed(CONFIRM)) { netSend(net, { t: 'takeCorpse', tx: co.tx, ty: co.ty, id: '*' }); queue = []; }
-      clicks = clicks.filter(cl => {
-        if (cl.b !== 0 || !inCorpseWin(cl)) return true;
-        const ids = Object.keys(co.items);
-        const i = corpseCellAt(cl.x, cl.y);
-        if (cl.dbl && i >= 0 && i < ids.length) netSend(net, { t: 'takeCorpse', tx: co.tx, ty: co.ty, id: ids[i] });
-        return false;
-      });
+      game.corpseOpen.decayed || !nearHero(game.corpseOpen.tx, game.corpseOpen.ty))) {
+      game.corpseOpen = null;
+      game.corpseDrag = null;
     }
+    if (game.corpseOpen) updateCorpseWinControls((co, id) =>
+      netSend(net, { t: 'takeCorpse', tx: co.tx, ty: co.ty, id }));
     if (game.invOpen && !game.itemPopup) updateInvPanel(); // mouse drag/click -> item intents
   }
 
@@ -568,11 +567,18 @@ function netFrame(frameDt) {
     if (pressed([' ', 'z', 'Z'])) netInteract();
     if (pressed(['Tab'])) netSend(net, { t: 'cycleLock' });
     if (pressed(['f', 'F'])) netSend(net, { t: 'toggleFollow' }); // toggle Follow on the lock
-    for (let i = 0; i < 5; i++) if (pressed([String(i + 1)])) { // cast hotbar skill
+    for (let i = 0; i < 5; i++) if (pressed([String(i + 1)])) { // cast hotbar skill/item
       const sk = h.slots && h.slots[i];
       const skill = sk && SKILLS[sk];
       const target = liveEnemyLock() || livePvpTarget();
-      if (!skill || h.mp < skillCost(sk, h) || (sk !== 'heal' && !target)) { sfx('Buzzer1'); continue; }
+      if (isHotbarItem(sk)) {
+        if (!((h.bag && h.bag[sk]) > 0) || h.hp >= h.maxhp) { sfx('Buzzer1'); continue; }
+        netSend(net, { t: 'cast', slot: i });
+        game.healFx = 0.5;
+        sfx('Recovery1');
+        continue;
+      }
+      if (!skill || !skillAllowedForClass(sk, h) || h.mp < skillCost(sk, h) || (sk !== 'heal' && !target)) { sfx('Buzzer1'); continue; }
       netSend(net, { t: 'cast', slot: i });
       // optimistic local effect; damage and MP spending remain server-side
       if (sk === 'spin') { game.atkCool = 1.3 / stats().aspd; game.slashFx = { t: 0, spin: true, dur: 0.3 }; sfx('Sword1'); }
@@ -589,11 +595,23 @@ function netFrame(frameDt) {
       if (c.b === 2) { // right-click: open context/interact targets, not lock-on
         const shopNpc = shopNpcAtPoint(wxp, wyp);
         const co = corpseAt(wx, wy);
+        const floor = floorAt(wx, wy);
         const pl = playerAtPoint(wxp, wyp);
-        if (shopNpc) openShopChoice(shopForNpc(shopNpc), c.x, c.y);
-        else if (co && !co.decayed && nearHero(wx, wy)) { game.corpseOpen = co; sfx('Decision1'); }
-        else if (pl) openPlayerMenu(pl, c.x, c.y);
+        if (shopNpc) { setCorpseWalkTarget(null); setFloorLootTarget(null, null); openShopChoice(shopForNpc(shopNpc), c.x, c.y); }
+        else if (co && !co.decayed) requestCorpseOpen(co, (tx, ty) => {
+          netSend(net, { t: 'moveTo', tx, ty });
+          game.follow = false;
+          game.followEngaged = false;
+        });
+        else if (floor.length) requestFloorLoot(wx, wy, (tx, ty) => {
+          netSend(net, { t: 'moveTo', tx, ty });
+          game.follow = false;
+          game.followEngaged = false;
+        }, (tx, ty) => netSend(net, { t: 'takeLoot', tx, ty }));
+        else if (pl) { setCorpseWalkTarget(null); setFloorLootTarget(null, null); openPlayerMenu(pl, c.x, c.y); }
+        else { setCorpseWalkTarget(null); setFloorLootTarget(null, null); }
       } else if (c.b === 0 && c.ctrl && c.alt) { // Ctrl+Alt + left-click: activate both follow and attack (lock + follow)
+        setCorpseWalkTarget(null); setFloorLootTarget(null, null);
         const en = enemyAtPoint(c.x + cam.x, c.y + cam.y);
         const pl = playerAtPoint(c.x + cam.x, c.y + cam.y);
         if (pl) {
@@ -606,6 +624,7 @@ function netFrame(frameDt) {
           game.lock = en; game.pvpTarget = null; game.followPlayer = null; game.follow = true; game.followEngaged = false; game.path = null; sfx('Decision1');
         }
       } else if (c.b === 0 && c.ctrl) { // Ctrl+left-click: toggle lock for attack (re-click same to release/unlock)
+        setCorpseWalkTarget(null); setFloorLootTarget(null, null);
         const en = enemyAtPoint(c.x + cam.x, c.y + cam.y);
         const pl = playerAtPoint(c.x + cam.x, c.y + cam.y);
         if (pl) {
@@ -627,6 +646,7 @@ function netFrame(frameDt) {
           }
         }
       } else if (c.b === 0 && c.alt) { // Alt + left-click: toggle "Follow mode" on the enemy/player (pure follow for players)
+        setCorpseWalkTarget(null); setFloorLootTarget(null, null);
         const en = enemyAtPoint(c.x + cam.x, c.y + cam.y);
         const pl = playerAtPoint(c.x + cam.x, c.y + cam.y);
         if (pl) {
@@ -655,11 +675,10 @@ function netFrame(frameDt) {
       } else if (c.b === 0 && !game.invDrag) {
         const co = corpseAt(wx, wy);
         if (co && !co.decayed && nearHero(wx, wy) && c.dbl) {
+          setCorpseWalkTarget(null); setFloorLootTarget(null, null);
           game.corpseOpen = co; sfx('Decision1');
-        } else if (floorAt(wx, wy).length && nearHero(wx, wy)) {
-          if (c.dbl) netSend(net, { t: 'takeLoot', tx: wx, ty: wy }); // double-click floor loot in reach
-          else game.lootDrag = { tx: wx, ty: wy };
         } else {
+          setCorpseWalkTarget(null); setFloorLootTarget(null, null);
           netSend(net, { t: 'moveTo', tx: wx, ty: wy });
           game.follow = false;
           game.followEngaged = false;
@@ -667,20 +686,18 @@ function netFrame(frameDt) {
         }
       }
     }
-    for (const r of releases) { // floor loot dragged into the backpack window
-      if (r.b !== 0 || !game.lootDrag) continue;
-      const d = game.lootDrag;
-      if (inPanel(r) && nearHero(d.tx, d.ty)) netSend(net, { t: 'takeLoot', tx: d.tx, ty: d.ty });
-      game.lootDrag = null;
-    }
-    if (game.lootDrag && !mouse.down) game.lootDrag = null;
+    game.lootDrag = null;
   }
 
   // 2) predict our own hero at the fixed 20 Hz tick, using the server's rules.
   //    Keep game.follow/game.lock (set from the snapshot) so the chase is
   //    predicted locally AND the blue follow marker renders.
   game.moveDir = dir || null;
-  if (dir) game.path = null;
+  if (dir) {
+    game.path = null;
+    setCorpseWalkTarget(null);
+    setFloorLootTarget(null, null);
+  }
   net.acc += frameDt;
   let ticks = 0;
   while (net.acc >= FIXED && ticks < 5) { snapshotPrev(); stepHero(FIXED); net.acc -= FIXED; ticks++; }

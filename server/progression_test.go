@@ -20,7 +20,7 @@ func TestSpendAttr(t *testing.T) {
 }
 
 func TestAssignSkill(t *testing.T) {
-	p := heroAt("city", 19, 16) // slots: fire,heal,spin,bolt,""
+	p := heroAt("city", 19, 16) // slots: fire,potion,spin,bolt,""
 	assignSkill(p, "fire", 4)   // move Fire from slot 0 to slot 4
 	if p.slots[0] != "" || p.slots[4] != "fire" {
 		t.Fatalf("Fire should have moved to slot 4, got %v", p.slots)
@@ -28,6 +28,20 @@ func TestAssignSkill(t *testing.T) {
 	assignSkill(p, "fire", 4) // assigning to its own slot again clears it
 	if p.slots[4] != "" {
 		t.Fatalf("re-assigning to the same slot should unequip, got %v", p.slots)
+	}
+}
+
+func TestAssignHotbarPotionAndRejectNonHolyHeal(t *testing.T) {
+	p := heroAt("city", 19, 16)
+
+	assignSkill(p, "heal", 4)
+	if p.slots[4] == "heal" {
+		t.Fatalf("non-Holy should not be able to assign Heal, got %v", p.slots)
+	}
+
+	assignSkill(p, "potion", 4)
+	if p.slots[4] != "potion" {
+		t.Fatalf("usable items should be assignable to hotbar slots, got %v", p.slots)
 	}
 }
 
@@ -49,5 +63,17 @@ func TestUpgradeSkillUsesPointAndPrereq(t *testing.T) {
 	}
 	if p.skillLevels["bolt"] != 2 || p.skillPoints != 0 {
 		t.Fatalf("bolt upgrade wrong: levels=%v points=%d", p.skillLevels, p.skillPoints)
+	}
+}
+
+func TestNonHolyCannotUpgradeHeal(t *testing.T) {
+	p := heroAt("city", 19, 16)
+	p.skillPoints = 1
+
+	if upgradeSkill(p, "heal") {
+		t.Fatal("non-Holy should not be able to upgrade Heal")
+	}
+	if p.skillLevels["heal"] != 1 || p.skillPoints != 1 {
+		t.Fatalf("rejected Heal upgrade should not spend points, levels=%v points=%d", p.skillLevels, p.skillPoints)
 	}
 }

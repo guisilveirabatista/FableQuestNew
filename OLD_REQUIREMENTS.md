@@ -137,4 +137,22 @@ Improvements
 - I would like another refactor. Instead of Alt + mouse 1 creating a follow + attack, I want it to be when the user holds Ctrl + Alt + presses mouse 1 to activate "follow and attack". This will keep the battle system consistent for both pvp and pvm.
 
 - Alt + mouse 1 should follow only. But you can use this anywhere, even outside combat zones.
-- A previous changed I asked to only start following when the other player/monster being followed is more than one square distance. However, the first time I click to follow them, this rule does not apply. Only after I already closed distance, this rule activates. This hopefully will solve a bug. 
+- A previous changed I asked to only start following when the other player/monster being followed is more than one square distance. However, the first time I click to follow them, this rule does not apply. Only after I already closed distance, this rule activates. This hopefully will solve a bug.
+
+- Remove the "always visible" name label from dead bodies or decayed corpses. I want to see the name of the person who died only when I hover my mouse over them.
+
+- Get rid of the "Heal" skill from all classes, except from the "Holy". The others should heal by using potions.
+
+- I should be able to add usable items like potions, food, etc to the slots as well, not just skills
+
+- If I click with mouse 2 on a corpse from a distance, my character should walk up to it and then open the body like it already does when I'm close to the body. If I click with mouse 1 outside the window of the dead body, it should close the window.
+
+- There should be a button "Take all" in the body window and a button "Close".
+
+- I should be able to drag and drop the body around with mouse 1
+
+- Mouse 2 should be the command that picks items up from the floor, not mouse 1
+
+- Like with the body, any object that I can interact with the mouse 2 button and that requires the player to be with the character close to it, like picking up an item from the floow, should walk up to the item when clicking mouse 2.
+
+- When the items are on the floor, and I hover my mouse over name, their names are appearing as "Object", instead of the real name of the item

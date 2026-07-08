@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>Fable Quest — RM2k3 RTP demo</title>
+<title>Fable Quest</title>
 <style>
   html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
   canvas {
@@ -20,12 +20,11 @@
 <canvas id="screen" width="640" height="400"></canvas>
 <script src="assets/music.js"></script>
 <script src="midi.js"></script>
-<!-- Phase 0 split: authoritative sim first, then the browser client that drives it -->
+<!-- Shared rules first, then the server-driven browser client. -->
 <script src="sim.js"></script>
 <script src="client.js"></script>
-<!-- Phase 1: optional netplay client (activated with ?net=1) -->
 <script src="netclient.js"></script>
-<!-- Phase 6: social UI (chat, party, trade, PvP) for netplay -->
+<!-- Social UI: chat, party, trade, PvP. -->
 <script src="netsocial.js"></script>
 </body>
 </html>

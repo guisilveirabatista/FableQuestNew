@@ -322,7 +322,8 @@ function loadGame() {
   game.follow = false;
   game.followEngaged = false;
   game.path = null;
-  if (!h.slots) h.slots = ['fire', 'heal', 'spin', 'bolt', null]; // pre-skillbar save
+  if (!h.slots) h.slots = defaultSlotsForClass(h.class); // pre-skillbar save
+  normalizeHeroSlots(h);
   if (!h.attr) { // pre-attribute save: default attrs, level-ups worth of points to spend
     h.attr = { ...BASE_ATTR };
     h.points = (h.lv - 1) * 3;
@@ -366,8 +367,17 @@ const NPC_NAME = {
   guard: 'Guard',
 };
 function npcName(n) { return NPC_NAME[n.id] || n.id; }
+function itemId(id) {
+  if (typeof id === 'string') return id;
+  if (id && typeof id === 'object') return id.id || id.Id || id.name || id.Name || '';
+  return id == null ? '' : String(id);
+}
+function itemName(id) {
+  const key = itemId(id);
+  return (ITEMS[key] && ITEMS[key].name) || (key && key !== '[object Object]' ? key : 'Item');
+}
 function itemLabel(f) {
-  const name = ITEMS[f.id] ? ITEMS[f.id].name : f.id;
+  const name = itemName(f.id);
   return f.n > 1 ? `${name} x${f.n}` : name;
 }
 function corpseLabel(c) {
@@ -518,12 +528,23 @@ function inBagWin(p) {
 }
 function panelWidth() { return W - PANEL.x; }
 
-// corpse-loot window, docked just left of the inventory panel
+// corpse-loot window, docked just left of the inventory panel by default
 const CORPSE_WIN = { x: Math.max(4, BAG_WIN.x - 132), y: 4, w: 128, h: 150, C: 4, S: 26 };
+function clampCorpseWin() {
+  CORPSE_WIN.x = Math.max(0, Math.min(W - CORPSE_WIN.w, CORPSE_WIN.x));
+  CORPSE_WIN.y = Math.max(0, Math.min(H - CORPSE_WIN.h, CORPSE_WIN.y));
+}
 function inCorpseWin(p) {
   return p.x >= CORPSE_WIN.x && p.x < CORPSE_WIN.x + CORPSE_WIN.w &&
     p.y >= CORPSE_WIN.y && p.y < CORPSE_WIN.y + CORPSE_WIN.h;
 }
+function corpseTakeAllButton() {
+  return { x: CORPSE_WIN.x + 10, y: CORPSE_WIN.y + CORPSE_WIN.h - 22, w: 58, h: 16 };
+}
+function corpseCloseButton() {
+  return { x: CORPSE_WIN.x + CORPSE_WIN.w - 54, y: CORPSE_WIN.y + CORPSE_WIN.h - 22, w: 44, h: 16 };
+}
+function inCorpseButton(p, b) { return hit(p, b.x, b.y, b.w, b.h); }
 function corpseCellAt(px, py) {
   const { x: X, y: Y, C, S } = CORPSE_WIN;
   for (let i = 0; i < C * 4; i++) {
@@ -532,8 +553,125 @@ function corpseCellAt(px, py) {
   }
   return -1;
 }
+function setCorpseWalkTarget(c) {
+  game.corpseWalkTarget = c ? { map: c.map || game.mapId, tx: c.tx, ty: c.ty } : null;
+}
+function requestCorpseOpen(c, sendMove) {
+  if (!c || c.decayed) return false;
+  setFloorLootTarget(null, null);
+  if (nearHero(c.tx, c.ty)) {
+    setCorpseWalkTarget(null);
+    game.corpseOpen = c;
+    sfx('Decision1');
+    return true;
+  }
+  game.corpseOpen = null;
+  setCorpseWalkTarget(c);
+  if (sendMove) sendMove(c.tx, c.ty);
+  if (typeof startPathTo === 'function') startPathTo(c.tx, c.ty);
+  sfx('Cursor1');
+  return true;
+}
+function updatePendingCorpseOpen() {
+  const t = game.corpseWalkTarget;
+  if (!t) return false;
+  if (t.map !== game.mapId) { setCorpseWalkTarget(null); return false; }
+  const c = corpseAt(t.tx, t.ty);
+  if (!c || c.decayed) { setCorpseWalkTarget(null); return false; }
+  if (!nearHero(c.tx, c.ty)) return false;
+  game.corpseOpen = c;
+  setCorpseWalkTarget(null);
+  game.path = null;
+  sfx('Decision1');
+  return true;
+}
+function setFloorLootTarget(tx, ty) {
+  game.floorLootTarget = Number.isFinite(tx) && Number.isFinite(ty) ? { map: game.mapId, tx, ty } : null;
+}
+function requestFloorLoot(tx, ty, sendMove, takeFn) {
+  if (!floorAt(tx, ty).length) return false;
+  setCorpseWalkTarget(null);
+  if (nearHero(tx, ty)) {
+    setFloorLootTarget(null);
+    takeFn(tx, ty);
+    return true;
+  }
+  setFloorLootTarget(tx, ty);
+  if (sendMove) sendMove(tx, ty);
+  if (typeof startPathTo === 'function') startPathTo(tx, ty);
+  sfx('Cursor1');
+  return true;
+}
+function updatePendingFloorLoot(takeFn) {
+  const t = game.floorLootTarget;
+  if (!t) return false;
+  if (t.map !== game.mapId) { setFloorLootTarget(null); return false; }
+  if (!floorAt(t.tx, t.ty).length) { setFloorLootTarget(null); return false; }
+  if (!nearHero(t.tx, t.ty)) return false;
+  takeFn(t.tx, t.ty);
+  setFloorLootTarget(null);
+  game.path = null;
+  return true;
+}
+function updateCorpseDrag() {
+  const d = game.corpseDrag;
+  if (!d) return;
+  if (!mouse.down) { game.corpseDrag = null; return; }
+  CORPSE_WIN.x = mouse.x - d.dx;
+  CORPSE_WIN.y = mouse.y - d.dy;
+  clampCorpseWin();
+}
+function updateCorpseWinControls(takeFn) {
+  if (!game.corpseOpen) return false;
+  updateCorpseDrag();
+  const c = game.corpseOpen;
+  if (pressed(CANCEL)) { game.corpseOpen = null; game.corpseDrag = null; sfx('Cancel1'); return true; }
+  if (pressed(CONFIRM)) { takeFn(c, '*'); queue = []; sfx('Decision1'); return true; }
+  const takeAll = corpseTakeAllButton(), close = corpseCloseButton();
+  let consumed = false;
+  clicks = clicks.filter(cl => {
+    if (cl.b !== 0) return true;
+    if (!inCorpseWin(cl)) {
+      game.corpseOpen = null;
+      game.corpseDrag = null;
+      sfx('Cancel1');
+      consumed = true;
+      return false;
+    }
+    consumed = true;
+    if (inCorpseButton(cl, close)) {
+      game.corpseOpen = null;
+      game.corpseDrag = null;
+      sfx('Cancel1');
+      return false;
+    }
+    if (inCorpseButton(cl, takeAll)) {
+      takeFn(c, '*');
+      sfx('Decision1');
+      return false;
+    }
+    const ids = Object.keys(c.items);
+    const i = corpseCellAt(cl.x, cl.y);
+    if (i >= 0 && i < ids.length) {
+      if (cl.dbl) takeFn(c, ids[i]);
+      return false;
+    }
+    game.corpseDrag = { dx: cl.x - CORPSE_WIN.x, dy: cl.y - CORPSE_WIN.y };
+    return false;
+  });
+  if (game.corpseDrag && !mouse.down) game.corpseDrag = null;
+  return consumed;
+}
+function hotbarSlotAt(px, py) {
+  for (let i = 0; i < 5; i++) {
+    const x = 4 + i * 21, y = H - 24;
+    if (px >= x && px < x + 20 && py >= y && py < y + 20) return i;
+  }
+  return -1;
+}
 function drawCorpseWin() {
   const c = game.corpseOpen, ids = Object.keys(c.items);
+  clampCorpseWin();
   drawWindow(CORPSE_WIN.x, CORPSE_WIN.y, CORPSE_WIN.w, CORPSE_WIN.h);
   text(c.name || 'Your remains', CORPSE_WIN.x + 12, CORPSE_WIN.y + 7, '#f76');
   ids.forEach((id, i) => {
@@ -543,8 +681,11 @@ function drawCorpseWin() {
     text('' + c.items[id], x + 10, y + 12, '#ffe080');
   });
   if (!ids.length) text('Picked clean.', CORPSE_WIN.x + 12, CORPSE_WIN.y + 34, '#999');
-  text('Dbl-click: take', CORPSE_WIN.x + 10, CORPSE_WIN.y + CORPSE_WIN.h - 26, '#9cf');
-  text('Enter: take all', CORPSE_WIN.x + 10, CORPSE_WIN.y + CORPSE_WIN.h - 14, '#9cf');
+  const takeAll = corpseTakeAllButton(), close = corpseCloseButton();
+  drawWindow(takeAll.x, takeAll.y, takeAll.w, takeAll.h);
+  text('Take all', takeAll.x + 5, takeAll.y + 5, ids.length ? '#fff' : '#999');
+  drawWindow(close.x, close.y, close.w, close.h);
+  text('Close', close.x + 7, close.y + 5, '#fff');
 }
 
 // mouse interactions on the live panel: click selects, double-click
@@ -589,9 +730,12 @@ function updateInvPanel() {
   }
   for (const r of releases) {
     if (r.b !== 0 || !game.invDrag) continue;
-    const d = game.invDrag, bs = bodySlotAt(r.x, r.y);
+    const d = game.invDrag, bs = bodySlotAt(r.x, r.y), hs = hotbarSlotAt(r.x, r.y);
     if (d.from === 'bag') {
-      if (bs) pushIntent({ t: 'equip', id: d.id, bslot: bs });
+      if (hs >= 0) {
+        if (isHotbarItem(d.id)) pushIntent({ t: 'assignSkill', id: d.id, slot: hs });
+        else sfx('Buzzer1');
+      } else if (bs) pushIntent({ t: 'equip', id: d.id, bslot: bs });
       else if (!inPanel(r)) pushIntent({ t: 'dropItem', id: d.id }); // dragged onto the map
     } else if (bs && bs !== d.slot && canPlace(d.id, bs)) {
       pushIntent({ t: 'unequip', bslot: d.slot }); // move between slots (ring to the other finger)
@@ -1226,19 +1370,13 @@ function drawDeathPopup() {
 function deathAction(id) {
   if (id === 'respawn') {
     if (game.net) netSend(game.net, { t: 'respawn' });
-    else respawnHero();
     sfx('Decision1');
   } else {
     sfx('Cancel1');
     if (game.net) {
       if (game.net.ws) game.net.ws.close();
-      location.href = location.pathname;
-    } else {
-      game.death = null;
-      game.scene = 'title';
-      game.titleCursor = 0;
-      syncMusic();
     }
+    location.reload();
   }
 }
 
@@ -1277,6 +1415,10 @@ function tileHit(wx, wy, tx, ty, inset = 0) {
   return wx >= tx * TS + inset && wx < (tx + 1) * TS - inset &&
     wy >= ty * TS + inset && wy < (ty + 1) * TS - inset;
 }
+function floorItemHit(wx, wy, f) {
+  return wx >= f.tx * TS + 1 && wx < f.tx * TS + 15 &&
+    wy >= f.ty * TS + 1 && wy < f.ty * TS + 15;
+}
 function hoverTarget() {
   if (hoverBlockedByUI()) return null;
   const cam = camPos();
@@ -1286,11 +1428,13 @@ function hoverTarget() {
   const add = (base, pri, t) => hits.push({ base, pri, ...t });
 
   for (const f of game.floor) {
-    if (f.map === game.mapId && tileHit(wx, wy, f.tx, f.ty, 1))
-      add(f.ty * TS + 2, 1, {
+    if (f.map === game.mapId && tileHit(wx, wy, f.tx, f.ty, 1)) {
+      const direct = floorItemHit(wx, wy, f);
+      add(direct ? f.ty * TS + TS + 1 : f.ty * TS + 2, direct ? 6 : 1, {
         name: itemLabel(f), hp: 1, maxhp: 1, hpColor: '#9fb4c8',
         x: f.tx * TS + 8 - cam.x, y: f.ty * TS - cam.y, color: '#ffe080',
       });
+    }
   }
   for (const c of game.corpses) {
     if (c.map === game.mapId && tileHit(wx, wy, c.tx, c.ty))
@@ -1459,7 +1603,7 @@ function drawMiniMap() {
 // ---------------------------------------------------------------- game menu
 const MENU_W = 120;
 const MRX = W - 124; // right column: same grid as the inventory windows
-const ROOT_MENU = ['Inventory', 'Map', 'Skills', 'Attribs', 'Status', 'Quest', 'Options', 'Log Out'];
+const ROOT_MENU = ['Inventory', 'Map', 'Skills', 'Attributes', 'Status', 'Quest', 'Options', 'Log Out'];
 const OPTIONS_MENU = ['Music', 'Autoloot', 'Mini Map', 'Log'];
 function rootBox() { return { x: MRX, y: 8, w: MENU_W, h: ROOT_MENU.length * 16 + 12 }; }
 function subX(w) { return Math.max(4, MRX - w - 6); }
@@ -1512,10 +1656,7 @@ function logOut() {
     return;
   }
   sfx('Decision1');
-  game.menu = null;
-  game.scene = 'title';
-  game.titleCursor = 0;
-  syncMusic();
+  location.reload();
 }
 function clearMenuShortcutUi() {
   game.mapOpen = false;
@@ -1558,7 +1699,7 @@ function rootMenuSelect(sel) {
   if (sel === 'Inventory') { game.invOpen = !game.invOpen; game.menu = null; sfx('Decision1'); }
   else if (sel === 'Map') openMapWindow();
   else if (sel === 'Skills') { m.mode = 'skills'; m.cursor2 = 0; m.assign = false; m.skillCarry = null; m.skillDrag = null; sfx('Decision1'); }
-  else if (sel === 'Attribs') { m.mode = 'attribs'; m.cursor2 = 0; beginAttrDraft(m); sfx('Decision1'); }
+  else if (sel === 'Attributes') { m.mode = 'attributes'; m.cursor2 = 0; beginAttrDraft(m); sfx('Decision1'); }
   else if (sel === 'Status' || sel === 'Quest') { m.mode = sel.toLowerCase(); sfx('Decision1'); }
   else if (sel === 'Options') { m.mode = 'options'; m.cursor2 = 0; sfx('Decision1'); }
   else if (sel === 'Log Out') logOut();
@@ -1636,6 +1777,24 @@ function drawSkillIcon(id, x, y, selected = false) {
   ctx.strokeRect(x + 0.5, y + 0.5, 15, 15);
   text(SKILLS[id].name[0], x + 5, y + 4, selected ? '#ffe080' : '#fff');
 }
+function drawHotbarEntry(id, x, y, selected = false, h = game.hero) {
+  if (!id) return;
+  if (SKILLS[id]) {
+    drawSkillIcon(id, x, y, selected);
+    return;
+  }
+  const it = ITEMS[id];
+  if (!it) return;
+  const count = (h.bag && h.bag[id]) || 0;
+  ctx.fillStyle = selected ? '#456380' : 'rgba(10,20,30,.6)';
+  ctx.fillRect(x, y, 16, 16);
+  ctx.strokeStyle = selected ? '#ffe080' : '#56718a';
+  ctx.strokeRect(x + 0.5, y + 0.5, 15, 15);
+  ctx.globalAlpha = count > 0 ? 1 : 0.45;
+  ctx.drawImage(img[it.img], x + 1, y + 1, 14, 14);
+  ctx.globalAlpha = 1;
+  if (count > 0) text(count > 9 ? '9+' : String(count), x + 7, y + 8, '#ffe080');
+}
 function attrLayout() { const w = 224, h = 174; return { x: subX(w), y: 8, w, h }; }
 function optionsLayout() { const w = 132; return { x: subX(w), y: 8, w, h: OPTIONS_MENU.length * 16 + 16 }; }
 function menuCloseButton(l) { return { x: l.x + l.w - 50, y: l.y + 7, w: 38, h: 16 }; }
@@ -1674,7 +1833,8 @@ function updateMenu(dt) {
     if (pressed(CANCEL)) { game.menu = null; sfx('Cancel1'); return; }
     if (pressed(CONFIRM)) rootMenuSelect(ROOT_MENU[m.cursor]);
   } else if (m.mode === 'skills') {
-    const ids = Object.keys(SKILLS);
+    const ids = availableSkillIds(h);
+    if (m.cursor2 >= ids.length) m.cursor2 = ids.length - 1;
     const l = skillLayout(ids);
     const hov = hoverRow(l.x + 8, l.rowY, l.w - 16, 16, ids.length, l.rowH);
     if (hov >= 0) m.cursor2 = hov;
@@ -1725,7 +1885,7 @@ function updateMenu(dt) {
       else sfx('Buzzer1');
     }
     if (pressed(CONFIRM)) { m.skillCarry = ids[m.cursor2]; m.assign = true; sfx('Decision1'); }
-  } else if (m.mode === 'attribs') {
+  } else if (m.mode === 'attributes') {
     ensureAttrDraft(m);
     const l = attrLayout();
     const hov = hoverRow(l.x + 8, l.y + 30, 100, 15, ATTRS.length);
@@ -1773,7 +1933,8 @@ function drawMenu() {
     text(left > 0 ? `Log Out ${left}s` : s, rb.x + 14, rb.y + 10 + i * 16, left > 0 ? '#999' : '#fff');
   });
   if (m.mode === 'skills') {
-    const ids = Object.keys(SKILLS);
+    const ids = availableSkillIds(h);
+    if (m.cursor2 >= ids.length) m.cursor2 = ids.length - 1;
     const l = skillLayout(ids);
     drawWindow(l.x, l.y, l.w, l.h);
     text('Skills', l.x + 12, l.y + 8, '#ffe080');
@@ -1797,7 +1958,7 @@ function drawMenu() {
       drawWindow(bx, by, 18, 18);
       text(String(j + 1), bx + 3, by - 8, '#9cf');
       const sid = h.slots[j];
-      if (sid) text(SKILLS[sid].name[0], bx + 6, by + 5, sid === ids[m.cursor2] ? '#ffe080' : '#fff');
+      if (sid) drawHotbarEntry(sid, bx + 1, by + 1, sid === ids[m.cursor2], h);
     }
     drawWindow(l.x + 12, l.buttonY, 116, 18);
     if (m.skillCarry) drawCursor(l.x + 15, l.buttonY + 3, 110, 12);
@@ -1811,7 +1972,7 @@ function drawMenu() {
       drawSkillIcon(heldSkill, mouse.x + 8, mouse.y + 8, true);
       text(SKILLS[heldSkill].name, Math.min(W - 86, mouse.x + 28), mouse.y + 12, '#ffe080');
     }
-  } else if (m.mode === 'attribs') {
+  } else if (m.mode === 'attributes') {
     ensureAttrDraft(m);
     const l = attrLayout(), st = statsForAttr(m.attrDraft);
     drawWindow(l.x, l.y, l.w, l.h);
@@ -1940,7 +2101,6 @@ function drawMap() {
         } else {
           drawDeadHero(c.tx * TS, c.ty * TS, 0.85, h);
         }
-        if (c.name) text(c.name, c.tx * TS + 8 - Math.floor(textWidth(c.name) / 2), c.ty * TS - 12, '#f0d0d0');
       },
     });
   }
@@ -2018,7 +2178,12 @@ function drawMap() {
       const x = 4 + i * 21, y = H - 24;
       drawWindow(x, y, 20, 20);
       text(String(i + 1), x + 3, y + 2, '#9cf');
-      if (id) text(SKILLS[id].name[0], x + 9, y + 9, h.mp >= skillCost(id, h) ? '#fff' : '#999');
+      if (id) {
+        const canUse = SKILLS[id] ? (skillAllowedForClass(id, h) && h.mp >= skillCost(id, h)) : ((h.bag && h.bag[id]) > 0);
+        ctx.globalAlpha = canUse ? 1 : 0.55;
+        drawHotbarEntry(id, x + 2, y + 3, false, h);
+        ctx.globalAlpha = 1;
+      }
     });
   }
   drawMiniMap();
@@ -2026,14 +2191,6 @@ function drawMap() {
 
   if (game.invOpen) drawInvPanel();
   if (game.corpseOpen) drawCorpseWin();
-  if (game.lootDrag) { // floor loot riding the cursor toward the backpack
-    const f = floorAt(game.lootDrag.tx, game.lootDrag.ty)[0];
-    if (f) {
-      ctx.globalAlpha = 0.85;
-      ctx.drawImage(img[ITEMS[f.id].img], mouse.x - 9, mouse.y - 9, 18, 18);
-      ctx.globalAlpha = 1;
-    }
-  }
   if (game.logOpen) drawLog();
   if (game.dialogue) {
     const d = game.dialogue;
@@ -2078,37 +2235,6 @@ function wrapText(str, x, y, w) {
   text(line, x, ly);
 }
 
-// ---------------------------------------------------------------- title / gameover
-function drawTitle() {
-  // scale the 320x240 title art to cover the screen, biased to keep the castle
-  const s = Math.max(W / 320, H / 240);
-  ctx.drawImage(img.title, (W - 320 * s) / 2, Math.min(0, H - 240 * s), 320 * s, 240 * s);
-  const my = Math.floor(H / 2);
-  drawWindow(W / 2 - 64, my, 128, 24);
-  text('FABLE QUEST', W / 2 - 32, my + 8, '#ffe080');
-  const hasSave = !!localStorage.getItem(SAVE_KEY);
-  drawWindow(W / 2 - 64, my + 30, 128, 48);
-  drawCursor(W / 2 - 58, my + 36 + game.titleCursor * 16, 116, 16);
-  text('New Game', W / 2 - 32, my + 40);
-  text('Continue', W / 2 - 32, my + 56, hasSave ? '#fff' : '#999');
-}
-function updateTitle() {
-  if (pressed(['ArrowUp', 'ArrowDown', 'w', 's'])) { game.titleCursor ^= 1; sfx('Cursor1'); }
-  if (!pressed(CONFIRM) && !clicked(0)) return;
-  if (game.titleCursor === 0) {
-    sfx('Decision1');
-    resetGame();
-    game.scene = 'map';
-    syncMusic();
-  } else if (localStorage.getItem(SAVE_KEY)) {
-    sfx('Decision1');
-    resetGame();
-    loadGame();
-    game.scene = 'map';
-    syncMusic();
-  } else sfx('Buzzer1');
-}
-
 // ---------------------------------------------------------------- input → intents
 // The client half of the old updateMap(): read raw input, drive the local UI
 // state (menus, panels, dialogue, drag), and translate player actions into
@@ -2137,27 +2263,25 @@ function processInput(dt) {
   }
   // walk command: the held direction, unless a UI panel owns the keyboard
   const captured = game.shop || game.menu || game.dialogue || game.itemPopup || game.invFocus;
-  pushIntent({ t: 'moveDir', dir: captured ? null : dirHeld() });
+  const heldDir = captured ? null : dirHeld();
+  if (heldDir) { setCorpseWalkTarget(null); setFloorLootTarget(null, null); }
+  pushIntent({ t: 'moveDir', dir: heldDir });
 
   // walked away from your remains: the loot window closes itself
+  updatePendingCorpseOpen();
+  updatePendingFloorLoot((tx, ty) => pushIntent({ t: 'takeLoot', tx, ty }));
   if (game.corpseOpen && (game.corpseOpen.map !== game.mapId ||
-    game.corpseOpen.decayed || !nearHero(game.corpseOpen.tx, game.corpseOpen.ty))) game.corpseOpen = null;
+    game.corpseOpen.decayed || !nearHero(game.corpseOpen.tx, game.corpseOpen.ty))) {
+    game.corpseOpen = null;
+    game.corpseDrag = null;
+  }
 
   if (game.itemPopup) { // item details popup: any confirm/click closes
     if (pressed(CANCEL) || pressed(CONFIRM) || clicked(0)) { game.itemPopup = null; sfx('Cancel1'); }
     return;
   }
   if (game.corpseOpen) { // corpse window: take loot; walking stays live
-    const c = game.corpseOpen;
-    if (pressed(CANCEL)) { game.corpseOpen = null; sfx('Cancel1'); return; }
-    if (pressed(CONFIRM)) { pushIntent({ t: 'takeCorpse', tx: c.tx, ty: c.ty, id: '*' }); queue = []; } // take everything
-    clicks = clicks.filter(cl => {
-      if (cl.b !== 0 || !inCorpseWin(cl)) return true;
-      const ids = Object.keys(c.items);
-      const i = corpseCellAt(cl.x, cl.y);
-      if (cl.dbl && i >= 0 && i < ids.length) pushIntent({ t: 'takeCorpse', tx: c.tx, ty: c.ty, id: ids[i] });
-      return false; // the window ate this click
-    });
+    updateCorpseWinControls((c, id) => pushIntent({ t: 'takeCorpse', tx: c.tx, ty: c.ty, id }));
   }
   if (game.invOpen) updateInvPanel(); // panel mouse works in every mode
   if (game.shop) { updateShop(); return; }
@@ -2196,15 +2320,23 @@ function processInput(dt) {
       const wx = Math.floor(wxp / TS), wy = Math.floor(wyp / TS);
       const shopNpc = shopNpcAtPoint(wxp, wyp);
       const co = corpseAt(wx, wy);
-      if (shopNpc) openShopChoice(shopForNpc(shopNpc), c.x, c.y);
-      else if (co && !co.decayed && nearHero(wx, wy)) { game.corpseOpen = co; sfx('Decision1'); }
+      const floor = floorAt(wx, wy);
+      if (shopNpc) { setCorpseWalkTarget(null); setFloorLootTarget(null, null); openShopChoice(shopForNpc(shopNpc), c.x, c.y); }
+      else if (co && !co.decayed) requestCorpseOpen(co, (tx, ty) => pushIntent({ t: 'moveTo', tx, ty }));
+      else if (floor.length) requestFloorLoot(wx, wy,
+        (tx, ty) => pushIntent({ t: 'moveTo', tx, ty }),
+        (tx, ty) => pushIntent({ t: 'takeLoot', tx, ty }));
+      else { setCorpseWalkTarget(null); setFloorLootTarget(null, null); }
     } else if (game.net) {
       // net mode combat clicks (Ctrl/Alt for lock/follow) are handled in netclient.js
     } else if (c.b === 0 && c.ctrl && c.alt) { // Ctrl+Alt + left-click: activate both lock (attack) and follow
+      setCorpseWalkTarget(null); setFloorLootTarget(null, null);
       pushIntent({ t: 'followAt', x: c.x + cam.x, y: c.y + cam.y });
     } else if (c.b === 0 && c.ctrl) { // Ctrl+left-click: toggle lock for attack (re-click same to unlock)
+      setCorpseWalkTarget(null); setFloorLootTarget(null, null);
       pushIntent({ t: 'lockAt', x: c.x + cam.x, y: c.y + cam.y });
     } else if (c.b === 0 && c.alt) { // Alt + left-click: toggle "Follow mode" on the enemy
+      setCorpseWalkTarget(null); setFloorLootTarget(null, null);
       const wx = c.x + cam.x;
       const wy = c.y + cam.y;
       const en = enemyAtPoint(wx, wy);
@@ -2219,21 +2351,14 @@ function processInput(dt) {
     } else if (c.b === 0 && !game.invDrag) {
       const wx = Math.floor((c.x + cam.x) / TS), wy = Math.floor((c.y + cam.y) / TS);
       const co = corpseAt(wx, wy);
-      if (co && !co.decayed && nearHero(wx, wy) && c.dbl) { game.corpseOpen = co; sfx('Decision1'); } // open your remains
-      else if (floorAt(wx, wy).length && nearHero(wx, wy)) {
-        // loot in reach: double-click pockets it, a press starts a drag
-        if (c.dbl) pushIntent({ t: 'takeLoot', tx: wx, ty: wy });
-        else game.lootDrag = { tx: wx, ty: wy };
-      } else pushIntent({ t: 'moveTo', tx: wx, ty: wy });
+      if (co && !co.decayed && nearHero(wx, wy) && c.dbl) { setCorpseWalkTarget(null); setFloorLootTarget(null, null); game.corpseOpen = co; sfx('Decision1'); } // open your remains
+      else {
+        setCorpseWalkTarget(null); setFloorLootTarget(null, null);
+        pushIntent({ t: 'moveTo', tx: wx, ty: wy });
+      }
     }
   }
-  for (const r of releases) { // floor loot dragged into the backpack window
-    if (r.b !== 0 || !game.lootDrag) continue;
-    const d = game.lootDrag;
-    if (inPanel(r) && nearHero(d.tx, d.ty)) pushIntent({ t: 'takeLoot', tx: d.tx, ty: d.ty });
-    game.lootDrag = null;
-  }
-  if (game.lootDrag && !mouse.down) game.lootDrag = null;
+  game.lootDrag = null;
   if (pressed(CANCEL)) {
     if (game.invFocus) { game.invFocus = null; sfx('Cancel1'); return; }
     return;
@@ -2289,26 +2414,14 @@ function loop(ts) {
   if (!(frame >= 0)) frame = 0;   // first frame / clock reset
   if (frame > 0.25) frame = 0.25; // don't spiral after a long pause
   if (game.scene === 'title') {
-    updateTitle();
-    if (game.scene === 'title') drawTitle();
+    if (!game.net) netStart(configuredNetUrl());
     acc = 0;
   } else if (game.scene === 'map') {
     if (game.net) {
       netFrame(frame); // netplay: predict own hero, render server snapshots
     } else {
-      processInput(frame); // raw input -> UI state + intents (every frame)
-      if (game.scene === 'map') {
-        acc += frame;
-        let ticks = 0;
-        while (acc >= FIXED && ticks < 5) { snapshotPrev(); stepWorld(FIXED); acc -= FIXED; ticks++; }
-        if (ticks === 5) acc = 0; // fell too far behind: drop the backlog
-        if (game.scene === 'map') {
-          const a = Math.max(0, Math.min(1, acc / FIXED));
-          applyInterp(a);
-          drawMap();
-          clearInterp();
-        }
-      }
+      netStart(configuredNetUrl());
+      acc = 0;
     }
   }
   queue = [];
@@ -2320,6 +2433,13 @@ function loop(ts) {
 }
 
 // ---------------------------------------------------------------- boot
+function defaultNetUrl() {
+  return (location.protocol === 'https:' ? 'wss' : 'ws') + '://' + location.host + '/ws';
+}
+function configuredNetUrl() {
+  const v = new URLSearchParams(location.search).get('net');
+  return v && v !== '1' ? v : defaultNetUrl();
+}
 Promise.all(IMAGES.map(n => new Promise((res, rej) => {
   const i = new Image();
   i.onload = () => { img[n] = i; res(); };
@@ -2327,26 +2447,7 @@ Promise.all(IMAGES.map(n => new Promise((res, rej) => {
   i.src = 'assets/' + n + '.png';
 }))).then(() => {
   resetGame();
-  const p = new URLSearchParams(location.search);
-  if (p.get('net')) { // netplay: connect to the authoritative server and skip the title
-    const v = p.get('net');
-    const url = v === '1' ? (location.protocol === 'https:' ? 'wss' : 'ws') + '://' + location.host + '/ws' : v;
-    netStart(url);
-    focusGame();
-    requestAnimationFrame(loop);
-    return;
-  }
-  if (p.get('scene') === 'map') game.scene = 'map';
-  if (p.get('gamemenu')) { game.scene = 'map'; game.menu = { mode: p.get('gamemenu') === '1' ? 'root' : p.get('gamemenu'), cursor: 0 }; }
-  if (p.get('enemy')) { // put the hero on the field with one enemy for testing
-    game.scene = 'map';
-    switchMap('field', 9, 12);
-    game.enemies.push({
-      kind: p.get('enemy'), tx: 11, ty: 12, px: 11 * TS, py: 12 * TS, dir: 'left',
-      anim: 1, moving: false, wait: 0.5, hp: ENEMIES[p.get('enemy')].hp,
-      maxhp: ENEMIES[p.get('enemy')].hp, flash: 0, dying: 0, stun: 0, hurtT: 9, lunge: 0,
-    });
-  }
+  netStart(configuredNetUrl());
   focusGame();
   requestAnimationFrame(loop);
 }).catch(e => {

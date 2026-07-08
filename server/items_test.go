@@ -62,6 +62,18 @@ func TestUseHeal(t *testing.T) {
 	}
 }
 
+func TestUseHealRequiresBackpackItem(t *testing.T) {
+	p := heroAt("field", 15, 10)
+	p.hp = 5
+	p.bag["potion"] = 0
+	if useItem(p, "potion") {
+		t.Fatal("using a potion should be refused when none are in the backpack")
+	}
+	if p.hp != 5 {
+		t.Fatalf("missing potion should not heal (hp %v)", p.hp)
+	}
+}
+
 func TestLootDropsIntoBag(t *testing.T) {
 	h := newHub()
 	p := heroAt("field", 15, 10)

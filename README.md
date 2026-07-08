@@ -99,7 +99,7 @@ Bag contents have weight (worn gear weighs nothing — you're wearing it). Carry
 capacity is `15 + 2×level + 2×Strength` kg; go over it and the hero trudges at
 half speed (the HUD warns **OVERWEIGHT**).
 
-Attributes: each level-up grants **3 points** to spend (menu → Attribs) on
+Attributes: each level-up grants **3 points** to spend (menu → Attributes) on
 Agility, Intelligence, Vitality, Strength, Dexterity, Magic Power and Luck.
 These drive the derived stats shown alongside: Attack (Str, Dex), Magic Attack
 (Magic Power, Int), Precision (Dex, Luck — melee hit chance), Crit % (Luck,

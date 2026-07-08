@@ -312,8 +312,9 @@ func applyCharState(p *Player, ch *charState) {
 		}
 	}
 	if len(p.slots) == 0 {
-		p.slots = []string{"fire", "heal", "spin", "bolt", ""}
+		p.slots = defaultSlotsForClass(p.class)
 	}
+	normalizeSlots(p)
 	if p.dir == "" {
 		p.dir = "down"
 	}

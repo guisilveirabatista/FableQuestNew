@@ -25,6 +25,39 @@ const BASE_ATTR = { agi: 1, int: 1, vit: 2, str: 2, dex: 1, mag: 1, luck: 1 };
 const ATTR_POINTS_PER_LEVEL = 2, SKILL_POINTS_PER_LEVEL = 1, MAX_SKILL_LEVEL = 5;
 const SKILL_TREE = { bolt: 'fire', spin: 'fire' };
 function expToNextLevel(lv) { return Math.max(1, lv || 1) * 14; }
+function skillAllowedForClass(id, h = game.hero) {
+  return id !== 'heal' || (h && h.class === 'Holy');
+}
+function availableSkillIds(h = game.hero) {
+  return Object.keys(SKILLS).filter(id => skillAllowedForClass(id, h));
+}
+function isHotbarItem(id) {
+  const it = ITEMS[id];
+  return !!(it && it.heal);
+}
+function hotbarEntryAllowed(id, h = game.hero) {
+  return !!(SKILLS[id] ? skillAllowedForClass(id, h) : isHotbarItem(id));
+}
+function defaultSlotsForClass(cls) {
+  if (cls === 'Holy') return ['heal', 'bolt', 'fire', 'spin', null];
+  return ['fire', 'potion', 'spin', 'bolt', null];
+}
+function normalizeHeroSlots(h = game.hero) {
+  if (!h.slots || !Array.isArray(h.slots)) h.slots = defaultSlotsForClass(h.class);
+  h.slots = h.slots.slice(0, 5);
+  while (h.slots.length < 5) h.slots.push(null);
+  const seen = new Set();
+  for (let i = 0; i < h.slots.length; i++) {
+    let id = h.slots[i];
+    if (id === 'heal' && !skillAllowedForClass(id, h)) id = 'potion';
+    if (!id || !hotbarEntryAllowed(id, h) || seen.has(id)) {
+      h.slots[i] = null;
+      continue;
+    }
+    h.slots[i] = id;
+    seen.add(id);
+  }
+}
 function normalizeSkillProgress(h = game.hero) {
   if (!h.skillLevels) h.skillLevels = {};
   ['fire', 'heal', 'spin', 'bolt'].forEach(id => {
@@ -72,7 +105,7 @@ function resetGame() {
     name: 'Hero', class: 'Knight', hair: '#6b3f22', cloth: '#2f7fd1',
     hp: 30, maxhp: 30, mp: 10, maxmp: 10, lv: 1, exp: 0, gold: 0,
     kills: 0,
-    slots: ['fire', 'heal', 'spin', 'bolt', null], // skill hotbar, keys 1-5
+    slots: defaultSlotsForClass('Knight'), // skill/item hotbar, keys 1-5
     skillPoints: 0,
     skillLevels: { fire: 1, heal: 1, spin: 1, bolt: 1 },
     attr: { ...BASE_ATTR },
@@ -621,7 +654,12 @@ const SKILLS = {
 function castSlot(i) {
   const h = game.hero, id = h.slots[i];
   if (game.atkCool > 0) return;
-  if (!id || h.mp < skillCost(id, h)) { sfx('Buzzer1'); return; }
+  if (!id) { sfx('Buzzer1'); return; }
+  if (isHotbarItem(id)) {
+    if (!useItem(id)) sfx('Buzzer1');
+    return;
+  }
+  if (!SKILLS[id] || !skillAllowedForClass(id, h) || h.mp < skillCost(id, h)) { sfx('Buzzer1'); return; }
   if (id !== 'heal' && !liveEnemyLock()) { sfx('Buzzer1'); return; }
   if (SKILLS[id].cast()) h.mp -= skillCost(id, h);
   else sfx('Buzzer1');
@@ -791,6 +829,7 @@ function removeItem(id, n) {
 }
 function useItem(id) { // returns true if consumed/equipped
   const h = game.hero, it = ITEMS[id];
+  if (!it || (h.bag[id] || 0) <= 0) return false;
   if (it.heal) {
     if (h.hp >= h.maxhp) return false;
     h.hp = Math.min(h.maxhp, h.hp + it.heal);
@@ -899,6 +938,7 @@ function shopSell(id, n = 1) {
 }
 function assignSkillSlot(id, i) {
   const h = game.hero, old = h.slots.indexOf(id);
+  if (i < 0 || i >= h.slots.length || !hotbarEntryAllowed(id, h)) { sfx('Buzzer1'); return; }
   if (old === i) h.slots[i] = null; // same slot again: unequip
   else { if (old >= 0) h.slots[old] = null; h.slots[i] = id; }
   sfx('Decision1');
@@ -906,7 +946,7 @@ function assignSkillSlot(id, i) {
 function upgradeSkill(id) {
   const h = game.hero;
   normalizeSkillProgress(h);
-  if (!SKILLS[id] || h.skillPoints <= 0 || h.skillLevels[id] >= MAX_SKILL_LEVEL) { sfx('Buzzer1'); return; }
+  if (!SKILLS[id] || !skillAllowedForClass(id, h) || h.skillPoints <= 0 || h.skillLevels[id] >= MAX_SKILL_LEVEL) { sfx('Buzzer1'); return; }
   const req = SKILL_TREE[id];
   if (req && h.skillLevels[req] < 2) { sfx('Buzzer1'); return; }
   h.skillLevels[id]++;
@@ -1067,14 +1107,20 @@ function advanceWorld(dt) {
 function liveFollowLock() {
   return game.follow && game.lock && !game.lock.dead && game.lock.dying <= 0 ? game.lock : null;
 }
+function liveFollowTarget() {
+  if (!game.follow) return null;
+  if (game.followPlayer && !game.followPlayer.dead) return game.followPlayer;
+  if (game.pvpTarget && !game.pvpTarget.dead) return game.pvpTarget;
+  return liveFollowLock();
+}
 function followLockInReach(en) {
   const h = game.hero, dx = en.tx - h.tx, dy = en.ty - h.ty;
   return Math.abs(dx) <= 1 && Math.abs(dy) <= 1; // one square around (incl. diagonal): in "reach" for follow facing
 }
 function faceFollowTargetIfInReach() {
-  const h = game.hero, en = liveFollowLock();
-  if (!en || h.moving || !followLockInReach(en)) return false;
-  h.dir = faceToward(en);
+  const h = game.hero, target = liveFollowTarget();
+  if (!target || h.moving || !followLockInReach(target)) return false;
+  h.dir = faceToward(target);
   h.anim = 1;
   return true;
 }
@@ -1140,11 +1186,11 @@ function stepHero(dt) {
         game.path = findPath(h.tx, h.ty, gx, gy);
       }
       if (game.path && !game.path.length) game.path = null;
-    } else if (game.follow && game.lock && !game.lock.dead && game.lock.dying <= 0) {
+    } else if (liveFollowTarget()) {
       // follow mode (F): keep walking after the locked target until in reach
-      const en = game.lock;
-      const dx = en.tx - h.tx, dy = en.ty - h.ty;
-      h.dir = faceToward(en);
+      const target = liveFollowTarget();
+      const dx = target.tx - h.tx, dy = target.ty - h.ty;
+      h.dir = faceToward(target);
       const within = Math.max(Math.abs(dx), Math.abs(dy)) <= 1;
       if (within && game.followEngaged) {
         // just face, stop chasing (rule active after first close)
