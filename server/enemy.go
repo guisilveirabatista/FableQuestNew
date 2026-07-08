@@ -25,12 +25,12 @@ type enemyKind struct {
 }
 
 var enemyKinds = map[string]enemyKind{
-	"slime": {"Slime", 0, 0, 10, 4, 1, 4, 6, 30, 0.5, 1.1, 4, 0},
-	"imp":   {"Imp", 1, 0, 16, 6, 2, 7, 12, 45, 0.25, 0.6, 5, 0.2},
-	"ghost": {"Ghost", 3, 0, 24, 8, 2, 12, 20, 55, 0.1, 0.4, 6, 0.25},
+	"slime": {"Slime", 0, 0, 14, 5, 2, 5, 7, 38, 0.25, 0.65, 7, 0},
+	"imp":   {"Imp", 1, 0, 22, 8, 3, 8, 14, 54, 0.12, 0.35, 9, 0.15},
+	"ghost": {"Ghost", 3, 0, 30, 11, 3, 14, 24, 62, 0.08, 0.25, 11, 0.2},
 }
 
-const maxEnemies = 10
+const maxEnemies = 14
 
 // maps monsters live on (the city is a safe zone)
 var spawnMaps = []string{"field"}
@@ -188,7 +188,7 @@ func (h *Hub) stepEnemy(mapID string, en *enemy, players []*Player, dt float64) 
 	target, dist := nearestPlayer(players, en.tx, en.ty)
 	fleeing := k.flee > 0 && float64(en.hp)/float64(en.maxhp) <= k.flee
 	var dirs []string
-	if target != nil && dist <= k.rng && rand.Float64() > 0.2 {
+	if target != nil && dist <= k.rng && rand.Float64() > 0.05 {
 		// chase — or flee (same pathing, away from the player)
 		dx, dy := target.tx-en.tx, target.ty-en.ty
 		hd, vd := "left", "up"

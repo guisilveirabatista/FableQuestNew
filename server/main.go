@@ -46,6 +46,8 @@ type inMsg struct {
 	Slot  int     `json:"slot"`  // hotbar slot for cast
 	Id    string  `json:"id"`    // item id for useItem/equip/dropItem
 	Bslot string  `json:"bslot"` // body slot for equip/unequip
+	Hair  string  `json:"hair"`  // character creation color
+	Cloth string  `json:"cloth"` // character creation color
 	V     bool    `json:"v"`     // toggle value (e.g. autoloot)
 	Tx    int     `json:"tx"`    // tile for takeLoot/takeCorpse
 	Ty    int     `json:"ty"`
@@ -56,6 +58,8 @@ type inMsg struct {
 	Vh    int     `json:"vh"`
 	User  string  `json:"user"` // login
 	Pass  string  `json:"pass"`
+	Name  string  `json:"name"`  // character display name
+	Class string  `json:"class"` // character class
 	Text  string  `json:"text"`  // chat message
 	Scope string  `json:"scope"` // chat scope: say | party | world
 }
@@ -67,29 +71,37 @@ type loginErrMsg struct {
 
 // server -> client
 type playerView struct {
-	ID         string   `json:"id"`
-	Tx         int      `json:"tx"`
-	Ty         int      `json:"ty"`
-	Px         float64  `json:"px"`
-	Py         float64  `json:"py"`
-	Dir        string   `json:"dir"`
-	Moving     bool     `json:"moving"`
-	Anim       float64  `json:"anim"`
-	HP         float64  `json:"hp"`
-	MaxHP      int      `json:"maxhp"`
-	MP         float64  `json:"mp"`
-	MaxMP      int      `json:"maxmp"`
-	Lv         int      `json:"lv"`
-	Exp        int      `json:"exp"`
-	Gold       int      `json:"gold"`
-	Kills      int      `json:"kills"`
-	Lock       int      `json:"lock"`
-	Slots      []string `json:"slots"`
-	Follow     bool     `json:"follow"`
-	Dead       bool     `json:"dead"`
-	DeathCause string   `json:"deathCause"`
-	Pvp        bool     `json:"pvp"`
-	CombatLog  float64  `json:"combatLog"`
+	ID           string         `json:"id"`
+	Name         string         `json:"name"`
+	Class        string         `json:"class"`
+	Tx           int            `json:"tx"`
+	Ty           int            `json:"ty"`
+	Px           float64        `json:"px"`
+	Py           float64        `json:"py"`
+	Dir          string         `json:"dir"`
+	Moving       bool           `json:"moving"`
+	Anim         float64        `json:"anim"`
+	HP           float64        `json:"hp"`
+	MaxHP        int            `json:"maxhp"`
+	MP           float64        `json:"mp"`
+	MaxMP        int            `json:"maxmp"`
+	Lv           int            `json:"lv"`
+	Exp          int            `json:"exp"`
+	Gold         int            `json:"gold"`
+	Kills        int            `json:"kills"`
+	Lock         int            `json:"lock"`
+	Slots        []string       `json:"slots"`
+	Follow       bool           `json:"follow"`
+	FollowTarget string         `json:"followTarget,omitempty"`
+	Dead         bool           `json:"dead"`
+	DeathCause   string         `json:"deathCause"`
+	Pvp          bool           `json:"pvp"`
+	PvpTarget    string         `json:"pvpTarget"`
+	CombatLog    float64        `json:"combatLog"`
+	Hair         string         `json:"hair"`
+	Cloth        string         `json:"cloth"`
+	SkillPts     int            `json:"skillPts"`
+	SkillLv      map[string]int `json:"skillLv,omitempty"`
 }
 type projView struct {
 	X    float64 `json:"x"`
@@ -103,10 +115,36 @@ type boltView struct {
 	T float64 `json:"t"`
 }
 type welcomeMsg struct {
-	T    string `json:"t"`
-	ID   string `json:"id"`
-	Map  string `json:"map"`
-	Tick int    `json:"tick"`
+	T          string             `json:"t"`
+	ID         string             `json:"id"`
+	Name       string             `json:"name"`
+	Class      string             `json:"class"`
+	Hair       string             `json:"hair"`
+	Cloth      string             `json:"cloth"`
+	Map        string             `json:"map"`
+	Tx         int                `json:"tx,omitempty"`
+	Ty         int                `json:"ty,omitempty"`
+	Dir        string             `json:"dir,omitempty"`
+	Tick       int                `json:"tick"`
+	NeedChar   bool               `json:"needChar"`
+	Classes    []string           `json:"classes"`
+	Characters []characterSummary `json:"characters,omitempty"`
+}
+type characterSummary struct {
+	Name  string `json:"name"`
+	Class string `json:"class"`
+	Map   string `json:"map"`
+	Lv    int    `json:"lv"`
+	Gold  int    `json:"gold"`
+	Hair  string `json:"hair,omitempty"`
+	Cloth string `json:"cloth,omitempty"`
+}
+type characterListMsg struct {
+	T          string             `json:"t"`
+	Characters []characterSummary `json:"characters"`
+	Classes    []string           `json:"classes"`
+	Selected   string             `json:"selected,omitempty"`
+	Error      string             `json:"error,omitempty"`
 }
 type enemyView struct {
 	ID     int     `json:"id"`
@@ -156,6 +194,7 @@ type floorView struct {
 type corpseView struct {
 	Tx      int            `json:"tx"`
 	Ty      int            `json:"ty"`
+	Name    string         `json:"name,omitempty"`
 	Items   map[string]int `json:"items"`
 	Decayed bool           `json:"decayed"`
 }
@@ -169,6 +208,10 @@ func (e *enemy) view() enemyView {
 type Player struct {
 	id       string
 	username string
+	name     string
+	class    string
+	hair     string
+	cloth    string
 	conn     netConn
 
 	mu    sync.Mutex // guards inbox (read goroutine appends, tick drains)
@@ -194,11 +237,15 @@ type Player struct {
 	kills, points    int
 	attr             AttrSet
 	slots            []string
+	skillPoints      int
+	skillLevels      map[string]int
 	bag              map[string]int
 	equip            map[string]string
 	autoloot         bool
 	atkCool, iframes float64
 	lockID           int
+	pvpTarget        string
+	followTarget     string
 	follow           bool // Alt+click / F: chase the locked target
 	log              []string
 	dead             bool
@@ -216,11 +263,33 @@ type Player struct {
 	partyInvite int    // pending invite to this party id
 	tradeID     int    // 0 = not trading
 	tradeReq    string // username of a pending trade requester
+	friends     map[string]bool
 }
 
 func (p *Player) view() playerView {
-	return playerView{p.id, p.tx, p.ty, p.px, p.py, p.dir, p.moving, p.anim,
-		p.hp, p.maxhp, p.mp, p.maxmp, p.lv, p.exp, p.gold, p.kills, p.lockID, p.slots, p.follow, p.dead, p.deathCause, p.pvp, p.combatLogoutT}
+	normalizeSkillProgress(p)
+	skillLv := map[string]int{}
+	for k, v := range p.skillLevels {
+		skillLv[k] = v
+	}
+	return playerView{
+		ID: p.id, Name: p.displayName(), Class: p.class,
+		Tx: p.tx, Ty: p.ty, Px: p.px, Py: p.py, Dir: p.dir, Moving: p.moving, Anim: p.anim,
+		HP: p.hp, MaxHP: p.maxhp, MP: p.mp, MaxMP: p.maxmp, Lv: p.lv, Exp: p.exp, Gold: p.gold, Kills: p.kills,
+		Lock: p.lockID, Slots: p.slots, Follow: p.follow, FollowTarget: p.followTarget, Dead: p.dead, DeathCause: p.deathCause,
+		Pvp: p.pvp, PvpTarget: p.pvpTarget, CombatLog: p.combatLogoutT,
+		Hair: p.hair, Cloth: p.cloth, SkillPts: p.skillPoints, SkillLv: skillLv,
+	}
+}
+
+func (p *Player) displayName() string {
+	if p != nil && p.name != "" {
+		return p.name
+	}
+	if p != nil && p.username != "" {
+		return p.username
+	}
+	return "Hero"
 }
 
 func (p *Player) logMsg(msg string) {
@@ -237,6 +306,80 @@ func (p *Player) drainLog() []string {
 	out := append([]string(nil), p.log...)
 	p.log = nil
 	return out
+}
+
+func characterSummaries(chars []*charState) []characterSummary {
+	out := make([]characterSummary, 0, len(chars))
+	for _, ch := range chars {
+		if ch == nil || !validName(ch.Name) {
+			continue
+		}
+		out = append(out, characterSummary{
+			Name: ch.Name, Class: ch.Class, Map: ch.MapID, Lv: ch.Lv, Gold: ch.Gold,
+			Hair: ch.Hair, Cloth: ch.Cloth,
+		})
+	}
+	return out
+}
+
+func findCharacter(chars []*charState, name string) *charState {
+	for _, ch := range chars {
+		if ch != nil && strings.EqualFold(ch.Name, name) {
+			return cloneChar(ch)
+		}
+	}
+	return nil
+}
+
+func upsertCharacter(chars []*charState, ch *charState) []*charState {
+	if ch == nil || !validName(ch.Name) {
+		return chars
+	}
+	next := cloneChar(ch)
+	for i, existing := range chars {
+		if existing != nil && strings.EqualFold(existing.Name, next.Name) {
+			chars[i] = next
+			return chars
+		}
+	}
+	return append(chars, next)
+}
+
+func newCharacterState(name, class, hair, cloth string) *charState {
+	p := &Player{dir: "down", friends: map[string]bool{}}
+	p.mapID, p.tx, p.ty = spawn.mapID, spawn.tx, spawn.ty
+	p.px, p.py = float64(p.tx*TS), float64(p.ty*TS)
+	initHero(p)
+	applyClassTemplate(p, class)
+	p.name, p.class = name, class
+	p.hair, p.cloth = sanitizeColor(hair, defaultHair), sanitizeColor(cloth, defaultCloth)
+	return charStateOf(p)
+}
+
+func writeJSON(c netConn, v any) {
+	b, _ := json.Marshal(v)
+	c.WriteText(b)
+}
+
+func writeCharacterList(c netConn, chars []*charState, selected, errMsg string) {
+	writeJSON(c, characterListMsg{
+		T: "characters", Characters: characterSummaries(chars), Classes: characterClasses,
+		Selected: selected, Error: errMsg,
+	})
+}
+
+func writeWelcome(c netConn, user string, ch *charState, chars []*charState, needChar bool) {
+	mapID, tx, ty, dir := spawn.mapID, spawn.tx, spawn.ty, "down"
+	name, class, hair, cloth := "", "", defaultHair, defaultCloth
+	if ch != nil {
+		mapID, tx, ty, dir = ch.MapID, ch.Tx, ch.Ty, ch.Dir
+		name, class = ch.Name, ch.Class
+		hair, cloth = ch.Hair, ch.Cloth
+	}
+	writeJSON(c, welcomeMsg{
+		T: "welcome", ID: user, Name: name, Class: class, Hair: hair, Cloth: cloth, Map: mapID, Tx: tx, Ty: ty, Dir: dir,
+		Tick: tickHz, NeedChar: needChar, Classes: characterClasses, Characters: characterSummaries(chars),
+	})
 }
 
 // ---- hub -------------------------------------------------------------------
@@ -315,7 +458,7 @@ func (h *Hub) addPlayer(c netConn, user string, ch *charState) *Player {
 		return p
 	}
 	defer h.mu.Unlock()
-	p := &Player{id: user, username: user, conn: c, dir: "down", aoiW: 22, aoiH: 16}
+	p := &Player{id: user, username: user, conn: c, dir: "down", aoiW: 22, aoiH: 16, friends: map[string]bool{}}
 	if ch != nil {
 		applyCharState(p, ch)
 	} else {
@@ -331,6 +474,9 @@ func (h *Hub) addPlayer(c netConn, user string, ch *charState) *Player {
 		}
 		p.px, p.py = float64(p.tx*TS), float64(p.ty*TS)
 		initHero(p)
+	}
+	if p.friends == nil {
+		p.friends = map[string]bool{}
 	}
 	h.players[p.id] = p
 	log.Printf("+ %s logged in (%d online)", p.id, len(h.players))
@@ -459,6 +605,8 @@ func (h *Hub) disconnect(p *Player, expected netConn) {
 	p.logoutPending = false
 	p.moveDir = ""
 	p.lockID = 0
+	p.pvpTarget = ""
+	p.followTarget = ""
 	p.follow = false
 	clearPath(p)
 	if h.shouldLingerAfterDisconnect(p) {
@@ -477,6 +625,34 @@ func (h *Hub) disconnect(p *Player, expected netConn) {
 		conn.Close()
 	}
 	saveCharacter(saveUser, saveState)
+}
+
+func (h *Hub) leaveCharacter(p *Player, expected netConn) (*charState, string, bool) {
+	h.mu.Lock()
+	cur, ok := h.players[p.id]
+	if !ok || cur != p || (expected != nil && p.conn != expected) {
+		h.mu.Unlock()
+		return nil, "character is no longer active", false
+	}
+	if h.shouldLingerAfterDisconnect(p) {
+		left := int(math.Ceil(p.combatLogoutT))
+		h.mu.Unlock()
+		return nil, fmt.Sprintf("You cannot log out during combat. Wait %ds.", left), false
+	}
+	h.cancelTrade(p)
+	h.leaveParty(p)
+	p.moveDir = ""
+	p.lockID = 0
+	p.pvpTarget = ""
+	p.followTarget = ""
+	p.follow = false
+	clearPath(p)
+	ch := charStateOf(p)
+	delete(h.players, p.id)
+	log.Printf("- %s returned to character select (%d online)", p.id, h.connectedCountLocked())
+	h.mu.Unlock()
+	saveCharacter(p.username, ch)
+	return ch, "", true
 }
 
 // run is the authoritative loop: advance every player, then push each a snapshot
@@ -529,6 +705,19 @@ func (h *Hub) run() {
 					p.lockID, p.follow = 0, false
 				}
 			}
+			if p.pvpTarget != "" {
+				if o := h.players[p.pvpTarget]; o == nil || !h.canPvp(p, o) {
+					p.pvpTarget = ""
+					if p.lockID == 0 && p.followTarget == "" {
+						p.follow = false
+					}
+				}
+			}
+			if p.followTarget != "" {
+				if o := h.players[p.followTarget]; o == nil || o.dead || o.mapID != p.mapID {
+					p.followTarget, p.follow = "", false
+				}
+			}
 			dir := p.moveDir
 			if dir == "" && len(p.path) == 0 && p.follow { // no manual input/path: chase the locked target
 				dir = h.followDir(p)
@@ -567,6 +756,9 @@ func (h *Hub) run() {
 		for _, p := range h.players {
 			if p.lockID != 0 {
 				h.autoMelee(p)
+			}
+			if p.pvpTarget != "" {
+				h.autoPvpMelee(p)
 			}
 		}
 		// 5) advance fireballs (homing + hits) and decay bolts
@@ -610,7 +802,7 @@ func (h *Hub) run() {
 		cViews := map[string][]corpseView{}
 		for mapID, list := range h.corpses {
 			for _, c := range list {
-				cViews[mapID] = append(cViews[mapID], corpseView{c.tx, c.ty, c.items, c.decayed})
+				cViews[mapID] = append(cViews[mapID], corpseView{c.tx, c.ty, c.name, c.items, c.decayed})
 			}
 		}
 		// 4) snapshot each player — only the entities inside its area of interest
@@ -673,7 +865,7 @@ func (h *Hub) run() {
 				Party:    h.buildPartyView(p),
 				Trade:    h.buildTradeView(p),
 				Invite:   p.partyID == 0 && p.partyInvite != 0 && h.parties[p.partyInvite] != nil,
-				TradeReq: p.tradeReq,
+				TradeReq: h.playerLabel(p.tradeReq),
 			})
 			outs = append(outs, outbound{p: p, conn: p.conn, data: data})
 		}
@@ -772,6 +964,7 @@ func (h *Hub) applyIntent(p *Player, m inMsg) {
 		}
 	case "moveTo":
 		p.follow = false
+		p.followTarget = ""
 		h.startPathTo(p, m.Tx, m.Ty)
 	case "attack":
 		if p.atkCool <= 0 {
@@ -779,23 +972,51 @@ func (h *Hub) applyIntent(p *Player, m inMsg) {
 		}
 	case "lockAt":
 		p.lockID = h.enemyAtPoint(p.mapID, m.X, m.Y)
+		p.pvpTarget = ""
+		p.followTarget = ""
 		p.follow = false // right-click locks for attack only, no chasing
+	case "lockPlayerAt":
+		if o := h.playerAtPoint(p.mapID, m.X, m.Y, p); o != nil {
+			if h.canPvp(p, o) {
+				p.pvpTarget = o.username
+				p.followTarget = ""
+				p.lockID = 0
+				p.follow = false
+				p.dir = faceTowardPlayer(p, o)
+			} else {
+				h.systemTo(p, "PvP is only allowed in combat zones or when both players enable /pvp.")
+			}
+		}
 	case "followAt":
-		if en := h.enemyAtPoint(p.mapID, m.X, m.Y); en != 0 { // Alt+click: lock AND follow
+		if o := h.playerAtPoint(p.mapID, m.X, m.Y, p); o != nil {
+			p.followTarget = o.username
+			p.pvpTarget = ""
+			p.lockID = 0
+			p.follow = true
+			p.dir = faceTowardPlayer(p, o)
+		} else if en := h.enemyAtPoint(p.mapID, m.X, m.Y); en != 0 { // Alt+click: lock AND follow
 			p.lockID = en
+			p.pvpTarget = ""
+			p.followTarget = ""
 			p.follow = true
 		}
 	case "toggleFollow":
-		if p.lockID != 0 {
+		if p.lockID != 0 || p.pvpTarget != "" || p.followTarget != "" {
 			p.follow = !p.follow
 		}
 	case "cycleLock":
 		h.cycleLock(p)
 	case "unlock":
 		p.lockID = 0
+		p.pvpTarget = ""
+		p.followTarget = ""
 		p.follow = false
 	case "cast":
 		h.castSlot(p, m.Slot)
+	case "upgradeSkill":
+		if !upgradeSkill(p, m.Id) {
+			h.systemTo(p, "That skill cannot be upgraded yet.")
+		}
 	case "useItem":
 		useItem(p, m.Id)
 	case "equip":
@@ -826,9 +1047,11 @@ func (h *Hub) applyIntent(p *Player, m inMsg) {
 		p.aoiH = clampInt(m.Vh, 6, 40)
 	// ---- social (Phase 6) ----
 	case "chat":
-		h.chat(p, m.Scope, m.Text)
+		h.chat(p, m.Scope, m.Text, m.Id)
 	case "setPvp":
 		p.pvp = m.V
+	case "setCharacter":
+		h.setCharacter(p, m.Name, m.Class)
 	case "partyInvite":
 		h.partyInvite(p, m.Id)
 	case "partyAccept":
@@ -855,6 +1078,12 @@ func (h *Hub) applyIntent(p *Player, m inMsg) {
 		h.tradeConfirm(p)
 	case "tradeCancel":
 		h.cancelTrade(p)
+	case "friendAdd":
+		h.friendAdd(p, m.Id)
+	case "friendRemove":
+		h.friendRemove(p, m.Id)
+	case "friendList":
+		h.friendList(p)
 	}
 }
 
@@ -867,7 +1096,11 @@ func (h *Hub) serveWS(w http.ResponseWriter, r *http.Request) {
 	}
 	loginErr := func(msg string) { b, _ := json.Marshal(loginErrMsg{T: "loginError", Msg: msg}); c.WriteText(b) }
 
-	var p *Player // nil until the client logs in
+	var (
+		p     *Player // nil until the client enters a selected character
+		user  string
+		chars []*charState
+	)
 readloop:
 	for {
 		op, data, err := c.ReadMessage()
@@ -885,34 +1118,77 @@ readloop:
 			if json.Unmarshal(data, &m) != nil {
 				continue
 			}
-			if p == nil { // must authenticate before joining the world
-				if m.T != "login" {
+			if p == nil { // authenticate first, then choose/create a character
+				if user == "" && m.T != "login" {
 					continue
 				}
-				if !validName(m.User) {
-					loginErr("invalid username (1-16 letters, digits, _)")
+				switch m.T {
+				case "login":
+					if !validName(m.User) {
+						loginErr("invalid username (1-16 letters, digits, _)")
+						continue
+					}
+					if len(m.Pass) < 1 || len(m.Pass) > 64 {
+						loginErr("invalid password")
+						continue
+					}
+					loaded, err := store.Login(m.User, m.Pass)
+					if err == errBadPassword {
+						loginErr("wrong password")
+						continue
+					}
+					if err != nil {
+						loginErr("login failed")
+						continue
+					}
+					if h.online(m.User) {
+						loginErr("already logged in")
+						continue
+					}
+					user, chars = m.User, loaded
+					writeWelcome(c, user, nil, chars, true)
+				case "createCharacter":
+					if !validName(m.Name) || !validClass(m.Class) {
+						writeCharacterList(c, chars, "", "Choose a 1-16 name and a valid class.")
+						continue
+					}
+					if findCharacter(chars, m.Name) != nil {
+						writeCharacterList(c, chars, m.Name, "That character already exists.")
+						continue
+					}
+					ch := newCharacterState(m.Name, m.Class, m.Hair, m.Cloth)
+					if err := store.Save(user, ch); err != nil {
+						writeCharacterList(c, chars, "", "Could not save character.")
+						continue
+					}
+					chars = upsertCharacter(chars, ch)
+					writeCharacterList(c, chars, ch.Name, "")
+				case "enterCharacter":
+					if h.online(user) {
+						writeCharacterList(c, chars, m.Name, "Already in the world.")
+						continue
+					}
+					ch := findCharacter(chars, m.Name)
+					if ch == nil {
+						writeCharacterList(c, chars, "", "Select a character.")
+						continue
+					}
+					p = h.addPlayer(c, user, ch)
+					writeWelcome(c, user, ch, chars, false)
+				default:
 					continue
 				}
-				if len(m.Pass) < 1 || len(m.Pass) > 64 {
-					loginErr("invalid password")
+				continue
+			}
+			if m.T == "leaveCharacter" {
+				ch, errMsg, ok := h.leaveCharacter(p, c)
+				if !ok {
+					p.logMsg(errMsg)
 					continue
 				}
-				ch, err := store.Login(m.User, m.Pass)
-				if err == errBadPassword {
-					loginErr("wrong password")
-					continue
-				}
-				if err != nil {
-					loginErr("login failed")
-					continue
-				}
-				if h.online(m.User) {
-					loginErr("already logged in")
-					continue
-				}
-				p = h.addPlayer(c, m.User, ch)
-				welcome, _ := json.Marshal(welcomeMsg{T: "welcome", ID: p.id, Map: p.mapID, Tick: tickHz})
-				c.WriteText(welcome)
+				chars = upsertCharacter(chars, ch)
+				p = nil
+				writeCharacterList(c, chars, ch.Name, "")
 				continue
 			}
 			p.mu.Lock()

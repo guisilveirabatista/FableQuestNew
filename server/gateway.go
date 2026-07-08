@@ -78,10 +78,18 @@ func (gw *Gateway) serveWS(w http.ResponseWriter, r *http.Request) {
 	}
 	loginErr := func(msg string) { b, _ := json.Marshal(loginErrMsg{T: "loginError", Msg: msg}); c.WriteText(b) }
 
-	var user string
-	var char *charState
-	var token int
-login:
+	var (
+		user  string
+		char  *charState
+		chars []*charState
+		token int
+	)
+	defer func() {
+		if user != "" {
+			gw.setOffline(user, token)
+		}
+	}()
+selectCharacter:
 	for {
 		op, data, err := c.ReadMessage()
 		if err != nil {
@@ -97,38 +105,64 @@ login:
 			c.writeFrame(opPong, data)
 		case opText:
 			var m inMsg
-			if json.Unmarshal(data, &m) != nil || m.T != "login" {
+			if json.Unmarshal(data, &m) != nil {
 				continue
 			}
-			if !validName(m.User) {
-				loginErr("invalid username (1-16 letters, digits, _)")
+			if user == "" && m.T != "login" {
 				continue
 			}
-			if len(m.Pass) < 1 || len(m.Pass) > 64 {
-				loginErr("invalid password")
-				continue
+			switch m.T {
+			case "login":
+				if !validName(m.User) {
+					loginErr("invalid username (1-16 letters, digits, _)")
+					continue
+				}
+				if len(m.Pass) < 1 || len(m.Pass) > 64 {
+					loginErr("invalid password")
+					continue
+				}
+				loaded, err := store.Login(m.User, m.Pass)
+				if err == errBadPassword {
+					loginErr("wrong password")
+					continue
+				}
+				if err != nil {
+					loginErr("login failed")
+					continue
+				}
+				tok, ok := gw.tryOnline(m.User)
+				if !ok {
+					loginErr("already logged in")
+					continue
+				}
+				user, chars, token = m.User, loaded, tok
+				writeWelcome(c, user, nil, chars, true)
+			case "createCharacter":
+				if !validName(m.Name) || !validClass(m.Class) {
+					writeCharacterList(c, chars, "", "Choose a 1-16 name and a valid class.")
+					continue
+				}
+				if findCharacter(chars, m.Name) != nil {
+					writeCharacterList(c, chars, m.Name, "That character already exists.")
+					continue
+				}
+				ch := newCharacterState(m.Name, m.Class, m.Hair, m.Cloth)
+				if err := store.Save(user, ch); err != nil {
+					writeCharacterList(c, chars, "", "Could not save character.")
+					continue
+				}
+				chars = upsertCharacter(chars, ch)
+				writeCharacterList(c, chars, ch.Name, "")
+			case "enterCharacter":
+				ch := findCharacter(chars, m.Name)
+				if ch == nil {
+					writeCharacterList(c, chars, "", "Select a character.")
+					continue
+				}
+				char = ch
+				break selectCharacter
 			}
-			ch, err := store.Login(m.User, m.Pass)
-			if err == errBadPassword {
-				loginErr("wrong password")
-				continue
-			}
-			if err != nil {
-				loginErr("login failed")
-				continue
-			}
-			tok, ok := gw.tryOnline(m.User)
-			if !ok {
-				loginErr("already logged in")
-				continue
-			}
-			user, char, token = m.User, ch, tok
-			break login
 		}
-	}
-	defer gw.setOffline(user, token)
-	if char == nil {
-		char = initialCharState()
 	}
 
 	s := &gwSession{gw: gw, user: user, token: token, client: c, char: char}
@@ -138,10 +172,9 @@ login:
 		c.Close()
 		return
 	}
-	// welcome only after a zone link is up, so the client never leaves the login
+	// welcome only after a zone link is up, so the client never leaves the roster
 	// screen into a world with nothing behind it.
-	welcome, _ := json.Marshal(welcomeMsg{T: "welcome", ID: user, Map: char.MapID, Tick: tickHz})
-	c.WriteText(welcome)
+	writeWelcome(c, user, char, chars, false)
 	log.Printf("+ %s logged in via gateway", user)
 	s.serve()
 	log.Printf("- %s left gateway", user)

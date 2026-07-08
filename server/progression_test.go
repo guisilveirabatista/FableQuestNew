@@ -30,3 +30,24 @@ func TestAssignSkill(t *testing.T) {
 		t.Fatalf("re-assigning to the same slot should unequip, got %v", p.slots)
 	}
 }
+
+func TestUpgradeSkillUsesPointAndPrereq(t *testing.T) {
+	p := heroAt("city", 19, 16)
+	p.skillPoints = 2
+
+	if upgradeSkill(p, "bolt") {
+		t.Fatal("bolt upgrade should require Fire level 2 first")
+	}
+	if !upgradeSkill(p, "fire") {
+		t.Fatal("fire should upgrade with a skill point")
+	}
+	if p.skillLevels["fire"] != 2 || p.skillPoints != 1 {
+		t.Fatalf("fire upgrade wrong: levels=%v points=%d", p.skillLevels, p.skillPoints)
+	}
+	if !upgradeSkill(p, "bolt") {
+		t.Fatal("bolt should upgrade after Fire reaches level 2")
+	}
+	if p.skillLevels["bolt"] != 2 || p.skillPoints != 0 {
+		t.Fatalf("bolt upgrade wrong: levels=%v points=%d", p.skillLevels, p.skillPoints)
+	}
+}

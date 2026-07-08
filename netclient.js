@@ -9,10 +9,13 @@
 // two diverge. Other players are INTERPOLATED toward the latest snapshot. Enemies
 // and combat stay out of Phase 1 (the server is movement-only for now).
 
+const CHARACTER_CLASSES = ['Knight', 'Lancer', 'Wizard', 'Archer', 'Vampire', 'Holy'];
+
 function netStart(url) {
   const net = {
     ws: null, url, id: null, seq: 0, ack: 0, lastDir: '',
     acc: 0, byId: {}, eById: {}, connected: false, status: 'connecting…',
+    characters: [],
   };
   game.net = net;
   game.players = [];
@@ -22,9 +25,10 @@ function netStart(url) {
   game.menu = null;
   game.scene = 'map';
   game.login = { user: '', pass: '', field: 'user', error: '', busy: false }; // login screen until welcome
+  game.charSelect = null;
   // social (Phase 6)
   game.chat = []; game.chatOpen = true; game.chatInput = null; game.party = null; game.trade = null;
-  game.socialPrompt = null; game.youPvp = false;
+  game.socialPrompt = null; game.youPvp = false; game.pvpTarget = null; game.followPlayer = null;
 
   const ws = new WebSocket(url);
   net.ws = ws;
@@ -35,19 +39,32 @@ function netStart(url) {
     const m = JSON.parse(e.data);
     if (m.t === 'welcome') {
       net.id = m.id;
-      game.hero.name = m.id;
+      net.characters = m.characters || net.characters || [];
+      game.hero.name = m.name || m.id;
+      game.hero.class = m.class || '';
       game.mapId = m.map;
       snapHero(m); // start at the server-assigned spawn
-      game.login = null; // logged in — enter the world
-      // report our area of interest (half-viewport in tiles + margin)
-      netSend(net, { t: 'view', vw: Math.ceil(W / TS / 2) + 6, vh: Math.ceil(H / TS / 2) + 6 });
+      game.login = null; // account is authenticated
+      if (m.needChar) {
+        openCharacterScreen(m);
+      } else {
+        game.charSelect = null;
+        reportView();
+      }
     } else if (m.t === 'loginError') {
       if (game.login) { game.login.error = m.msg; game.login.busy = false; }
+    } else if (m.t === 'characters') {
+      net.characters = m.characters || [];
+      updateCharacterRoster(m);
     } else if (m.t === 'snap') {
       net.ack = m.ack;
       onSnapshot(m);
     }
   };
+}
+
+function reportView() {
+  netSend(game.net, { t: 'view', vw: Math.ceil(W / TS / 2) + 6, vh: Math.ceil(H / TS / 2) + 6 });
 }
 
 // ---- login screen ----------------------------------------------------------
@@ -106,13 +123,231 @@ function drawLoginScreen() {
   ctx.fillStyle = 'rgba(0,0,0,.5)'; ctx.fillRect(0, 0, W, H);
   drawWindow(b.x, b.y, b.w, b.h);
   text('FABLE QUEST', b.x + 16, b.y + 12, '#ffe080');
-  text('Username', b.user.x, b.user.y - 11, '#bcd');
+  text('Account', b.user.x, b.user.y - 11, '#bcd');
   drawLoginField(b.user, L.user, L.field === 'user');
   text('Password', b.pass.x, b.pass.y - 11, '#bcd');
   drawLoginField(b.pass, '*'.repeat(L.pass.length), L.field === 'pass');
   drawWindow(b.btn.x, b.btn.y, b.btn.w, b.btn.h);
   text(L.busy ? '...' : 'Login', b.btn.x + b.btn.w / 2 - (L.busy ? 6 : 14), b.btn.y + 5);
-  text(L.error || 'New here? Just pick a name — you\'ll be registered.', b.x + 14, b.y + b.h - 14, L.error ? '#f76' : '#9cf');
+  text(L.error || 'New account? Choose a login name.', b.x + 14, b.y + b.h - 14, L.error ? '#f76' : '#9cf');
+}
+
+// ---- character creation / selection ---------------------------------------
+function openCharacterScreen(m) {
+  const roster = (m.characters || (game.net && game.net.characters) || []).slice();
+  const classes = (m.classes && m.classes.length ? m.classes : CHARACTER_CLASSES).slice();
+  const cls = m.class && classes.includes(m.class) ? m.class : classes[0];
+  let selected = roster.findIndex(ch => ch && ch.name === (m.selected || m.name));
+  if (selected < 0) selected = roster.length ? 0 : -1;
+  game.charSelect = {
+    mode: roster.length ? 'select' : 'create',
+    characters: roster,
+    selected,
+    scroll: Math.max(0, selected - 3),
+    name: '',
+    class: cls,
+    classes,
+    classCursor: Math.max(0, classes.indexOf(cls)),
+    field: roster.length ? 'list' : 'name',
+    error: m.error || '',
+  };
+}
+
+function updateCharacterRoster(m) {
+  if (!game.charSelect) {
+    openCharacterScreen(m);
+    return;
+  }
+  const s = game.charSelect;
+  s.characters = (m.characters || []).slice();
+  s.classes = (m.classes && m.classes.length ? m.classes : s.classes || CHARACTER_CLASSES).slice();
+  const selectedName = m.selected || (s.characters[s.selected] && s.characters[s.selected].name);
+  let selected = s.characters.findIndex(ch => ch && ch.name === selectedName);
+  if (selected < 0) selected = s.characters.length ? 0 : -1;
+  s.selected = selected;
+  s.scroll = Math.max(0, Math.min(s.scroll || 0, Math.max(0, s.characters.length - charBox().visible)));
+  s.mode = s.mode === 'create' && !m.selected ? 'create' : (s.characters.length ? 'select' : 'create');
+  s.field = s.mode === 'create' ? 'name' : 'list';
+  s.error = m.error || '';
+}
+
+function charBox() {
+  const w = Math.min(372, W - 16), h = Math.min(256, H - 16);
+  const x = Math.floor((W - w) / 2), y = Math.floor((H - h) / 2);
+  const listW = Math.min(138, Math.floor(w * 0.42));
+  const detailX = x + listW + 24, detailW = w - listW - 38;
+  const previewW = 58, previewH = 78;
+  const rowH = 20, listH = h - 86;
+  return {
+    x, y, w, h,
+    list: { x: x + 14, y: y + 36, w: listW, h: listH, rowH },
+    visible: Math.max(1, Math.floor(listH / rowH)),
+    detail: { x: detailX, y: y + 36, w: detailW, h: listH },
+    name: { x: detailX, y: y + 58, w: detailW, h: 18 },
+    classX: detailX, classY: y + 96, classW: detailW - previewW - 12, rowH: 14,
+    preview: { x: detailX + detailW - previewW, y: y + 90, w: previewW, h: previewH },
+    enter: { x: detailX, y: y + h - 32, w: 108, h: 20 },
+    create: { x: detailX, y: y + h - 32, w: 82, h: 20 },
+    newBtn: { x: x + 14, y: y + h - 32, w: 52, h: 20 },
+    back: { x: detailX + 88, y: y + h - 32, w: 52, h: 20 },
+    login: { x: x + w - 68, y: y + 10, w: 54, h: 18 },
+  };
+}
+
+function selectedCharacter() {
+  const s = game.charSelect;
+  return s && s.selected >= 0 ? s.characters[s.selected] : null;
+}
+
+function createCharacter() {
+  const s = game.charSelect;
+  const name = (s.name || '').trim();
+  if (!/^[A-Za-z0-9_]{1,16}$/.test(name)) {
+    s.error = 'Use 1-16 letters, digits, or _.';
+    sfx('Buzzer1');
+    return;
+  }
+  netSend(game.net, { t: 'createCharacter', name, class: s.class });
+  s.error = 'Saving...';
+  sfx('Decision1');
+}
+
+function enterCharacter() {
+  const ch = selectedCharacter();
+  if (!ch) {
+    game.charSelect.error = 'Create or select a character.';
+    sfx('Buzzer1');
+    return;
+  }
+  netSend(game.net, { t: 'enterCharacter', name: ch.name });
+  game.charSelect.error = 'Entering...';
+  sfx('Decision1');
+}
+
+function returnToLoginScreen() {
+  const url = game.net && game.net.url;
+  const ws = game.net && game.net.ws;
+  if (ws) {
+    ws.onopen = ws.onclose = ws.onerror = ws.onmessage = null;
+    ws.close();
+  }
+  if (url) netStart(url);
+  else location.reload();
+}
+
+function updateCharacterScreen() {
+  const s = game.charSelect, b = charBox();
+  for (const c of clicks) {
+    if (c.b !== 0) continue;
+    if (hit(c, b.login.x, b.login.y, b.login.w, b.login.h)) {
+      sfx('Cancel1');
+      returnToLoginScreen();
+      return;
+    }
+    if (s.mode === 'select') {
+      for (let row = 0; row < b.visible; row++) {
+        const i = s.scroll + row, y = b.list.y + row * b.list.rowH;
+        if (i < s.characters.length && hit(c, b.list.x, y, b.list.w, b.list.rowH)) {
+          s.selected = i; s.field = 'list'; s.error = ''; sfx('Cursor1');
+          if (c.dbl) enterCharacter();
+        }
+      }
+      if (hit(c, b.enter.x, b.enter.y, b.enter.w, b.enter.h)) enterCharacter();
+      if (hit(c, b.newBtn.x, b.newBtn.y, b.newBtn.w, b.newBtn.h)) {
+        s.mode = 'create'; s.field = 'name'; s.name = ''; s.error = ''; sfx('Decision1');
+      }
+    } else {
+      if (hit(c, b.name.x, b.name.y, b.name.w, b.name.h)) { s.field = 'name'; sfx('Cursor1'); continue; }
+      for (let i = 0; i < s.classes.length; i++) {
+        const y = b.classY + i * b.rowH;
+        if (hit(c, b.classX, y, b.classW, b.rowH)) {
+          s.classCursor = i; s.class = s.classes[i]; s.field = 'class'; sfx('Cursor1');
+        }
+      }
+      if (hit(c, b.create.x, b.create.y, b.create.w, b.create.h)) createCharacter();
+      if (s.characters.length && hit(c, b.back.x, b.back.y, b.back.w, b.back.h)) {
+        s.mode = 'select'; s.field = 'list'; s.error = ''; sfx('Cancel1');
+      }
+    }
+  }
+  for (const k of queue) {
+    if (s.mode === 'select') {
+      if (k === 'Enter') enterCharacter();
+      else if (k === 'n' || k === 'N') { s.mode = 'create'; s.field = 'name'; s.name = ''; s.error = ''; sfx('Decision1'); }
+      else if ((k === 'ArrowUp' || k === 'w') && s.characters.length) {
+        s.selected = Math.max(0, s.selected - 1); s.scroll = Math.min(s.scroll, s.selected); sfx('Cursor1');
+      } else if ((k === 'ArrowDown' || k === 's') && s.characters.length) {
+        s.selected = Math.min(s.characters.length - 1, s.selected + 1);
+        s.scroll = Math.max(s.scroll, s.selected - b.visible + 1); sfx('Cursor1');
+      }
+    } else {
+      if (k === 'Escape' && s.characters.length) { s.mode = 'select'; s.field = 'list'; s.error = ''; sfx('Cancel1'); }
+      else if (k === 'Tab') { s.field = s.field === 'name' ? 'class' : 'name'; sfx('Cursor1'); }
+      else if (k === 'Enter') createCharacter();
+      else if (s.field === 'name') {
+        if (k === 'Backspace') s.name = s.name.slice(0, -1);
+        else if (/^[A-Za-z0-9_]$/.test(k) && s.name.length < 16) { s.name += k; s.error = ''; }
+      } else if (k === 'ArrowUp' || k === 'w') {
+        s.classCursor = (s.classCursor + s.classes.length - 1) % s.classes.length; s.class = s.classes[s.classCursor]; sfx('Cursor1');
+      } else if (k === 'ArrowDown' || k === 's') {
+        s.classCursor = (s.classCursor + 1) % s.classes.length; s.class = s.classes[s.classCursor]; sfx('Cursor1');
+      }
+    }
+  }
+  queue = [];
+}
+
+function drawCharacterScreen() {
+  const s = game.charSelect, b = charBox();
+  if (img.title) ctx.drawImage(img.title, (W - 320) / 2, -20, 320, 240);
+  ctx.fillStyle = 'rgba(0,0,0,.55)'; ctx.fillRect(0, 0, W, H);
+  drawWindow(b.x, b.y, b.w, b.h);
+  text('Characters', b.x + 14, b.y + 12, '#ffe080');
+  drawWindow(b.login.x, b.login.y, b.login.w, b.login.h);
+  text('Logout', b.login.x + 11, b.login.y + 5);
+  drawWindow(b.list.x, b.list.y, b.list.w, b.list.h);
+  if (!s.characters.length) text('No characters', b.list.x + 10, b.list.y + 10, '#9ab');
+  for (let row = 0; row < b.visible; row++) {
+    const i = s.scroll + row, ch = s.characters[i];
+    if (!ch) continue;
+    const y = b.list.y + row * b.list.rowH;
+    if (s.mode === 'select' && i === s.selected) drawCursor(b.list.x + 2, y + 1, b.list.w - 4, b.list.rowH - 2);
+    text(ch.name, b.list.x + 8, y + 4, i === s.selected ? '#ffe080' : '#fff');
+  }
+  if (s.mode === 'select') {
+    const ch = selectedCharacter();
+    text(ch ? ch.name : 'Select a hero', b.detail.x, b.detail.y, '#ffe080');
+    if (ch) {
+      text(ch.class || 'No class', b.detail.x, b.detail.y + 18, '#bcd');
+      text(`Lv ${ch.lv || 1}`, b.detail.x, b.detail.y + 34, '#fff');
+      text(ch.map ? `Map ${ch.map}` : 'Map city', b.detail.x, b.detail.y + 50, '#9cf');
+      text(`${ch.gold || 0} gold`, b.detail.x, b.detail.y + 66, '#ffd27a');
+    }
+    drawWindow(b.enter.x, b.enter.y, b.enter.w, b.enter.h);
+    text('Enter World', b.enter.x + 12, b.enter.y + 6);
+    drawWindow(b.newBtn.x, b.newBtn.y, b.newBtn.w, b.newBtn.h);
+    text('New', b.newBtn.x + 16, b.newBtn.y + 6);
+  } else {
+    text('New Character', b.detail.x, b.detail.y, '#ffe080');
+    text('Name', b.name.x, b.name.y - 11, '#bcd');
+    drawLoginField(b.name, s.name, s.field === 'name');
+    text('Class', b.classX, b.classY - 11, '#bcd');
+    s.classes.forEach((cls, i) => {
+      const y = b.classY + i * b.rowH;
+      if (i === s.classCursor) drawCursor(b.classX - 2, y - 1, b.classW + 4, b.rowH);
+      text(cls, b.classX + 8, y + 3, cls === s.class ? '#ffe080' : '#fff');
+    });
+    drawWindow(b.preview.x, b.preview.y, b.preview.w, b.preview.h);
+    drawActor({ class: s.class, dir: 'down', moving: false, anim: 1 },
+      b.preview.x + Math.floor(b.preview.w / 2), b.preview.y + 52);
+    drawWindow(b.create.x, b.create.y, b.create.w, b.create.h);
+    text('Create', b.create.x + 20, b.create.y + 6);
+    if (s.characters.length) {
+      drawWindow(b.back.x, b.back.y, b.back.w, b.back.h);
+      text('Back', b.back.x + 16, b.back.y + 6);
+    }
+  }
+  if (s.error) text(s.error, b.x + 14, b.y + b.h - 58, '#f76');
 }
 
 // hard-set the local hero from an authoritative server state
@@ -133,9 +368,10 @@ function onSnapshot(m) {
   if (game.mapId !== m.map) {
     game.mapId = m.map;
     snapHero(you);
-  } else if (you.tx !== h.tx || you.ty !== h.ty ||
-    Math.abs(you.px - h.px) > 8 || Math.abs(you.py - h.py) > 8) {
-    snapHero(you);
+  } else {
+    const pixelDrift = Math.hypot(you.px - h.px, you.py - h.py);
+    const tileDrift = Math.abs(you.tx - h.tx) + Math.abs(you.ty - h.ty);
+    if (pixelDrift > TS || tileDrift > 1) snapHero(you);
   }
   // authoritative hero stats drive the HUD; a drop means we took a hit
   if (net.prevHP === undefined) net.prevHP = you.hp;
@@ -147,6 +383,10 @@ function onSnapshot(m) {
   net.prevHP = you.hp;
   h.hp = you.hp; h.maxhp = you.maxhp; h.mp = you.mp; h.maxmp = you.maxmp;
   h.lv = you.lv; h.exp = you.exp; h.gold = you.gold; h.kills = you.kills;
+  h.name = you.name || h.name || net.id;
+  h.class = you.class || h.class || '';
+  h.skillPoints = you.skillPts || 0;
+  h.skillLevels = you.skillLv || h.skillLevels || {};
   h.combatLogoutT = Math.max(0, you.combatLog || 0);
   h.dead = !!you.dead;
   if (h.dead) {
@@ -181,8 +421,12 @@ function onSnapshot(m) {
       id: v.id, name: v.id, px: v.px, py: v.py, tpx: v.px, tpy: v.py,
       dir: v.dir, moving: v.moving, anim: v.anim, hp: v.hp, maxhp: v.maxhp,
     };
+    else if (v.hp < p.hp - 0.01) {
+      p.hurtT = 0;
+      addPop('-' + Math.max(1, Math.round(p.hp - v.hp)), v.px + 8, v.py - 12, '#f76');
+    }
     p.tpx = v.px; p.tpy = v.py; p.dir = v.dir; p.moving = v.moving; p.anim = v.anim;
-    p.hp = v.hp; p.maxhp = v.maxhp; p.name = v.name || v.id;
+    p.hp = v.hp; p.maxhp = v.maxhp; p.name = v.name || v.id; p.class = v.class || '';
     p.dead = !!v.dead; p.pvp = !!v.pvp;
   }
   for (const id in net.byId) if (!seen[id]) delete net.byId[id];
@@ -205,6 +449,8 @@ function onSnapshot(m) {
   for (const id in net.eById) if (!eSeen[id]) delete net.eById[id];
   game.enemies = Object.values(net.eById);
   game.lock = you.lock ? net.eById[you.lock] : null; // yellow lock marker
+  game.pvpTarget = you.pvpTarget ? (net.byId[you.pvpTarget] || null) : null;
+  game.followPlayer = you.followTarget ? (net.byId[you.followTarget] || null) : null;
   game.follow = !!you.follow;                          // blue follow marker
 
   // fireballs and lightning are shared world entities; render them straight from
@@ -218,7 +464,7 @@ function onSnapshot(m) {
   game.floor = (m.floor || []).map(v => ({ map: game.mapId, id: v.id, n: v.n, tx: v.tx, ty: v.ty }));
   const openCorpse = game.corpseOpen;
   game.corpses = (m.corpses || []).map(v => ({
-    map: game.mapId, tx: v.tx, ty: v.ty, items: v.items || {}, decayed: !!v.decayed,
+    map: game.mapId, tx: v.tx, ty: v.ty, name: v.name || '', items: v.items || {}, decayed: !!v.decayed,
   }));
   if (openCorpse) {
     const fresh = game.corpses.find(c => c.tx === openCorpse.tx && c.ty === openCorpse.ty && !c.decayed);
@@ -231,8 +477,13 @@ function onSnapshot(m) {
 function netFrame(frameDt) {
   const net = game.net, h = game.hero;
   if (game.login) { updateLoginScreen(); drawLoginScreen(); return; } // not in the world yet
+  if (game.charSelect) {
+    updateCharacterScreen();
+    if (game.charSelect) drawCharacterScreen();
+    return;
+  }
   let uiCaptured = false;
-  const hadBlockingUi = !!(game.death || game.mapOpen || game.menu || game.shop || game.invFocus || game.itemPopup || game.chatInput || game.trade);
+  const hadBlockingUi = !!(game.death || game.mapOpen || game.menu || game.shop || game.invFocus || game.itemPopup || game.chatInput || game.trade || game.playerMenu);
 
   // 1) input -> intents. The menu and inventory panels reuse the single-player
   //    UI code: their pushIntent() calls forward to the server (sim.js pushIntent).
@@ -244,6 +495,9 @@ function netFrame(frameDt) {
     uiCaptured = true;
   } else if (game.trade) {
     updateTradeWindow(); // the trade window owns clicks while it's open
+    uiCaptured = true;
+  } else if (game.playerMenu) {
+    updatePlayerMenu();
     uiCaptured = true;
   } else if (typeof toggleChatWindow === 'function' && keyTapped(CHAT_TOGGLE_KEYS)) {
     toggleChatWindow();
@@ -292,7 +546,7 @@ function netFrame(frameDt) {
 
   // movement is blocked while a panel owns the keyboard
   const captured = uiCaptured || hadBlockingUi || game.death || game.mapOpen || game.menu || game.shop ||
-    game.invFocus || game.itemPopup || game.chatInput || game.trade;
+    game.invFocus || game.itemPopup || game.chatInput || game.trade || game.playerMenu;
   const dir = captured ? '' : (dirHeld() || '');
   if (dir !== net.lastDir) {
     net.lastDir = dir;
@@ -313,7 +567,8 @@ function netFrame(frameDt) {
     for (let i = 0; i < 5; i++) if (pressed([String(i + 1)])) { // cast hotbar skill
       const sk = h.slots && h.slots[i];
       const skill = sk && SKILLS[sk];
-      if (!skill || h.mp < skill.mp || (sk !== 'heal' && !liveEnemyLock())) { sfx('Buzzer1'); continue; }
+      const target = liveEnemyLock() || livePvpTarget();
+      if (!skill || h.mp < skillCost(sk, h) || (sk !== 'heal' && !target)) { sfx('Buzzer1'); continue; }
       netSend(net, { t: 'cast', slot: i });
       // optimistic local effect; damage and MP spending remain server-side
       if (sk === 'spin') { game.atkCool = 1.3 / stats().aspd; game.slashFx = { t: 0, spin: true, dur: 0.3 }; sfx('Sword1'); }
@@ -327,16 +582,30 @@ function netFrame(frameDt) {
       if (game.corpseOpen && inCorpseWin(c)) continue;
       const wxp = c.x + cam.x, wyp = c.y + cam.y;
       const wx = Math.floor(wxp / TS), wy = Math.floor(wyp / TS);
-      if (c.b === 2) { // right-click: open your corpse if next to it, else lock a target
+      if (c.b === 2) { // right-click: open context/interact targets, not lock-on
         const shopNpc = shopNpcAtPoint(wxp, wyp);
         const co = corpseAt(wx, wy);
-        if (shopNpc && nearHero(shopNpc.tx, shopNpc.ty)) openShopChoice(shopForNpc(shopNpc));
+        const pl = playerAtPoint(wxp, wyp);
+        if (shopNpc) openShopChoice(shopForNpc(shopNpc), c.x, c.y);
         else if (co && !co.decayed && nearHero(wx, wy)) { game.corpseOpen = co; sfx('Decision1'); }
-        else netSend(net, { t: 'lockAt', x: c.x + cam.x, y: c.y + cam.y });
+        else if (pl) openPlayerMenu(pl, c.x, c.y);
+      } else if (c.b === 0 && c.ctrl) { // Ctrl+left-click: lock a target without following
+        const en = enemyAtPoint(c.x + cam.x, c.y + cam.y);
+        const pl = playerAtPoint(c.x + cam.x, c.y + cam.y);
+        if (pl) {
+          netSend(net, { t: 'lockPlayerAt', x: c.x + cam.x, y: c.y + cam.y });
+          game.pvpTarget = pl; game.followPlayer = null; game.lock = null; game.follow = false; sfx('Cursor1');
+        }
+        else if (en) {
+          netSend(net, { t: 'lockAt', x: c.x + cam.x, y: c.y + cam.y });
+          game.lock = en; game.pvpTarget = null; game.followPlayer = null; game.follow = false; sfx('Cursor1');
+        }
       } else if (c.b === 0 && c.alt) { // Alt+left-click: lock the enemy AND follow it
         netSend(net, { t: 'followAt', x: c.x + cam.x, y: c.y + cam.y });
         const en = enemyAtPoint(c.x + cam.x, c.y + cam.y);
-        if (en) { game.lock = en; game.follow = true; game.path = null; sfx('Decision1'); }
+        const pl = playerAtPoint(c.x + cam.x, c.y + cam.y);
+        if (pl) { game.followPlayer = pl; game.pvpTarget = null; game.lock = null; game.follow = true; game.path = null; sfx('Decision1'); }
+        else if (en) { game.lock = en; game.pvpTarget = null; game.followPlayer = null; game.follow = true; game.path = null; sfx('Decision1'); }
       } else if (c.b === 0 && !game.invDrag) {
         const co = corpseAt(wx, wy);
         if (co && !co.decayed && nearHero(wx, wy) && c.dbl) {
@@ -396,12 +665,21 @@ function netFrame(frameDt) {
 }
 
 function predictNetMeleeFx() {
-  const h = game.hero, en = game.lock;
-  if (!en || h.dead || game.death || game.atkCool > 0 || en.dead || en.dying > 0) return;
-  const dir = faceToward(en);
-  if (!slashReaches(dir, en)) return;
+  const h = game.hero, target = game.lock || game.pvpTarget;
+  if (!target || h.dead || game.death || game.atkCool > 0 || target.dead || target.dying > 0) return;
+  const dir = faceToward(target);
+  if (!slashReaches(dir, target)) return;
   game.atkCool = 1.0 / stats().aspd;
   beginMeleeFx(dir);
+}
+
+function playerAtPoint(wx, wy) {
+  return (game.players || []).find(p => !p.dead && spriteHit(wx, wy, p.px, p.py)) || null;
+}
+
+function livePvpTarget() {
+  const t = game.pvpTarget;
+  return t && !t.dead ? t : null;
 }
 
 function netSend(net, obj) {

@@ -131,7 +131,7 @@ func (h *Hub) addFromEnter(link *framedConn, em enterMsg) *Player {
 		return p
 	}
 	defer h.mu.Unlock()
-	p := &Player{id: em.ID, username: em.ID, conn: link, dir: "down", aoiW: 22, aoiH: 16}
+	p := &Player{id: em.ID, username: em.ID, conn: link, dir: "down", aoiW: 22, aoiH: 16, friends: map[string]bool{}}
 	applyCharState(p, em.Char)
 	if em.Vw > 0 {
 		p.aoiW = clampInt(em.Vw, 8, 60)
@@ -155,6 +155,8 @@ func (h *Hub) beginZoneLeave(p *Player, link netConn) bool {
 	h.leaveParty(p)
 	p.moveDir = ""
 	p.lockID = 0
+	p.pvpTarget = ""
+	p.followTarget = ""
 	p.follow = false
 	clearPath(p)
 	if h.shouldLingerAfterDisconnect(p) {

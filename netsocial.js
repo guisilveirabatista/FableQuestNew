@@ -7,7 +7,7 @@
 
 const CHAT_COLORS = {
   say: '#e8eef4', world: '#9cf', party: '#8f8',
-  system: '#fc6', reward: '#bcd', pvp: '#f88',
+  tell: '#f6a6ff', system: '#fc6', reward: '#bcd', pvp: '#f88',
 };
 
 // ---- chat feed + input ------------------------------------------------------
@@ -47,6 +47,11 @@ function handleSlash(t) {
   const rest = sp < 0 ? '' : t.slice(sp + 1).trim();
   switch (cmd) {
     case '/w': case '/world': if (rest) netSend(net, { t: 'chat', scope: 'world', text: rest }); break;
+    case '/tell': case '/msg': {
+      const cut = rest.indexOf(' ');
+      if (cut > 0) netSend(net, { t: 'chat', scope: 'tell', id: rest.slice(0, cut), text: rest.slice(cut + 1).trim() });
+      break;
+    }
     case '/p': case '/party': if (rest) netSend(net, { t: 'chat', scope: 'party', text: rest }); break;
     case '/s': case '/say': if (rest) netSend(net, { t: 'chat', scope: 'say', text: rest }); break;
     case '/invite': if (rest) netSend(net, { t: 'partyInvite', id: rest }); break;
@@ -55,10 +60,13 @@ function handleSlash(t) {
     case '/leave': netSend(net, { t: 'partyLeave' }); break;
     case '/kick': if (rest) netSend(net, { t: 'partyKick', id: rest }); break;
     case '/trade': if (rest) netSend(net, { t: 'tradeRequest', id: rest }); break;
+    case '/friend': if (rest) netSend(net, { t: 'friendAdd', id: rest }); break;
+    case '/unfriend': if (rest) netSend(net, { t: 'friendRemove', id: rest }); break;
+    case '/friends': netSend(net, { t: 'friendList' }); break;
     case '/pvp': netSend(net, { t: 'setPvp', v: !game.youPvp }); break;
     case '/help':
-      pushChatLine({ scope: 'system', text: 'chat: type to say, /w world, /p party' });
-      pushChatLine({ scope: 'system', text: '/invite name /join /leave /kick name /trade name /pvp' });
+      pushChatLine({ scope: 'system', text: 'chat: /w world, /p party, /tell name text, /invite name' });
+      pushChatLine({ scope: 'system', text: '/trade name, /friend name, /friends, /pvp; right-click players in combat zones' });
       break;
     default: pushChatLine({ scope: 'system', text: 'Unknown command — try /help' });
   }
@@ -119,7 +127,7 @@ function drawPartyFrames() {
   text('Party', x + 8, y + 3, '#bcd');
   pt.members.forEach((m, i) => {
     const ry = y + 12 + i * rowH;
-    const self = m.name === (game.net && game.net.id);
+    const self = m.name === heroDisplayName() || m.name === (game.net && game.net.id);
     text((m.leader ? '★' : '') + m.name, x + 8, ry, self ? '#ffe080' : '#cfe');
     drawMeter(x + 8, ry + 10, w - 16, 6, m.hp, m.maxhp || 1, hpColor(m.hp, m.maxhp || 1));
     text('L' + (m.lv || 1), x + w - 24, ry, '#9cf');
@@ -131,7 +139,7 @@ function drawPartyFrames() {
 function itemLabel(id) { return (typeof ITEMS !== 'undefined' && ITEMS[id] && ITEMS[id].name) || id; }
 
 function tradeBox() {
-  const w = 300, h = 196, x = Math.floor((W - w) / 2), y = Math.floor((H - h) / 2);
+  const w = 372, h = 208, x = Math.floor((W - w) / 2), y = Math.floor((H - h) / 2);
   return { x, y, w, h };
 }
 
@@ -139,6 +147,10 @@ function drawTradeWindow() {
   const tr = game.trade;
   if (!tr) return;
   const b = tradeBox();
+  ctx.save();
+  ctx.fillStyle = 'rgba(0,0,0,.28)';
+  ctx.fillRect(0, 0, W, H);
+  ctx.restore();
   drawWindow(b.x, b.y, b.w, b.h);
   text('TRADE with ' + tr.with.name, b.x + 12, b.y + 8, '#ffe080');
   const colW = (b.w - 24) / 2;
@@ -166,7 +178,7 @@ function drawTradeWindow() {
     let lbl = t.label;
     if (k === 'lock') lbl = tr.you.lock ? 'Unlock' : 'Lock';
     if (k === 'confirm') lbl = tr.you.ok ? 'Waiting…' : 'Confirm';
-    text(lbl, t.x + 5, t.y + 5, on ? '#fff' : '#889');
+    text(lbl, t.x + Math.max(4, Math.floor((t.w - textWidth(lbl)) / 2)), t.y + 5, on ? '#fff' : '#889');
   }
 }
 
@@ -184,10 +196,19 @@ function drawTradeSide(side, x, y, w, title) {
 }
 
 function tradeButtons(b) {
-  const y = b.y + b.h - 22, w = 52, g = 4;
-  let x = b.x + 12;
-  const mk = (label) => { const t = { x, y, w, h: 16, label }; x += w + g; return t; };
-  return { gold10: mk('+10g'), gold100: mk('+100g'), clear: mk('clear'), lock: mk('Lock'), confirm: mk('Confirm'), cancel: mk('Cancel') };
+  const y = b.y + b.h - 24, g = 4;
+  const specs = [
+    ['gold10', '+10g', 42], ['gold100', '+100g', 50], ['clear', 'Clear', 46],
+    ['lock', 'Lock', 58], ['confirm', 'Confirm', 64], ['cancel', 'Cancel', 56],
+  ];
+  const totalW = specs.reduce((sum, spec) => sum + spec[2], 0) + g * (specs.length - 1);
+  let x = b.x + Math.floor((b.w - totalW) / 2);
+  const out = {};
+  for (const [id, label, w] of specs) {
+    out[id] = { x, y, w, h: 18, label };
+    x += w + g;
+  }
+  return out;
 }
 
 function updateTradeWindow() {
@@ -195,21 +216,22 @@ function updateTradeWindow() {
   const b = tradeBox();
   const btns = tradeButtons(b);
   clicks = clicks.filter(c => {
-    if (c.b !== 0) return true;
+    if (!hit(c, b.x, b.y, b.w, b.h)) return false;
+    if (c.b !== 0) return false;
     // offer an item from the bag
     for (const bh of (game._tradeBagHit || [])) {
       if (hit(c, bh.x, bh.y, bh.w, bh.h)) { netSend(net, { t: 'tradeOffer', id: bh.id, n: 1 }); sfx('Cursor1'); return false; }
     }
-    // remove an item by clicking your offered list (top-left column area)
-    if (hit(btns.gold10, btns.gold10.x, btns.gold10.y, btns.gold10.w, btns.gold10.h)) { netSend(net, { t: 'tradeGold', n: (tr.you.gold || 0) + 10 }); return false; }
-    if (hit(btns.gold100, btns.gold100.x, btns.gold100.y, btns.gold100.w, btns.gold100.h)) { netSend(net, { t: 'tradeGold', n: (tr.you.gold || 0) + 100 }); return false; }
-    if (hit(btns.clear, btns.clear.x, btns.clear.y, btns.clear.w, btns.clear.h)) { clearMyOffer(); return false; }
-    if (hit(btns.lock, btns.lock.x, btns.lock.y, btns.lock.w, btns.lock.h)) { netSend(net, { t: 'tradeLock', v: !tr.you.lock }); sfx('Decision1'); return false; }
-    if (hit(btns.confirm, btns.confirm.x, btns.confirm.y, btns.confirm.w, btns.confirm.h)) {
+    // buttons and empty panel space are modal: handle known controls, eat the rest.
+    if (hit(c, btns.gold10.x, btns.gold10.y, btns.gold10.w, btns.gold10.h)) { netSend(net, { t: 'tradeGold', n: (tr.you.gold || 0) + 10 }); return false; }
+    if (hit(c, btns.gold100.x, btns.gold100.y, btns.gold100.w, btns.gold100.h)) { netSend(net, { t: 'tradeGold', n: (tr.you.gold || 0) + 100 }); return false; }
+    if (hit(c, btns.clear.x, btns.clear.y, btns.clear.w, btns.clear.h)) { clearMyOffer(); return false; }
+    if (hit(c, btns.lock.x, btns.lock.y, btns.lock.w, btns.lock.h)) { netSend(net, { t: 'tradeLock', v: !tr.you.lock }); sfx('Decision1'); return false; }
+    if (hit(c, btns.confirm.x, btns.confirm.y, btns.confirm.w, btns.confirm.h)) {
       if (tr.you.lock && tr.with.lock) { netSend(net, { t: 'tradeConfirm' }); sfx('Decision1'); } return false;
     }
-    if (hit(btns.cancel, btns.cancel.x, btns.cancel.y, btns.cancel.w, btns.cancel.h)) { netSend(net, { t: 'tradeCancel' }); sfx('Cancel1'); return false; }
-    return true;
+    if (hit(c, btns.cancel.x, btns.cancel.y, btns.cancel.w, btns.cancel.h)) { netSend(net, { t: 'tradeCancel' }); sfx('Cancel1'); return false; }
+    return false;
   });
   for (const k of queue) if (k === 'Escape') netSend(net, { t: 'tradeCancel' });
   queue = [];

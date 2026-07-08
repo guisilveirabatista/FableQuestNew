@@ -14,6 +14,7 @@ type floorItem struct {
 
 type corpse struct {
 	tx, ty  int
+	name    string
 	items   map[string]int
 	age     float64
 	decayed bool
@@ -61,14 +62,14 @@ func (h *Hub) pickupAt(p *Player, tx, ty int) bool {
 
 // dropCorpse turns a dead player's whole bag into a corpse at the fall site.
 // Even an empty pack leaves a body, so players can still open it until decay.
-func (h *Hub) dropCorpse(mapID string, tx, ty int, bag map[string]int) {
+func (h *Hub) dropCorpse(mapID string, tx, ty int, name string, bag map[string]int) {
 	items := map[string]int{}
 	for id, n := range bag {
 		if n > 0 {
 			items[id] = n
 		}
 	}
-	h.corpses[mapID] = append(h.corpses[mapID], &corpse{tx: tx, ty: ty, items: items})
+	h.corpses[mapID] = append(h.corpses[mapID], &corpse{tx: tx, ty: ty, name: name, items: items})
 }
 
 func (h *Hub) updateCorpses(dt float64) {

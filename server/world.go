@@ -184,6 +184,84 @@ func sign(v float64) float64 {
 // or "" when it's already in reach or has no clear step (ported from sim.js
 // stepHero's follow branch). Follow mode is set by Alt+click / F.
 func (h *Hub) followDir(p *Player) string {
+	if p.followTarget != "" {
+		o := h.players[p.followTarget]
+		if o == nil || o.dead || o.mapID != p.mapID {
+			p.followTarget = ""
+			if p.lockID == 0 && p.pvpTarget == "" {
+				p.follow = false
+			}
+			return ""
+		}
+		dx, dy := o.tx-p.tx, o.ty-p.ty
+		if abs(dx) <= 1 && abs(dy) <= 1 && !(dx != 0 && dy != 0) {
+			p.dir = faceTowardPlayer(p, o)
+			return "" // orthogonally adjacent (or on top): in reach, stop
+		}
+		hd, vd := "left", "up"
+		if dx > 0 {
+			hd = "right"
+		}
+		if dy > 0 {
+			vd = "down"
+		}
+		dirs := []string{vd, hd}
+		if abs(dx) > abs(dy) {
+			dirs = []string{hd, vd}
+		}
+		for _, fd := range dirs {
+			if dx == 0 && (fd == "left" || fd == "right") {
+				continue
+			}
+			if dy == 0 && (fd == "up" || fd == "down") {
+				continue
+			}
+			d := dirVec[fd]
+			nx, ny := p.tx+d[0], p.ty+d[1]
+			if blocked(p.mapID, nx, ny) || h.occupied(p.mapID, nx, ny, p) {
+				continue
+			}
+			return fd
+		}
+		return ""
+	}
+	if p.pvpTarget != "" {
+		o := h.players[p.pvpTarget]
+		if o == nil || !h.canPvp(p, o) {
+			return ""
+		}
+		dx, dy := o.tx-p.tx, o.ty-p.ty
+		if abs(dx) <= 1 && abs(dy) <= 1 && !(dx != 0 && dy != 0) {
+			p.dir = faceTowardPlayer(p, o)
+			return "" // orthogonally adjacent (or on top): in reach, stop
+		}
+		hd, vd := "left", "up"
+		if dx > 0 {
+			hd = "right"
+		}
+		if dy > 0 {
+			vd = "down"
+		}
+		dirs := []string{vd, hd}
+		if abs(dx) > abs(dy) {
+			dirs = []string{hd, vd}
+		}
+		for _, fd := range dirs {
+			if dx == 0 && (fd == "left" || fd == "right") {
+				continue
+			}
+			if dy == 0 && (fd == "up" || fd == "down") {
+				continue
+			}
+			d := dirVec[fd]
+			nx, ny := p.tx+d[0], p.ty+d[1]
+			if blocked(p.mapID, nx, ny) || h.occupied(p.mapID, nx, ny, p) {
+				continue
+			}
+			return fd
+		}
+		return ""
+	}
 	en := h.enemyByID(p.mapID, p.lockID)
 	if en == nil || en.dead || en.dying > 0 {
 		return ""

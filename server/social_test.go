@@ -22,7 +22,7 @@ func TestChatScopes(t *testing.T) {
 	b := mkPlayer(h, "b", "city", 6, 5)  // same map
 	c := mkPlayer(h, "c", "field", 5, 5) // different map
 
-	h.chat(a, "say", "hi map")
+	h.chat(a, "say", "hi map", "")
 	if len(a.drainChat()) != 1 || len(b.drainChat()) != 1 {
 		t.Fatal("say should reach both players on the same map")
 	}
@@ -31,24 +31,43 @@ func TestChatScopes(t *testing.T) {
 	}
 
 	a.chatCool = 0 // clear the anti-spam cooldown for the next line
-	h.chat(a, "world", "hello everyone")
+	h.chat(a, "world", "hello everyone", "")
 	if len(a.drainChat()) != 1 || len(b.drainChat()) != 1 || len(c.drainChat()) != 1 {
 		t.Fatal("world chat should reach everyone")
 	}
 
 	// spam guard: a second immediate line is dropped
 	a.chatCool = 0
-	h.chat(a, "say", "one")
-	h.chat(a, "say", "two (dropped)")
+	h.chat(a, "say", "one", "")
+	h.chat(a, "say", "two (dropped)", "")
 	if got := len(b.drainChat()); got != 1 {
 		t.Fatalf("chat cooldown should drop the second line, got %d", got)
 	}
 }
 
+func TestDirectMessageRoutesOnlyToTargetAndSender(t *testing.T) {
+	h := newHub()
+	a := mkPlayer(h, "a", "city", 5, 5)
+	b := mkPlayer(h, "b", "city", 6, 5)
+	c := mkPlayer(h, "c", "city", 7, 5)
+
+	h.chat(a, "tell", "secret", "b")
+
+	if got := b.drainChat(); len(got) != 1 || got[0].Scope != "tell" || got[0].Text != "secret" {
+		t.Fatalf("target should receive the direct message, got %#v", got)
+	}
+	if got := a.drainChat(); len(got) != 1 || got[0].Scope != "tell" {
+		t.Fatalf("sender should receive a direct-message echo, got %#v", got)
+	}
+	if got := c.drainChat(); len(got) != 0 {
+		t.Fatalf("other players should not receive direct messages, got %#v", got)
+	}
+}
+
 func TestPartyLifecycleAndSharedExp(t *testing.T) {
 	h := newHub()
-	a := mkPlayer(h, "a", "field", 5, 5)
-	b := mkPlayer(h, "b", "field", 6, 5)
+	a := mkPlayer(h, "a", "city", 5, 5)
+	b := mkPlayer(h, "b", "city", 6, 5)
 
 	h.partyInvite(a, "b")
 	if b.partyInvite == 0 {
@@ -77,6 +96,63 @@ func TestPartyLifecycleAndSharedExp(t *testing.T) {
 	}
 	if b.partyID != 0 {
 		t.Fatal("a party of one should disband")
+	}
+}
+
+func TestFieldMapAllowsPvp(t *testing.T) {
+	h := newHub()
+	a := mkPlayer(h, "a", "field", 5, 5)
+	b := mkPlayer(h, "b", "field", 6, 5)
+	b.attr = AttrSet{}
+	recalcMax(b)
+	b.hp = float64(b.maxhp)
+	before := b.hp
+	h.pvpHit(a, b, 10, false, false)
+	if b.hp >= before {
+		t.Fatal("field combat zone should allow PvP without manual opt-in")
+	}
+}
+
+func TestFollowAtChasesPlayerOutsideCombatWithoutPvpTarget(t *testing.T) {
+	h := newHub()
+	fieldWasPvp := pvpMaps["field"]
+	delete(pvpMaps, "field")
+	defer func() {
+		if fieldWasPvp {
+			pvpMaps["field"] = true
+		}
+	}()
+	a := mkPlayer(h, "a", "field", 5, 5)
+	b := mkPlayer(h, "b", "field", 9, 5)
+	a.dir = "left"
+
+	h.applyIntent(a, inMsg{T: "followAt", X: b.px + 8, Y: b.py + 4})
+	if a.followTarget != "b" || a.pvpTarget != "" || a.lockID != 0 || !a.follow {
+		t.Fatalf("followAt should follow without creating a PvP target (followTarget=%q pvpTarget=%q lock=%d follow=%v)",
+			a.followTarget, a.pvpTarget, a.lockID, a.follow)
+	}
+	for i := 0; i < 160; i++ {
+		dir := h.followDir(a)
+		h.stepPlayer(a, dir, 1.0/tickHz)
+	}
+	if d := abs(a.tx-b.tx) + abs(a.ty-b.ty); d > 1 {
+		t.Fatalf("follow should chase the player target to melee reach, ended %d tiles away", d)
+	}
+	if dir := h.followDir(a); dir != "" || a.dir != "right" {
+		t.Fatalf("adjacent player follow should stop and face right, dir=%q facing=%q", dir, a.dir)
+	}
+}
+
+func TestLockPlayerAtStillRequiresPvp(t *testing.T) {
+	h := newHub()
+	a := mkPlayer(h, "a", "city", 5, 5)
+	b := mkPlayer(h, "b", "city", 6, 5)
+
+	h.applyIntent(a, inMsg{T: "lockPlayerAt", X: b.px + 8, Y: b.py + 4})
+
+	if a.pvpTarget != "" || a.followTarget != "" || a.follow {
+		t.Fatalf("safe-zone player lock should not create a target (pvp=%q followTarget=%q follow=%v)",
+			a.pvpTarget, a.followTarget, a.follow)
 	}
 }
 
@@ -136,8 +212,8 @@ func TestTradeCannotOfferMoreThanOwned(t *testing.T) {
 
 func TestPvpRequiresConsent(t *testing.T) {
 	h := newHub()
-	a := mkPlayer(h, "a", "field", 5, 5)
-	b := mkPlayer(h, "b", "field", 6, 5)
+	a := mkPlayer(h, "a", "city", 5, 5)
+	b := mkPlayer(h, "b", "city", 6, 5)
 	b.attr = AttrSet{} // no dodge/endurance so the hit lands deterministically
 	recalcMax(b)
 	b.hp = float64(b.maxhp)

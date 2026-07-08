@@ -32,10 +32,10 @@ func TestSlashKillsAdjacentEnemy(t *testing.T) {
 	if en.dying <= 0 {
 		t.Fatalf("slash should have killed the adjacent slime (hp left %d)", en.hp)
 	}
-	if p.kills != 1 || p.gold != 6 || p.exp != 4 {
+	if p.kills != 1 || p.gold != enemyKinds["slime"].gold || p.exp != enemyKinds["slime"].exp {
 		t.Fatalf("kill rewards wrong: kills=%d gold=%d exp=%d", p.kills, p.gold, p.exp)
 	}
-	if !hasLog(p.log, "Defeated Slime: +4 EXP, +6 gold") {
+	if !hasLog(p.log, "Defeated Slime: +5 EXP, +7 gold") {
 		t.Fatalf("kill should log rewards, got %#v", p.log)
 	}
 	if p.atkCool <= 0 {
@@ -73,16 +73,16 @@ func TestEnemyDamagesPlayer(t *testing.T) {
 func TestLevelUp(t *testing.T) {
 	h := newHub()
 	p := heroAt("field", 15, 10)
-	p.exp = 9 // one slime kill (4 exp) tips over lv1's 10-exp threshold
+	p.exp = expToNextLevel(p.lv) - enemyKinds["slime"].exp + 1
 	en := slimeAt(1, 16, 10)
 	h.killEnemy(p, en)
-	if p.lv != 2 || p.points != 3 {
-		t.Fatalf("expected level 2 with 3 attribute points, got lv=%d points=%d", p.lv, p.points)
+	if p.lv != 2 || p.points != attrPointsPerLevel || p.skillPoints != skillPointsPerLevel {
+		t.Fatalf("expected level 2 with progression points, got lv=%d attr=%d skill=%d", p.lv, p.points, p.skillPoints)
 	}
 	if int(p.hp) != p.maxhp {
 		t.Fatalf("level-up should have fully healed (hp %v / %d)", p.hp, p.maxhp)
 	}
-	if !hasLog(p.log, "LEVEL UP! Now Lv.2  (+3 attribute points)") {
+	if !hasLog(p.log, "LEVEL UP! Now Lv.2  (+2 attribute points, +1 skill point)") {
 		t.Fatalf("level-up should log, got %#v", p.log)
 	}
 }

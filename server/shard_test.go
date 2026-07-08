@@ -172,7 +172,7 @@ func TestZoneHandoffCityToField(t *testing.T) {
 	if _, err := fs.Login("hero", "pw"); err != nil { // registers the account
 		t.Fatal(err)
 	}
-	if err := fs.Save("hero", &charState{MapID: "city", Tx: 2, Ty: 12, Dir: "left", Lv: 3, Gold: 777}); err != nil {
+	if err := fs.Save("hero", &charState{Name: "HeroOne", Class: "Knight", MapID: "city", Tx: 2, Ty: 12, Dir: "left", Lv: 3, Gold: 777}); err != nil {
 		t.Fatal(err)
 	}
 	store = fs // the gateway persists through the global store
@@ -193,6 +193,13 @@ func TestZoneHandoffCityToField(t *testing.T) {
 		t.Fatal(err)
 	}
 	welcome := c.readUntil(t, 3*time.Second, func(m map[string]any) bool { return m["t"] == "welcome" })
+	if welcome["needChar"] != true {
+		t.Fatalf("login should open character selection, got welcome=%v", welcome)
+	}
+	if err := c.send(map[string]any{"t": "enterCharacter", "name": "HeroOne"}); err != nil {
+		t.Fatal(err)
+	}
+	welcome = c.readUntil(t, 3*time.Second, func(m map[string]any) bool { return m["t"] == "welcome" && m["needChar"] == false })
 	if welcome["map"] != "city" {
 		t.Fatalf("expected to spawn on city, got %v", welcome["map"])
 	}
@@ -225,10 +232,11 @@ func TestZoneHandoffCityToField(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		ch, err := fs2.Login("hero", "pw")
+		chars, err := fs2.Login("hero", "pw")
 		if err != nil {
 			t.Fatal(err)
 		}
+		ch := findCharacter(chars, "HeroOne")
 		if ch != nil && ch.MapID == "field" {
 			if ch.Gold != 777 || ch.Lv != 3 {
 				t.Fatalf("persisted state wrong: %+v", ch)
@@ -236,7 +244,7 @@ func TestZoneHandoffCityToField(t *testing.T) {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("handoff was not persisted (still %v)", ch.MapID)
+			t.Fatalf("handoff was not persisted (still %+v)", ch)
 		}
 		time.Sleep(50 * time.Millisecond)
 	}

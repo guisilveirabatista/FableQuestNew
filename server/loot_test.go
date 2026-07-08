@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestDropGoesToFloorAndBack(t *testing.T) {
 	h := newHub()
@@ -43,11 +46,18 @@ func TestDeathDropsCorpseAndWaitsForRespawn(t *testing.T) {
 	if cs[0].items["potion"] != 3 || cs[0].items["bread"] != 2 {
 		t.Fatalf("the corpse should hold your whole pack, got %+v", cs[0].items)
 	}
+	if cs[0].name != p.displayName() {
+		t.Fatalf("corpse should remember the fallen player's name, got %q", cs[0].name)
+	}
 	if len(p.bag) != 0 {
 		t.Fatalf("your bag should be empty after death, got %+v", p.bag)
 	}
 	if !p.dead || p.mapID != "field" || p.hp != 0 {
 		t.Fatalf("death should wait for respawn at the fall site, dead=%v map=%s hp=%v", p.dead, p.mapID, p.hp)
+	}
+	if len(p.log) == 0 || !strings.Contains(p.log[len(p.log)-1], "Killed by Slime") ||
+		!strings.Contains(p.log[len(p.log)-1], "field (15,10)") {
+		t.Fatalf("death should log killer and location, got %#v", p.log)
 	}
 }
 

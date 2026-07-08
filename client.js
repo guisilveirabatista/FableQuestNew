@@ -27,11 +27,21 @@ function camPos() { // camera centered on the hero, clamped to the map
 }
 
 // ---------------------------------------------------------------- assets
-const IMAGES = ['chipset', 'hero', 'npc', 'custom', 'knight', 'system', 'title',
+const IMAGES = ['chipset', 'hero', 'npc', 'custom', 'knight',
+  'general1', 'general2', 'protagonist1', 'protagonist2', 'protagonist4',
+  'system', 'title',
   'monsters', 'slash', 'flame', 'punch', 'skeleton',
   'i_potion', 'i_bread', 'i_meat', 'i_sword1', 'i_sword2', 'i_sword3',
   'i_hat', 'i_helm', 'i_shield', 'i_armor', 'i_legs', 'i_boots', 'i_ring', 'i_amulet'];
 const img = {};
+const CLASS_SPRITES = {
+  Knight: { sheet: 'protagonist1', cx: 2, cy: 0 },
+  Lancer: { sheet: 'protagonist4', cx: 2, cy: 0 },
+  Wizard: { sheet: 'protagonist1', cx: 0, cy: 1 },
+  Archer: { sheet: 'protagonist2', cx: 2, cy: 1 },
+  Vampire: { sheet: 'protagonist4', cx: 3, cy: 0 },
+  Holy: { sheet: 'general2', cx: 2, cy: 1 },
+};
 let audioOk = false;
 function sfx(name) {
   if (!audioOk) return;
@@ -85,7 +95,7 @@ function clearKeys() {
 }
 function hasInputKey(ids, keys) { return keys.some(k => ids.includes(normKey(k))); }
 function tryImmediateShortcut(ids) {
-  if (typeof game === 'undefined' || game.scene !== 'map' || game.login || game.chatInput) return false;
+  if (typeof game === 'undefined' || game.scene !== 'map' || game.login || game.charSelect || game.chatInput) return false;
   if (typeof toggleChatWindow === 'function' && game.net && hasInputKey(ids, CHAT_TOGGLE_KEYS)) {
     toggleChatWindow();
     return true;
@@ -180,7 +190,7 @@ cv.addEventListener('mousedown', e => {
   const dbl = e.button === 0 && now - lastClick.t < 400 &&
     Math.abs(p.x - lastClick.x) < 8 && Math.abs(p.y - lastClick.y) < 8;
   if (e.button === 0) lastClick = { t: dbl ? 0 : now, x: p.x, y: p.y };
-  clicks.push({ b: e.button, x: p.x, y: p.y, dbl, alt: e.altKey });
+  clicks.push({ b: e.button, x: p.x, y: p.y, dbl, alt: e.altKey, ctrl: e.ctrlKey || e.metaKey });
   if (!audioOk) { audioOk = true; syncMusic(); }
 });
 addEventListener('mouseup', e => {
@@ -295,6 +305,8 @@ function loadGame() {
   game.shop = null;
   const h = game.hero;
   if (!h.name) h.name = 'Hero';
+  if (!h.class) h.class = 'Knight';
+  normalizeSkillProgress(h);
   // pre-64x40 saves may sit out of bounds on the new maps
   if (h.tx >= MW || h.ty >= MH || cur().blocked.has(h.tx + ',' + h.ty)) {
     game.mapId = SPAWN.map; h.tx = SPAWN.tx; h.ty = SPAWN.ty;
@@ -325,6 +337,7 @@ function loadGame() {
     }
     delete h.weapon;
   }
+  normalizeHeroEquipment();
   return true;
 }
 
@@ -355,9 +368,17 @@ function itemLabel(f) {
   const name = ITEMS[f.id] ? ITEMS[f.id].name : f.id;
   return f.n > 1 ? `${name} x${f.n}` : name;
 }
-function corpseLabel(c) { return c.decayed ? 'Decayed body' : 'Dead body'; }
+function corpseLabel(c) {
+  const owner = c.name || c.owner || '';
+  if (owner) return c.decayed ? `${owner}'s decayed body` : `${owner}'s body`;
+  return c.decayed ? 'Decayed body' : 'Dead body';
+}
 function mapName(id) { return MAP_NAME[id] || id; }
-function hudHeight() { return overloaded() ? 82 : 71; }
+function expToNextLevel(v = game.hero) {
+  const lv = typeof v === 'number' ? v : ((v && v.lv) || 1);
+  return Math.max(1, lv) * 14;
+}
+function hudHeight() { return overloaded() ? 102 : 91; }
 function drawMapDot(mx, my, cell, tx, ty, color, r) {
   const x = mx + (tx + 0.5) * cell, y = my + (ty + 0.5) * cell;
   ctx.fillStyle = '#09131f';
@@ -512,7 +533,7 @@ function corpseCellAt(px, py) {
 function drawCorpseWin() {
   const c = game.corpseOpen, ids = Object.keys(c.items);
   drawWindow(CORPSE_WIN.x, CORPSE_WIN.y, CORPSE_WIN.w, CORPSE_WIN.h);
-  text('Your remains', CORPSE_WIN.x + 12, CORPSE_WIN.y + 7, '#f76');
+  text(c.name || 'Your remains', CORPSE_WIN.x + 12, CORPSE_WIN.y + 7, '#f76');
   ids.forEach((id, i) => {
     const x = CORPSE_WIN.x + 12 + (i % CORPSE_WIN.C) * CORPSE_WIN.S;
     const y = CORPSE_WIN.y + 30 + Math.floor(i / CORPSE_WIN.C) * CORPSE_WIN.S;
@@ -715,15 +736,18 @@ function itemInfo(it) {
 const SHOP_CHOICE = [
   { id: 'buy', label: 'Buy' },
   { id: 'sell', label: 'Sell' },
-  { id: 'cancel', label: 'Cancel' },
 ];
 function shopModeLabel(s) {
   return s.mode === 'sell' ? 'Sell' : 'Buy';
 }
-function shopChoiceLayout() {
-  const w = 146, h = 84;
-  const x = Math.floor((W - w) / 2), y = Math.floor((H - h) / 2);
-  return { x, y, w, h, rowX: x + 10, rowY: y + 22, rowW: w - 20, rowH: 16 };
+function shopChoiceLayout(s = game.shop) {
+  const w = 104, h = 60;
+  const centeredX = Math.floor((W - w) / 2), centeredY = Math.floor((H - h) / 2);
+  const rawX = Number.isFinite(s && s.x) ? s.x : centeredX;
+  const rawY = Number.isFinite(s && s.y) ? s.y : centeredY;
+  const x = Math.max(4, Math.min(W - w - 4, rawX));
+  const y = Math.max(4, Math.min(H - h - 4, rawY));
+  return { x, y, w, h, rowX: x + 6, rowY: y + 22, rowW: w - 12, rowH: 16 };
 }
 function shopItems(s = game.shop) {
   if (!s) return [];
@@ -773,11 +797,12 @@ function shopRowLayout(l, i) {
   };
 }
 function shopButtons(l, s = game.shop) {
-  return [
+  const buttons = [
     { id: 'confirm', label: shopModeLabel(s), x: l.x + 12, y: l.btnY, w: 54, h: 20 },
-    { id: 'reset', label: 'Reset', x: l.x + 74, y: l.btnY, w: 58, h: 20 },
-    { id: 'cancel', label: 'Cancel', x: l.x + l.w - 74, y: l.btnY, w: 62, h: 20 },
+    { id: 'cancel', label: 'Close', x: l.x + l.w - 74, y: l.btnY, w: 62, h: 20 },
   ];
+  if (shopHasPending(s)) buttons.splice(1, 0, { id: 'reset', label: 'Reset', x: l.x + 74, y: l.btnY, w: 58, h: 20 });
+  return buttons;
 }
 function shopScrollbar(l, s, ids) {
   const max = shopMaxScroll(s, ids);
@@ -789,6 +814,9 @@ function shopScrollbar(l, s, ids) {
 }
 function shopQty(id, s = game.shop) {
   return Math.max(0, (s.qty && s.qty[id]) || 0);
+}
+function shopHasPending(s = game.shop) {
+  return !!(s && shopItems(s).some(id => shopQty(id, s) > 0));
 }
 function shopMaxQty(id, s = game.shop) {
   return s.mode === 'sell' ? (game.hero.bag[id] || 0) : 99;
@@ -881,8 +909,7 @@ function updateShopChoice() {
       if (hit(c, l.rowX, l.rowY + i * l.rowH, l.rowW, l.rowH)) {
         s.cursor = i;
         const choice = SHOP_CHOICE[i].id;
-        if (choice === 'cancel') { game.shop = null; sfx('Cancel1'); }
-        else openShop(s.who, choice);
+        openShop(s.who, choice);
         return;
       }
     }
@@ -894,8 +921,7 @@ function updateShopChoice() {
   if (pressed(['ArrowDown', 's'])) { s.cursor = (s.cursor + 1) % SHOP_CHOICE.length; sfx('Cursor1'); }
   if (pressed(CONFIRM)) {
     const choice = SHOP_CHOICE[s.cursor || 0].id;
-    if (choice === 'cancel') { game.shop = null; sfx('Cancel1'); }
-    else openShop(s.who, choice);
+    openShop(s.who, choice);
   }
 }
 function updateShop() {
@@ -1056,18 +1082,24 @@ function drawEnemy(en) {
   }
 }
 
-function drawLockBox() {
-  const en = game.lock;
+function drawActorTargetBox(en, color) {
   const p = Math.floor(performance.now() / 250) % 2; // gentle pulse
   const x = en.px - 3 - p, y = en.py - 12 - p, w = 22 + 2 * p, hh = 29 + 2 * p, L = 5;
   ctx.fillStyle = '#1a2a3a';
   drawCorners(x + 1, y + 1, w, hh, L);
-  ctx.fillStyle = '#ffe080';
+  ctx.fillStyle = color;
   drawCorners(x, y, w, hh, L);
+}
+function drawLockBox() {
+  drawActorTargetBox(game.lock, '#ffe080');
+}
+function drawPvpTargetBox() {
+  drawActorTargetBox(game.pvpTarget, '#f88');
 }
 // follow marker: a blue bracket that sits one ring outside the yellow lock box
 function drawFollowBox() {
-  const en = game.lock;
+  const en = game.lock || game.followPlayer || game.pvpTarget;
+  if (!en) return;
   const x = en.px - 8, y = en.py - 17, w = 32, hh = 39, L = 6;
   ctx.fillStyle = '#0a1424';
   drawCorners(x + 1, y + 1, w, hh, L);
@@ -1143,12 +1175,13 @@ function drawPops() {
   }
 }
 
-function drawDeadHero(px, py, alpha = 0.85) {
+function drawDeadHero(px, py, alpha = 0.85, actor = game.hero) {
+  const sp = actorSprite(actor);
   ctx.save();
   ctx.translate(px + 8, py + 8);
   ctx.rotate(Math.PI / 2);
   ctx.globalAlpha = alpha;
-  ctx.drawImage(img.hero, 24, 64, 24, 32, -12, -16, 24, 32);
+  ctx.drawImage(img[sp.sheet] || img.hero, sp.cx * 72 + 24, sp.cy * 128 + 64, 24, 32, -12, -16, 24, 32);
   ctx.globalAlpha = 1;
   ctx.restore();
 }
@@ -1229,7 +1262,8 @@ function updateDeathPopup() {
 }
 
 function hoverBlockedByUI() {
-  if (game.death || game.mapOpen || game.menu || game.shop || game.itemPopup || game.dialogue) return true;
+  if (game.death || game.mapOpen || game.menu || game.shop || game.itemPopup || game.dialogue ||
+    game.playerMenu || game.trade) return true;
   if (game.invOpen && inPanel(mouse)) return true;
   if (game.corpseOpen && inCorpseWin(mouse)) return true;
   return false;
@@ -1310,11 +1344,71 @@ function drawHoverCard() {
   if (hasHp) drawMeter(x + 8, y + 21, w - 16, 5, t.hp, t.maxhp, t.hpColor || hpColor(t.hp, t.maxhp));
 }
 
+const PLAYER_MENU_ITEMS = [
+  ['trade', 'Trade'], ['message', 'Message'], ['follow', 'Follow'],
+];
+function openPlayerMenu(p, sx, sy) {
+  if (!p) return;
+  const w = 90, h = 22 + PLAYER_MENU_ITEMS.length * 16;
+  game.playerMenu = {
+    id: p.id, name: p.name || p.id || 'Player', wx: p.px + 8, wy: p.py + 4,
+    x: Math.max(4, Math.min(W - w - 4, sx)), y: Math.max(4, Math.min(H - h - 4, sy)), cursor: 0,
+  };
+  sfx('Cursor1');
+}
+function playerMenuBox() {
+  const m = game.playerMenu;
+  return { x: m.x, y: m.y, w: 90, h: 22 + PLAYER_MENU_ITEMS.length * 16, rowY: m.y + 20, rowH: 16 };
+}
+function closePlayerMenu() { game.playerMenu = null; }
+function playerMenuAction(id) {
+  const m = game.playerMenu;
+  if (!m) return;
+  if (id === 'trade' && game.net) netSend(game.net, { t: 'tradeRequest', id: m.id });
+  else if (id === 'message' && typeof openChat === 'function') openChat(`/tell ${m.name} `);
+  else if (id === 'follow' && game.net) {
+    netSend(game.net, { t: 'followAt', x: m.wx, y: m.wy });
+    const p = (game.players || []).find(o => o.id === m.id);
+    if (p) { game.followPlayer = p; game.pvpTarget = null; game.lock = null; game.follow = true; game.path = null; }
+  }
+  sfx('Decision1');
+  closePlayerMenu();
+}
+function updatePlayerMenu() {
+  const m = game.playerMenu;
+  if (!m) return;
+  const b = playerMenuBox();
+  const hov = hoverRow(b.x + 6, b.rowY, b.w - 12, b.rowH, PLAYER_MENU_ITEMS.length);
+  if (hov >= 0) m.cursor = hov;
+  for (const c of clicks) if (c.b === 0) {
+    if (!hit(c, b.x, b.y, b.w, b.h)) { closePlayerMenu(); sfx('Cancel1'); return; }
+    const row = Math.floor((c.y - b.rowY) / b.rowH);
+    if (row >= 0 && row < PLAYER_MENU_ITEMS.length) { m.cursor = row; playerMenuAction(PLAYER_MENU_ITEMS[row][0]); return; }
+  }
+  if (pressed(CANCEL)) { closePlayerMenu(); sfx('Cancel1'); return; }
+  if (pressed(['ArrowUp', 'w'])) { m.cursor = (m.cursor + PLAYER_MENU_ITEMS.length - 1) % PLAYER_MENU_ITEMS.length; sfx('Cursor1'); }
+  if (pressed(['ArrowDown', 's'])) { m.cursor = (m.cursor + 1) % PLAYER_MENU_ITEMS.length; sfx('Cursor1'); }
+  if (pressed(CONFIRM)) playerMenuAction(PLAYER_MENU_ITEMS[m.cursor][0]);
+}
+function drawPlayerMenu() {
+  const m = game.playerMenu;
+  if (!m) return;
+  const b = playerMenuBox();
+  drawWindow(b.x, b.y, b.w, b.h);
+  text(m.name, b.x + 10, b.y + 7, '#ffe080');
+  PLAYER_MENU_ITEMS.forEach((it, i) => {
+    const y = b.rowY + i * b.rowH;
+    if (m.cursor === i) drawCursor(b.x + 6, y, b.w - 12, b.rowH);
+    text(it[1], b.x + 14, y + 4);
+  });
+}
+
 function openMapWindow() {
   game.mapOpen = true;
   game.menu = null;
   game.shop = null;
   game.itemPopup = null;
+  game.playerMenu = null;
   game.invFocus = null;
   game.invDrag = null;
   game.lootDrag = null;
@@ -1394,6 +1488,22 @@ function logOut() {
       logMsg(`You cannot log out during combat. Wait ${left}s.`);
       return;
     }
+    if (typeof openCharacterScreen === 'function') {
+      if (typeof netSend === 'function') netSend(game.net, { t: 'leaveCharacter' });
+      game.menu = null;
+      game.mapOpen = false;
+      game.shop = null;
+      game.itemPopup = null;
+      game.invFocus = null;
+      game.trade = null;
+      openCharacterScreen({
+        characters: (game.net && game.net.characters) || [{ name: game.hero.name || '', class: game.hero.class || '', lv: game.hero.lv || 1, map: game.mapId || 'city', gold: game.hero.gold || 0 }],
+        selected: game.hero.name || '',
+        class: game.hero.class || '',
+      });
+      sfx('Decision1');
+      return;
+    }
     sfx('Decision1');
     if (game.net.ws) game.net.ws.close();
     location.reload();
@@ -1424,7 +1534,7 @@ function openMenuSection(sel) {
   rootMenuSelect(sel);
 }
 function menuShortcutBlocked() {
-  return !!(game.death || game.shop || game.dialogue || game.itemPopup || game.corpseOpen || game.invFocus);
+  return !!(game.death || game.shop || game.dialogue || game.itemPopup || game.corpseOpen || game.invFocus || game.playerMenu);
 }
 function handleWindowShortcuts() {
   if (menuShortcutBlocked()) return false;
@@ -1465,6 +1575,7 @@ function beginAttrDraft(m) {
   m.attrPoints = game.hero.points;
 }
 function attrPending(m, k) { return m.attrDraft && m.attrBase && m.attrDraft[k] > m.attrBase[k]; }
+function attrHasPending(m) { return !!(m.attrDraft && m.attrBase && ATTRS.some(([k]) => attrPending(m, k))); }
 function ensureAttrDraft(m) { if (!m.attrDraft || !m.attrBase) beginAttrDraft(m); }
 function addAttrDraft(m, k) {
   ensureAttrDraft(m);
@@ -1492,10 +1603,22 @@ function confirmAttrDraft(m) {
   m.attrBase = copyAttr(m.attrDraft);
   m.attrBasePoints = m.attrPoints;
 }
+function skillUiLevel(id, h = game.hero) { return typeof skillLevel === 'function' ? skillLevel(id, h) : ((h.skillLevels && h.skillLevels[id]) || 1); }
+function skillReq(id, h = game.hero) {
+  const req = SKILL_TREE && SKILL_TREE[id];
+  return req && skillUiLevel(req, h) < 2 ? req : '';
+}
+function canUpgradeSkill(id, h = game.hero) {
+  return !!(SKILLS[id] && (h.skillPoints || 0) > 0 && skillUiLevel(id, h) < MAX_SKILL_LEVEL && !skillReq(id, h));
+}
+function skillMpText(id, h = game.hero) {
+  const cost = typeof skillCost === 'function' ? skillCost(id, h) : SKILLS[id].mp;
+  return cost + 'MP';
+}
 function skillLayout(ids = Object.keys(SKILLS)) {
-  const w = 204, rowH = 18, y = 8, rowY = y + 18;
+  const w = 236, rowH = 18, y = 8, rowY = y + 28;
   const slotsY = rowY + ids.length * rowH + 26;
-  return { x: subX(w), y, w, h: ids.length * rowH + 92, rowY, rowH, slotsY, buttonY: slotsY + 24 };
+  return { x: subX(w), y, w, h: ids.length * rowH + 126, rowY, rowH, slotsY, buttonY: slotsY + 24, hintY: slotsY + 48 };
 }
 function skillSlotAt(l, px, py) {
   for (let j = 0; j < 5; j++) {
@@ -1513,6 +1636,16 @@ function drawSkillIcon(id, x, y, selected = false) {
 }
 function attrLayout() { const w = 224, h = 174; return { x: subX(w), y: 8, w, h }; }
 function optionsLayout() { const w = 132; return { x: subX(w), y: 8, w, h: OPTIONS_MENU.length * 16 + 16 }; }
+function menuCloseButton(l) { return { x: l.x + l.w - 50, y: l.y + 7, w: 38, h: 16 }; }
+function menuCloseHit(l, c) {
+  const b = menuCloseButton(l);
+  return hit(c, b.x, b.y, b.w, b.h);
+}
+function drawMenuClose(l) {
+  const b = menuCloseButton(l);
+  drawWindow(b.x, b.y, b.w, b.h);
+  text('Close', b.x + 7, b.y + 5, '#fff');
+}
 
 function updateMenu(dt) {
   const m = game.menu, h = game.hero;
@@ -1544,6 +1677,7 @@ function updateMenu(dt) {
     const hov = hoverRow(l.x + 8, l.rowY, l.w - 16, 16, ids.length, l.rowH);
     if (hov >= 0) m.cursor2 = hov;
     for (const c of mc) {
+      if (menuCloseHit(l, c)) { m.mode = 'root'; m.skillDrag = null; m.skillCarry = null; sfx('Cancel1'); return; }
       if (!hit(c, l.x, l.y, l.w, l.h)) { m.mode = 'root'; m.skillDrag = null; m.skillCarry = null; sfx('Cancel1'); return; }
       const slot = skillSlotAt(l, c.x, c.y);
       if (slot >= 0) {
@@ -1555,6 +1689,12 @@ function updateMenu(dt) {
       if (hit(c, l.x + 12, l.buttonY, 116, 18)) { m.skillCarry = ids[m.cursor2]; m.assign = true; sfx('Decision1'); continue; }
       for (let i = 0; i < ids.length; i++) {
         const ry = l.rowY + i * l.rowH;
+        if (hit(c, l.x + l.w - 28, ry + 1, 16, 16)) {
+          m.cursor2 = i;
+          if (canUpgradeSkill(ids[i], h)) pushIntent({ t: 'upgradeSkill', id: ids[i] });
+          else sfx('Buzzer1');
+          continue;
+        }
         if (hit(c, l.x + 8, ry, l.w - 16, 16)) {
           m.cursor2 = i;
           if (hit(c, l.x + 10, ry, 16, 16)) { m.skillDrag = ids[i]; m.skillCarry = null; m.assign = false; }
@@ -1578,6 +1718,10 @@ function updateMenu(dt) {
     if (pressed(CANCEL)) { m.mode = 'root'; m.skillDrag = null; m.skillCarry = null; sfx('Cancel1'); return; }
     if (pressed(['ArrowUp', 'w'])) { m.cursor2 = (m.cursor2 + ids.length - 1) % ids.length; sfx('Cursor1'); }
     if (pressed(['ArrowDown', 's'])) { m.cursor2 = (m.cursor2 + 1) % ids.length; sfx('Cursor1'); }
+    if (pressed(['u', 'U'])) {
+      if (canUpgradeSkill(ids[m.cursor2], h)) pushIntent({ t: 'upgradeSkill', id: ids[m.cursor2] });
+      else sfx('Buzzer1');
+    }
     if (pressed(CONFIRM)) { m.skillCarry = ids[m.cursor2]; m.assign = true; sfx('Decision1'); }
   } else if (m.mode === 'attribs') {
     ensureAttrDraft(m);
@@ -1585,6 +1729,7 @@ function updateMenu(dt) {
     const hov = hoverRow(l.x + 8, l.y + 30, 100, 15, ATTRS.length);
     if (hov >= 0) m.cursor2 = hov;
     for (const c of mc) {
+      if (menuCloseHit(l, c)) { m.mode = 'root'; sfx('Cancel1'); return; }
       if (!hit(c, l.x, l.y, l.w, l.h)) { m.mode = 'root'; sfx('Cancel1'); return; }
       for (let i = 0; i < ATTRS.length; i++) {
         const y = l.y + 30 + i * 15;
@@ -1592,7 +1737,7 @@ function updateMenu(dt) {
         if (hit(c, l.x + 96, y, 14, 14)) { m.cursor2 = i; addAttrDraft(m, ATTRS[i][0]); }
       }
       if (hit(c, l.x + 16, l.y + l.h - 26, 72, 18)) confirmAttrDraft(m);
-      if (hit(c, l.x + 96, l.y + l.h - 26, 56, 18)) resetAttrDraft(m);
+      if (attrHasPending(m) && hit(c, l.x + 96, l.y + l.h - 26, 56, 18)) resetAttrDraft(m);
     }
     if (pressed(CANCEL)) { m.mode = 'root'; sfx('Cancel1'); return; }
     if (pressed(['ArrowUp', 'w'])) { m.cursor2 = (m.cursor2 + ATTRS.length - 1) % ATTRS.length; sfx('Cursor1'); }
@@ -1603,6 +1748,7 @@ function updateMenu(dt) {
     const hov = hoverRow(l.x + 6, l.y + 8, l.w - 12, 16, OPTIONS_MENU.length);
     if (hov >= 0) m.cursor2 = hov;
     for (const c of mc) {
+      if (menuCloseHit(l, c)) { m.mode = 'root'; sfx('Cancel1'); return; }
       if (!hit(c, l.x, l.y, l.w, l.h)) { m.mode = 'root'; sfx('Cancel1'); return; }
       for (let i = 0; i < OPTIONS_MENU.length; i++)
         if (hit(c, l.x + 6, l.y + 8 + i * 16, l.w - 12, 16)) { m.cursor2 = i; toggleOption(OPTIONS_MENU[i]); }
@@ -1629,14 +1775,19 @@ function drawMenu() {
     const l = skillLayout(ids);
     drawWindow(l.x, l.y, l.w, l.h);
     text('Skills', l.x + 12, l.y + 8, '#ffe080');
+    drawMenuClose(l);
+    text(`Pts ${h.skillPoints || 0}`, l.x + 92, l.y + 8, (h.skillPoints || 0) ? '#ffe080' : '#bcd');
     ids.forEach((id, i) => {
       const sk = SKILLS[id], slot = h.slots.indexOf(id);
       const y = l.rowY + i * l.rowH;
       if (m.cursor2 === i) drawCursor(l.x + 6, y - 1, l.w - 12, 18);
       drawSkillIcon(id, l.x + 10, y, m.skillCarry === id || m.skillDrag === id);
       text(sk.name, l.x + 32, y + 4);
-      text(sk.mp + 'MP', l.x + 98, y + 4, '#bcd');
-      if (slot >= 0) text(`[${slot + 1}]`, l.x + 142, y + 4, '#ffe080');
+      text(`Lv${skillUiLevel(id, h)}`, l.x + 82, y + 4, '#ffe080');
+      text(skillMpText(id, h), l.x + 112, y + 4, '#bcd');
+      if (slot >= 0) text(`[${slot + 1}]`, l.x + 154, y + 4, '#ffe080');
+      drawWindow(l.x + l.w - 28, y, 16, 16);
+      text('+', l.x + l.w - 23, y + 4, canUpgradeSkill(id, h) ? '#fff' : '#777');
     });
     text('Slots', l.x + 12, l.slotsY - 13, '#9cf');
     for (let j = 0; j < 5; j++) { // clickable hotbar slot boxes
@@ -1649,6 +1800,10 @@ function drawMenu() {
     drawWindow(l.x + 12, l.buttonY, 116, 18);
     if (m.skillCarry) drawCursor(l.x + 15, l.buttonY + 3, 110, 12);
     text('Assign skill to slot', l.x + 18, l.buttonY + 6, '#fff');
+    const selectedSkill = ids[m.cursor2];
+    const req = skillReq(selectedSkill, h);
+    text(req ? `Tree: ${SKILLS[selectedSkill].name} needs ${SKILLS[req].name} Lv2` : `Tree: ${SKILLS[selectedSkill].name} can evolve to Lv${MAX_SKILL_LEVEL}`,
+      l.x + 12, l.hintY, req ? '#f76' : '#bcd');
     const heldSkill = m.skillCarry || m.skillDrag;
     if (heldSkill) {
       drawSkillIcon(heldSkill, mouse.x + 8, mouse.y + 8, true);
@@ -1658,6 +1813,7 @@ function drawMenu() {
     ensureAttrDraft(m);
     const l = attrLayout(), st = statsForAttr(m.attrDraft);
     drawWindow(l.x, l.y, l.w, l.h);
+    drawMenuClose(l);
     text(`Points: ${m.attrPoints}`, l.x + 10, l.y + 10, m.attrPoints > 0 ? '#ffe080' : '#bcd');
     ATTRS.forEach(([k, label], i) => {
       const y = l.y + 30 + i * 15, pending = attrPending(m, k);
@@ -1678,24 +1834,30 @@ function drawMenu() {
     });
     drawWindow(l.x + 16, l.y + l.h - 26, 72, 18);
     text('Confirm', l.x + 30, l.y + l.h - 20);
-    drawWindow(l.x + 96, l.y + l.h - 26, 56, 18);
-    text('Reset', l.x + 112, l.y + l.h - 20);
+    if (attrHasPending(m)) {
+      drawWindow(l.x + 96, l.y + l.h - 26, 56, 18);
+      text('Reset', l.x + 112, l.y + l.h - 20);
+    }
   } else if (m.mode === 'status') {
     const w = 188, x = subX(w);
-    drawWindow(x, 8, w, 124);
+    const l = { x, y: 8, w, h: 124 };
+    drawWindow(l.x, l.y, l.w, l.h);
+    drawMenuClose(l);
     const lines = [
       `${heroDisplayName()}  Lv.${h.lv}`,
       `HP  ${Math.floor(h.hp)}/${h.maxhp}`,
       `MP  ${Math.floor(h.mp)}/${h.maxmp}`,
       `Attack ${stats().atk}  Magic ${stats().matk}`,
-      `EXP  ${h.exp}/${h.lv * 10}`,
+      `EXP  ${h.exp}/${expToNextLevel(h)}`,
       `Attr points  ${h.points}`,
       `Monsters slain  ${h.kills}`,
     ];
     lines.forEach((line, i) => text(line, x + 12, 18 + i * 15));
   } else if (m.mode === 'quest') {
     const w = 188, x = subX(w);
-    drawWindow(x, 8, w, 76);
+    const l = { x, y: 8, w, h: 76 };
+    drawWindow(l.x, l.y, l.w, l.h);
+    drawMenuClose(l);
     text('QUEST', x + 12, 16, '#ffe080');
     wrapText(
       game.won ? 'Complete! You are the hero of the valley.'
@@ -1704,6 +1866,7 @@ function drawMenu() {
   } else if (m.mode === 'options') {
     const l = optionsLayout();
     drawWindow(l.x, l.y, l.w, l.h);
+    drawMenuClose(l);
     OPTIONS_MENU.forEach((s, i) => {
       if (m.cursor2 === i) drawCursor(l.x + 6, l.y + 8 + i * 16, l.w - 12, 16);
       text(optionLabel(s), l.x + 14, l.y + 12 + i * 16);
@@ -1720,6 +1883,16 @@ function drawChar(sheet, cx, cy, dir, frame, px, py) {
   const sx = cx * 72 + Math.floor(frame) % 3 * 24;
   const sy = cy * 128 + DIRROW[dir] * 32;
   ctx.drawImage(sheet, sx, sy, 24, 32, px - 4, py - 16, 24, 32);
+}
+function actorSprite(a = {}) {
+  return CLASS_SPRITES[a.class] || CLASS_SPRITES.Knight;
+}
+function drawActor(a, px = a.px, py = a.py, alpha = 1) {
+  const sp = actorSprite(a);
+  const frame = a.moving ? [0, 1, 2, 1][Math.floor(a.anim || 0) % 4] : 1;
+  if (alpha !== 1) ctx.globalAlpha = alpha;
+  drawChar(img[sp.sheet] || img.hero, sp.cx, sp.cy, a.dir || 'down', frame, px, py);
+  if (alpha !== 1) ctx.globalAlpha = 1;
 }
 
 function drawMap() {
@@ -1763,8 +1936,9 @@ function drawMap() {
           ctx.globalAlpha = 1;
           ctx.restore();
         } else {
-          drawDeadHero(c.tx * TS, c.ty * TS, 0.85);
+          drawDeadHero(c.tx * TS, c.ty * TS, 0.85, h);
         }
+        if (c.name) text(c.name, c.tx * TS + 8 - Math.floor(textWidth(c.name) / 2), c.ty * TS - 12, '#f0d0d0');
       },
     });
   }
@@ -1792,22 +1966,21 @@ function drawMap() {
   });
   if (game.players) for (const pl of game.players) drawables.push({ // netplay: other players
     base: pl.py + TS,
-    draw: () => pl.dead ? drawDeadHero(pl.px, pl.py, 0.85) :
-      drawChar(img.hero, 0, 0, pl.dir, pl.moving ? [0, 1, 2, 1][Math.floor(pl.anim) % 4] : 1, pl.px, pl.py),
+    draw: () => pl.dead ? drawDeadHero(pl.px, pl.py, 0.85, pl) : drawActor(pl),
   });
   drawables.push({
     base: h.py + TS,
     draw: () => {
       if (h.dead) {
-        if (!corpseAt(h.tx, h.ty)) drawDeadHero(h.px, h.py, 0.95);
+        if (!corpseAt(h.tx, h.ty)) drawDeadHero(h.px, h.py, 0.95, h);
         return;
       }
       const frame = [0, 1, 2, 1][Math.floor(h.anim) % 4];
-      drawChar(img.hero, 0, 0, h.dir, frame, h.px, h.py);
+      drawActor(h);
       if (game.iframes > 0 && Math.floor(game.iframes * 12) % 2) // hurt: flash red
-        drawTint(img.hero, 0, 0, h.dir, frame, h.px, h.py, '#e33', 0.65);
+        drawTint(img[actorSprite(h).sheet] || img.hero, actorSprite(h).cx, actorSprite(h).cy, h.dir, frame, h.px, h.py, '#e33', 0.65);
       else if (game.healFx > 0) // healing: green glow
-        drawTint(img.hero, 0, 0, h.dir, frame, h.px, h.py, '#6f6', game.healFx);
+        drawTint(img[actorSprite(h).sheet] || img.hero, actorSprite(h).cx, actorSprite(h).cy, h.dir, frame, h.px, h.py, '#6f6', game.healFx);
     },
   });
   drawables.sort((a, b) => a.base - b.base);
@@ -1818,7 +1991,8 @@ function drawMap() {
     ctx.fillRect(dx * TS + 6, dy * TS + 6, 4, 4);
   }
   if (game.lock) drawLockBox();
-  if (game.follow && game.lock) drawFollowBox();
+  if (game.pvpTarget) drawPvpTargetBox();
+  if (game.follow && (game.lock || game.followPlayer || game.pvpTarget)) drawFollowBox();
   if (game.slashFx) drawSlash();
   drawProjectiles();
   drawBolts();
@@ -1832,14 +2006,17 @@ function drawMap() {
   text(`HP ${Math.floor(h.hp)}/${h.maxhp}`, 12, 31);
   drawMeter(12, 43, 112, 5, h.mp, h.maxmp, '#4bacff');
   text(`MP ${Math.floor(h.mp)}/${h.maxmp}`, 12, 51, '#bcd');
-  text(`Gold ${h.gold}`, 12, 62, '#ffe080');
-  if (overloaded()) text('OVERWEIGHT', 12, 73, '#f76');
+  const nextExp = expToNextLevel(h);
+  drawMeter(12, 63, 112, 5, h.exp, nextExp, '#ffe080');
+  text(`EXP ${Math.floor(h.exp)}/${nextExp}`, 12, 71, '#f6d98b');
+  text(`Gold ${h.gold}`, 12, 82, '#ffe080');
+  if (overloaded()) text('OVERWEIGHT', 12, 93, '#f76');
   if (!game.dialogue) { // skill hotbar
     h.slots.forEach((id, i) => {
       const x = 4 + i * 21, y = H - 24;
       drawWindow(x, y, 20, 20);
       text(String(i + 1), x + 3, y + 2, '#9cf');
-      if (id) text(SKILLS[id].name[0], x + 9, y + 9, h.mp >= SKILLS[id].mp ? '#fff' : '#999');
+      if (id) text(SKILLS[id].name[0], x + 9, y + 9, h.mp >= skillCost(id, h) ? '#fff' : '#999');
     });
   }
   drawMiniMap();
@@ -1870,6 +2047,7 @@ function drawMap() {
   if (game.shop) drawShop();
   if (game.itemPopup) drawItemPopup();
   if (game.mapOpen) drawWorldMapWindow();
+  if (game.playerMenu) drawPlayerMenu();
   if (game.death) drawDeathPopup();
 }
 // toggleable combat/reward log, docked above the skill hotbar (bottom-left)
@@ -2011,14 +2189,15 @@ function processInput(dt) {
   for (const c of clicks) {
     if (game.invOpen && inPanel(c)) continue; // the panel owns its clicks
     if (game.corpseOpen && inCorpseWin(c)) continue; // handled above
-    if (c.b === 2) { // right-click: open your corpse, else lock for attack (no follow)
+    if (c.b === 2) { // right-click: interact/open nearby things, no direct lock-on
       const wxp = c.x + cam.x, wyp = c.y + cam.y;
       const wx = Math.floor(wxp / TS), wy = Math.floor(wyp / TS);
       const shopNpc = shopNpcAtPoint(wxp, wyp);
       const co = corpseAt(wx, wy);
-      if (shopNpc && nearHero(shopNpc.tx, shopNpc.ty)) openShopChoice(shopForNpc(shopNpc));
+      if (shopNpc) openShopChoice(shopForNpc(shopNpc), c.x, c.y);
       else if (co && !co.decayed && nearHero(wx, wy)) { game.corpseOpen = co; sfx('Decision1'); }
-      else pushIntent({ t: 'lockAt', x: c.x + cam.x, y: c.y + cam.y });
+    } else if (c.b === 0 && c.ctrl) {
+      pushIntent({ t: 'lockAt', x: c.x + cam.x, y: c.y + cam.y });
     } else if (c.b === 0 && c.alt) { // Alt+click locks an enemy AND follows it
       pushIntent({ t: 'followAt', x: c.x + cam.x, y: c.y + cam.y });
     } else if (c.b === 0 && !game.invDrag) {

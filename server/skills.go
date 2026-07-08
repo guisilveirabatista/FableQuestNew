@@ -12,14 +12,27 @@ import (
 
 var skillMP = map[string]float64{"fire": 4, "heal": 6, "spin": 3, "bolt": 6}
 
+func skillCost(p *Player, id string) float64 {
+	base, ok := skillMP[id]
+	if !ok {
+		return 0
+	}
+	return base + float64(skillLevel(p, id)-1)
+}
+
+func skillMagicDamage(p *Player, id string, roll int) int {
+	return statsOf(p).matk*2 + roll + (skillLevel(p, id)-1)*4
+}
+
 type projectile struct {
-	ownerID  string
-	x, y     float64
-	dx, dy   float64
-	targetID int
-	dist, t  float64
-	booming  bool
-	boom     float64
+	ownerID      string
+	x, y         float64
+	dx, dy       float64
+	targetID     int
+	targetPlayer string
+	dist, t      float64
+	booming      bool
+	boom         float64
 }
 
 type bolt struct {
@@ -34,10 +47,14 @@ func (h *Hub) castSlot(p *Player, i int) {
 		return
 	}
 	id := p.slots[i]
-	if p.atkCool > 0 || id == "" || p.mp < skillMP[id] {
+	if id == "" {
 		return
 	}
-	if id != "heal" && h.liveEnemyLock(p) == nil {
+	cost := skillCost(p, id)
+	if p.atkCool > 0 || cost <= 0 || p.mp < cost {
+		return
+	}
+	if id != "heal" && h.liveEnemyLock(p) == nil && h.livePvpTarget(p) == nil {
 		return
 	}
 	ok := false
@@ -52,7 +69,7 @@ func (h *Hub) castSlot(p *Player, i int) {
 		ok = h.castBolt(p)
 	}
 	if ok {
-		p.mp -= skillMP[id]
+		p.mp -= cost
 	}
 }
 
@@ -64,34 +81,52 @@ func (h *Hub) liveEnemyLock(p *Player) *enemy {
 	return en
 }
 
+func (h *Hub) livePvpTarget(p *Player) *Player {
+	if p.pvpTarget == "" {
+		return nil
+	}
+	o := h.players[p.pvpTarget]
+	if o == nil || !h.canPvp(p, o) {
+		return nil
+	}
+	return o
+}
+
 func (h *Hub) castFire(p *Player) bool {
-	t := h.liveEnemyLock(p)
-	if t == nil {
+	var targetID int
+	var targetPlayer string
+	tx, ty := 0.0, 0.0
+	if t := h.liveEnemyLock(p); t != nil {
+		targetID, tx, ty = t.id, t.px, t.py
+	} else if o := h.livePvpTarget(p); o != nil {
+		targetPlayer, tx, ty = o.id, o.px, o.py
+	} else {
 		return false
 	}
 	p.atkCool = 0.4
-	m := math.Hypot(t.px-p.px, t.py-p.py)
+	m := math.Hypot(tx-p.px, ty-p.py)
 	if m == 0 {
 		m = 1
 	}
-	dx, dy := (t.px-p.px)/m, (t.py-p.py)/m
+	dx, dy := (tx-p.px)/m, (ty-p.py)/m
 	h.projectiles[p.mapID] = append(h.projectiles[p.mapID], &projectile{
-		ownerID: p.id, x: p.px + 8 + dx*8, y: p.py + 8 + dy*8, dx: dx, dy: dy, targetID: t.id, boom: -1,
+		ownerID: p.id, x: p.px + 8 + dx*8, y: p.py + 8 + dy*8, dx: dx, dy: dy,
+		targetID: targetID, targetPlayer: targetPlayer, boom: -1,
 	})
 	return true
 }
 
 func (h *Hub) castHeal(p *Player) bool {
-	p.hp = math.Min(float64(p.maxhp), p.hp+15)
+	p.hp = math.Min(float64(p.maxhp), p.hp+float64(15+(skillLevel(p, "heal")-1)*5))
 	p.atkCool = 0.4
 	return true
 }
 
 func (h *Hub) castSpin(p *Player) bool {
-	if h.liveEnemyLock(p) == nil {
+	if h.liveEnemyLock(p) == nil && h.livePvpTarget(p) == nil {
 		return false
 	}
-	p.atkCool = 1.3 / statsOf(p).aspd
+	p.atkCool = math.Max(0.9, 1.3-float64(skillLevel(p, "spin")-1)*0.08) / statsOf(p).aspd
 	for _, en := range h.enemies[p.mapID] {
 		if en.dying > 0 || en.dead {
 			continue
@@ -105,13 +140,19 @@ func (h *Hub) castSpin(p *Player) bool {
 }
 
 func (h *Hub) castBolt(p *Player) bool {
-	target := h.liveEnemyLock(p)
+	if target := h.liveEnemyLock(p); target != nil {
+		p.atkCool = 0.5
+		h.bolts[p.mapID] = append(h.bolts[p.mapID], &bolt{x: target.px + 8, y: target.py + 4})
+		h.hitEnemy(p, target, skillMagicDamage(p, "bolt", rand.Intn(6)), false)
+		return true
+	}
+	target := h.livePvpTarget(p)
 	if target == nil {
 		return false
 	}
 	p.atkCool = 0.5
 	h.bolts[p.mapID] = append(h.bolts[p.mapID], &bolt{x: target.px + 8, y: target.py + 4})
-	h.hitEnemy(p, target, statsOf(p).matk*2+rand.Intn(6), false)
+	h.pvpHit(p, target, skillMagicDamage(p, "bolt", rand.Intn(6)), false, true)
 	return true
 }
 
@@ -125,8 +166,17 @@ func (h *Hub) updateProjectiles(dt float64) {
 				pr.boom -= dt
 				continue
 			}
+			owner := h.players[pr.ownerID]
 			if pr.targetID != 0 { // home in on the locked target while it lives
 				if t := h.enemyByID(mapID, pr.targetID); t != nil && !t.dead && t.dying <= 0 {
+					m := math.Hypot(t.px+8-pr.x, t.py+8-pr.y)
+					if m == 0 {
+						m = 1
+					}
+					pr.dx, pr.dy = (t.px+8-pr.x)/m, (t.py+8-pr.y)/m
+				}
+			} else if pr.targetPlayer != "" && owner != nil {
+				if t := h.players[pr.targetPlayer]; t != nil && h.canPvp(owner, t) {
 					m := math.Hypot(t.px+8-pr.x, t.py+8-pr.y)
 					if m == 0 {
 						m = 1
@@ -139,14 +189,13 @@ func (h *Hub) updateProjectiles(dt float64) {
 			pr.y += pr.dy * sp
 			pr.dist += sp
 			hit := pr.dist > 5.5*TS || blocked(mapID, int(math.Floor(pr.x/TS)), int(math.Floor(pr.y/TS)))
-			owner := h.players[pr.ownerID]
 			for _, en := range h.enemies[mapID] {
 				if en.dying > 0 || en.dead {
 					continue
 				}
 				if math.Abs(en.px+8-pr.x) < 11 && math.Abs(en.py+8-pr.y) < 11 {
 					if owner != nil {
-						h.hitEnemy(owner, en, statsOf(owner).matk*2+rand.Intn(5), false)
+						h.hitEnemy(owner, en, skillMagicDamage(owner, "fire", rand.Intn(5)), false)
 					}
 					hit = true
 					break
@@ -158,7 +207,7 @@ func (h *Hub) updateProjectiles(dt float64) {
 						continue
 					}
 					if math.Abs(o.px+8-pr.x) < 11 && math.Abs(o.py+8-pr.y) < 11 {
-						h.pvpHit(owner, o, statsOf(owner).matk*2+rand.Intn(5), false, true)
+						h.pvpHit(owner, o, skillMagicDamage(owner, "fire", rand.Intn(5)), false, true)
 						hit = true
 						break
 					}

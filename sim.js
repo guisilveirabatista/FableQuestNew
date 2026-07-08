@@ -22,6 +22,20 @@ const ATTRS = [
   ['dex', 'Dexterity'], ['mag', 'Magic Power'], ['luck', 'Luck'],
 ];
 const BASE_ATTR = { agi: 1, int: 1, vit: 2, str: 2, dex: 1, mag: 1, luck: 1 };
+const ATTR_POINTS_PER_LEVEL = 2, SKILL_POINTS_PER_LEVEL = 1, MAX_SKILL_LEVEL = 5;
+const SKILL_TREE = { bolt: 'fire', spin: 'fire' };
+function expToNextLevel(lv) { return Math.max(1, lv || 1) * 14; }
+function normalizeSkillProgress(h = game.hero) {
+  if (!h.skillLevels) h.skillLevels = {};
+  ['fire', 'heal', 'spin', 'bolt'].forEach(id => {
+    h.skillLevels[id] = Math.max(1, Math.min(MAX_SKILL_LEVEL, h.skillLevels[id] || 1));
+  });
+  h.skillPoints = Math.max(0, h.skillPoints || 0);
+}
+function skillLevel(id, h = game.hero) { normalizeSkillProgress(h); return h.skillLevels[id] || 1; }
+function skillCost(id, h = game.hero) {
+  return SKILLS[id] ? SKILLS[id].mp + skillLevel(id, h) - 1 : 0;
+}
 function statsForAttr(attr) {
   const a = attr;
   const eq = { atk: 0, def: 0, mdef: 0, dodge: 0, crit: 0 }; // worn gear bonuses
@@ -55,9 +69,12 @@ function resetGame() {
   game.hero = {
     tx: SPAWN.tx, ty: SPAWN.ty, px: SPAWN.tx * TS, py: SPAWN.ty * TS, dir: 'down', anim: 0, moving: false,
     dead: false,
+    name: 'Hero', class: 'Knight', hair: '#6b3f22', cloth: '#2f7fd1',
     hp: 30, maxhp: 30, mp: 10, maxmp: 10, lv: 1, exp: 0, gold: 0,
     kills: 0,
     slots: ['fire', 'heal', 'spin', 'bolt', null], // skill hotbar, keys 1-5
+    skillPoints: 0,
+    skillLevels: { fire: 1, heal: 1, spin: 1, bolt: 1 },
     attr: { ...BASE_ATTR },
     points: 0, // attribute points to spend (3 per level-up)
     bag: { potion: 3 },
@@ -306,11 +323,11 @@ function interact() { // returns true if something was there to talk to / read
 // in reach, FIRE lobs a fireball. The dirt path stays monster-free.
 const ENEMIES = {
   // flee: below this fraction of max HP the monster runs from you instead
-  slime: { name: 'Slime', cx: 0, cy: 0, hp: 10, atk: 4, def: 1, exp: 4, gold: 6, speed: 30, wait: [0.5, 1.1], range: 4, flee: 0 },
-  imp: { name: 'Imp', cx: 1, cy: 0, hp: 16, atk: 6, def: 2, exp: 7, gold: 12, speed: 45, wait: [0.25, 0.6], range: 5, flee: 0.2 },
-  ghost: { name: 'Ghost', cx: 3, cy: 0, hp: 24, atk: 8, def: 2, exp: 12, gold: 20, speed: 55, wait: [0.1, 0.4], range: 6, flee: 0.25 },
+  slime: { name: 'Slime', cx: 0, cy: 0, hp: 14, atk: 5, def: 2, exp: 5, gold: 7, speed: 38, wait: [0.25, 0.65], range: 7, flee: 0 },
+  imp: { name: 'Imp', cx: 1, cy: 0, hp: 22, atk: 8, def: 3, exp: 8, gold: 14, speed: 54, wait: [0.12, 0.35], range: 9, flee: 0.15 },
+  ghost: { name: 'Ghost', cx: 3, cy: 0, hp: 30, atk: 11, def: 3, exp: 14, gold: 24, speed: 62, wait: [0.08, 0.25], range: 11, flee: 0.2 },
 };
-const MAX_ENEMIES = 10; // the field is big now
+const MAX_ENEMIES = 14; // the field is big now
 function rnd(n) { return Math.floor(Math.random() * n); }
 function pickEnemy() {
   const k = game.hero.kills;
@@ -411,7 +428,7 @@ function updateEnemies(dt) {
       const dx = h.tx - en.tx, dy = h.ty - en.ty;
       let dirs;
       const fleeing = e.flee > 0 && en.hp / en.maxhp <= e.flee;
-      if (Math.abs(dx) + Math.abs(dy) <= e.range && Math.random() > 0.2) {
+      if (Math.abs(dx) + Math.abs(dy) <= e.range && Math.random() > 0.05) {
         // chase (or flee: same pathing, away instead of toward)
         const hd = (fleeing ? dx < 0 : dx > 0) ? 'right' : 'left';
         const vd = (fleeing ? dy < 0 : dy > 0) ? 'down' : 'up';
@@ -465,7 +482,8 @@ function die(cause) {
   const items = {};
   for (const [id, n] of Object.entries(h.bag)) if (n > 0) items[id] = n;
   h.bag = {}; // your loot stays with the body — go get it back
-  game.corpses.push({ map: game.mapId, tx: h.tx, ty: h.ty, items, age: 0, decayed: false });
+  logMsg(`You died at ${new Date().toLocaleTimeString()} on ${game.mapId} (${h.tx},${h.ty}). Killed by ${cause || 'unknown forces'}.`);
+  game.corpses.push({ map: game.mapId, tx: h.tx, ty: h.ty, name: h.name || 'Hero', items, age: 0, decayed: false });
   sfx('Damege2');
   h.hp = 0;
   h.moving = false;
@@ -526,12 +544,16 @@ function killEnemy(en) {
       sfx('Item1');
     } else dropFloor(id, 1, en.tx, en.ty);
   }
-  if (h.exp >= h.lv * 10) {
-    h.exp -= h.lv * 10; h.lv++; h.points += 3;
+  if (h.exp >= expToNextLevel(h.lv)) {
+    h.exp -= expToNextLevel(h.lv);
+    h.lv++;
+    h.points += ATTR_POINTS_PER_LEVEL;
+    h.skillPoints += SKILL_POINTS_PER_LEVEL;
+    normalizeSkillProgress(h);
     recalcMax();
     h.hp = h.maxhp; h.mp = h.maxmp;
     sfx('Recovery2');
-    logMsg(`LEVEL UP! Now Lv.${h.lv}  (+3 attribute points)`);
+    logMsg(`LEVEL UP! Now Lv.${h.lv}  (+${ATTR_POINTS_PER_LEVEL} attribute points, +${SKILL_POINTS_PER_LEVEL} skill point)`);
     addPop('LEVEL UP!', h.px + 8, h.py - 22, '#ffe080');
   }
 }
@@ -594,9 +616,9 @@ const SKILLS = {
 function castSlot(i) {
   const h = game.hero, id = h.slots[i];
   if (game.atkCool > 0) return;
-  if (!id || h.mp < SKILLS[id].mp) { sfx('Buzzer1'); return; }
+  if (!id || h.mp < skillCost(id, h)) { sfx('Buzzer1'); return; }
   if (id !== 'heal' && !liveEnemyLock()) { sfx('Buzzer1'); return; }
-  if (SKILLS[id].cast()) h.mp -= SKILLS[id].mp;
+  if (SKILLS[id].cast()) h.mp -= skillCost(id, h);
   else sfx('Buzzer1');
 }
 
@@ -618,8 +640,9 @@ function castFire() {
 
 function castHeal() {
   const h = game.hero;
-  const heal = Math.min(15, h.maxhp - Math.floor(h.hp));
-  h.hp = Math.min(h.maxhp, h.hp + 15);
+  const healPower = 15 + (skillLevel('heal', h) - 1) * 5;
+  const heal = Math.min(healPower, h.maxhp - Math.floor(h.hp));
+  h.hp = Math.min(h.maxhp, h.hp + healPower);
   game.atkCool = 0.4;
   game.healFx = 0.5;
   sfx('Recovery1');
@@ -630,7 +653,7 @@ function castHeal() {
 function castSpin() {
   const h = game.hero;
   if (!liveEnemyLock()) return false;
-  game.atkCool = 1.3 / stats().aspd;
+  game.atkCool = Math.max(0.9, 1.3 - (skillLevel('spin', h) - 1) * 0.08) / stats().aspd;
   game.slashFx = { t: 0, spin: true, dur: 0.3 };
   sfx('Sword1');
   for (const en of game.enemies) {
@@ -647,7 +670,7 @@ function castBolt() {
   game.atkCool = 0.5;
   game.bolts.push({ x: t.px + 8, y: t.py + 4, t: 0 });
   sfx('Thunder4');
-  hitEnemy(t, stats().matk * 2 + rnd(6));
+  hitEnemy(t, stats().matk * 2 + rnd(6) + (skillLevel('bolt', h) - 1) * 4);
   return true;
 }
 function updateProjectiles(dt) {
@@ -665,7 +688,7 @@ function updateProjectiles(dt) {
     for (const en of game.enemies) {
       if (en.dying > 0 || en.dead) continue;
       if (Math.abs(en.px + 8 - p.x) < 11 && Math.abs(en.py + 8 - p.y) < 11) {
-        hitEnemy(en, stats().matk * 2 + rnd(5));
+        hitEnemy(en, stats().matk * 2 + rnd(5) + (skillLevel('fire') - 1) * 4);
         hit = true;
         break;
       }
@@ -731,6 +754,21 @@ function equipTo(id, slot) {
   h.equip[slot] = id;
   sfx('Decision1');
   return true;
+}
+
+function normalizeHeroEquipment() {
+  const h = game.hero;
+  if (!h.equip) h.equip = {};
+  if (!h.bag) h.bag = {};
+  for (const [slot, id] of Object.entries({ ...h.equip })) {
+    if (!id) { delete h.equip[slot]; continue; }
+    if (!ITEMS[id]) { delete h.equip[slot]; continue; }
+    if (canPlace(id, slot)) continue;
+    delete h.equip[slot];
+    const natural = slotFor(id);
+    if (natural && !h.equip[natural] && canPlace(id, natural)) h.equip[natural] = id;
+    else h.bag[id] = (h.bag[id] || 0) + 1;
+  }
 }
 
 function bagIds() { return Object.keys(ITEMS).filter(id => game.hero.bag[id] > 0); }
@@ -815,8 +853,12 @@ function shopNpcAtPoint(wx, wy) {
   return npcs.find(n => n.map === game.mapId && shopForNpc(n) &&
     wx >= n.px - 4 && wx < n.px + 20 && wy >= n.py - 16 && wy < n.py + 16);
 }
-function openShopChoice(who) {
+function openShopChoice(who, x = null, y = null) {
   game.shop = { who, mode: 'choice', cursor: 0 };
+  if (Number.isFinite(x) && Number.isFinite(y)) {
+    game.shop.x = x;
+    game.shop.y = y;
+  }
   sfx('Decision1');
 }
 function openShop(who, mode = 'buy') {
@@ -854,6 +896,16 @@ function assignSkillSlot(id, i) {
   const h = game.hero, old = h.slots.indexOf(id);
   if (old === i) h.slots[i] = null; // same slot again: unequip
   else { if (old >= 0) h.slots[old] = null; h.slots[i] = id; }
+  sfx('Decision1');
+}
+function upgradeSkill(id) {
+  const h = game.hero;
+  normalizeSkillProgress(h);
+  if (!SKILLS[id] || h.skillPoints <= 0 || h.skillLevels[id] >= MAX_SKILL_LEVEL) { sfx('Buzzer1'); return; }
+  const req = SKILL_TREE[id];
+  if (req && h.skillLevels[req] < 2) { sfx('Buzzer1'); return; }
+  h.skillLevels[id]++;
+  h.skillPoints--;
   sfx('Decision1');
 }
 // ---------------------------------------------------------------- map scene
@@ -909,7 +961,7 @@ function applyIntent(it) {
       break;
     case 'cast': castSlot(it.slot); break;
     case 'cycleLock': cycleLock(); break;
-    case 'lockAt': {                                  // right-click: lock for attack
+    case 'lockAt': {                                  // Ctrl+click: lock for attack
       const en = enemyAtPoint(it.x, it.y);
       game.lock = en || null; game.follow = false;
       if (en) sfx('Cursor1');
@@ -944,6 +996,7 @@ function applyIntent(it) {
       else sfx('Buzzer1');
       break;
     case 'assignSkill': assignSkillSlot(it.id, it.slot); break;
+    case 'upgradeSkill': upgradeSkill(it.id); break;
     case 'setAutoloot': game.autoloot = it.v; break;
   }
 }

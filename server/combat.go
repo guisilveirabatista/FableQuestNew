@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"time"
 )
 
 // AttrSet holds the 7 primary attributes a player raises on level-up. The lower-
@@ -25,6 +26,21 @@ type AttrSet struct {
 }
 
 var baseAttr = AttrSet{Agi: 1, Int: 1, Vit: 2, Str: 2, Dex: 1, Mag: 1, Luck: 1}
+var characterClasses = []string{"Knight", "Lancer", "Wizard", "Archer", "Vampire", "Holy"}
+var skillTree = map[string]string{"bolt": "fire", "spin": "fire"}
+
+const (
+	attrPointsPerLevel  = 2
+	skillPointsPerLevel = 1
+	maxSkillLevel       = 5
+)
+
+func expToNextLevel(lv int) int {
+	if lv < 1 {
+		lv = 1
+	}
+	return lv * 14
+}
 
 // derived is everything the combat math reads, computed from AttrSet (equipment
 // bonuses fold in here from Phase 2d). Go int division floors, matching sim.js.
@@ -96,6 +112,41 @@ func assignSkill(p *Player, id string, i int) {
 	p.slots[i] = id
 }
 
+func normalizeSkillProgress(p *Player) {
+	if p.skillLevels == nil {
+		p.skillLevels = map[string]int{}
+	}
+	for id := range skillMP {
+		if p.skillLevels[id] <= 0 {
+			p.skillLevels[id] = 1
+		}
+		if p.skillLevels[id] > maxSkillLevel {
+			p.skillLevels[id] = maxSkillLevel
+		}
+	}
+	if p.skillPoints < 0 {
+		p.skillPoints = 0
+	}
+}
+
+func skillLevel(p *Player, id string) int {
+	normalizeSkillProgress(p)
+	return p.skillLevels[id]
+}
+
+func upgradeSkill(p *Player, id string) bool {
+	normalizeSkillProgress(p)
+	if _, ok := skillMP[id]; !ok || p.skillPoints <= 0 || p.skillLevels[id] >= maxSkillLevel {
+		return false
+	}
+	if req := skillTree[id]; req != "" && p.skillLevels[req] < 2 {
+		return false
+	}
+	p.skillLevels[id]++
+	p.skillPoints--
+	return true
+}
+
 func recalcMax(p *Player) {
 	p.maxhp = 18 + p.lv*4 + p.attr.Vit*4
 	p.maxmp = 6 + p.lv*2 + p.attr.Int*2
@@ -106,13 +157,75 @@ func recalcMax(p *Player) {
 func initHero(p *Player) {
 	p.lv = 1
 	p.attr = baseAttr
+	if p.class == "" {
+		p.class = "Knight"
+	}
+	if p.hair == "" {
+		p.hair = defaultHair
+	}
+	if p.cloth == "" {
+		p.cloth = defaultCloth
+	}
 	p.slots = []string{"fire", "heal", "spin", "bolt", ""} // skill hotbar (keys 1-5)
+	p.skillLevels = map[string]int{"fire": 1, "heal": 1, "spin": 1, "bolt": 1}
+	p.skillPoints = 0
 	p.bag = map[string]int{"potion": 3}
 	p.equip = map[string]string{}
 	p.autoloot = true
 	recalcMax(p)
 	p.hp = float64(p.maxhp)
 	p.mp = float64(p.maxmp)
+}
+
+func validClass(class string) bool {
+	for _, c := range characterClasses {
+		if class == c {
+			return true
+		}
+	}
+	return false
+}
+
+func applyClassTemplate(p *Player, class string) {
+	p.attr = baseAttr
+	p.slots = []string{"fire", "heal", "spin", "bolt", ""}
+	switch class {
+	case "Knight":
+		p.attr.Str, p.attr.Vit = 4, 3
+		p.slots = []string{"spin", "heal", "fire", "bolt", ""}
+	case "Lancer":
+		p.attr.Str, p.attr.Dex, p.attr.Agi = 3, 3, 2
+		p.slots = []string{"spin", "bolt", "heal", "fire", ""}
+	case "Wizard":
+		p.attr.Mag, p.attr.Int = 4, 4
+		p.slots = []string{"fire", "bolt", "heal", "spin", ""}
+	case "Archer":
+		p.attr.Dex, p.attr.Agi, p.attr.Luck = 4, 3, 2
+		p.slots = []string{"bolt", "fire", "heal", "spin", ""}
+	case "Vampire":
+		p.attr.Str, p.attr.Mag, p.attr.Agi = 3, 3, 2
+		p.slots = []string{"fire", "spin", "heal", "bolt", ""}
+	case "Holy":
+		p.attr.Int, p.attr.Vit, p.attr.Mag = 3, 3, 2
+		p.slots = []string{"heal", "bolt", "fire", "spin", ""}
+	}
+	recalcMax(p)
+	p.hp = float64(p.maxhp)
+	p.mp = float64(p.maxmp)
+}
+
+func (h *Hub) setCharacter(p *Player, name, class string) {
+	if !validName(name) || !validClass(class) {
+		h.systemTo(p, "Choose a 1-16 character name and a valid class.")
+		return
+	}
+	isFresh := p.name == "" && p.class == "" && p.lv <= 1 && p.exp == 0 && p.gold == 0 && p.kills == 0
+	p.name = name
+	if isFresh {
+		applyClassTemplate(p, class)
+	}
+	p.class = class
+	h.systemTo(p, "Character ready: "+p.displayName()+" the "+p.class+".")
 }
 
 // ---- melee (player -> enemy) ----------------------------------------------
@@ -206,14 +319,16 @@ func (h *Hub) killEnemy(p *Player, en *enemy) {
 // grantExp adds experience and applies any level-ups it triggers.
 func grantExp(p *Player, exp int) {
 	p.exp += exp
-	for p.exp >= p.lv*10 {
-		p.exp -= p.lv * 10
+	for p.exp >= expToNextLevel(p.lv) {
+		p.exp -= expToNextLevel(p.lv)
 		p.lv++
-		p.points += 3
+		p.points += attrPointsPerLevel
+		p.skillPoints += skillPointsPerLevel
+		normalizeSkillProgress(p)
 		recalcMax(p)
 		p.hp = float64(p.maxhp)
 		p.mp = float64(p.maxmp)
-		p.logMsg(fmt.Sprintf("LEVEL UP! Now Lv.%d  (+3 attribute points)", p.lv))
+		p.logMsg(fmt.Sprintf("LEVEL UP! Now Lv.%d  (+%d attribute points, +%d skill point)", p.lv, attrPointsPerLevel, skillPointsPerLevel))
 	}
 }
 
@@ -253,7 +368,10 @@ func (h *Hub) playerDie(p *Player, cause string) {
 	if p.dead {
 		return
 	}
-	h.dropCorpse(p.mapID, p.tx, p.ty, p.bag)
+	fellMap, fellTx, fellTy := p.mapID, p.tx, p.ty
+	p.logMsg(fmt.Sprintf("You died at %s on %s (%d,%d). Killed by %s.",
+		time.Now().Format("15:04:05"), fellMap, fellTx, fellTy, cause))
+	h.dropCorpse(fellMap, fellTx, fellTy, p.displayName(), p.bag)
 	p.bag = map[string]int{}
 	p.moving = false
 	p.hp = 0
@@ -262,6 +380,8 @@ func (h *Hub) playerDie(p *Player, cause string) {
 	p.moveDir = ""
 	clearPath(p)
 	p.lockID = 0
+	p.pvpTarget = ""
+	p.followTarget = ""
 	p.follow = false
 	p.combatLogoutT = 0
 }
@@ -283,6 +403,8 @@ func (h *Hub) respawnPlayer(p *Player) {
 	p.moveDir = ""
 	clearPath(p)
 	p.lockID = 0
+	p.pvpTarget = ""
+	p.followTarget = ""
 	p.follow = false
 	p.combatLogoutT = 0
 }
@@ -337,6 +459,9 @@ func (h *Hub) cycleLock(p *Player) {
 	} else {
 		p.lockID = best
 	}
+	p.pvpTarget = ""
+	p.followTarget = ""
+	p.follow = false
 }
 
 // autoMelee: while locked on and off cooldown, the sword strikes by itself when

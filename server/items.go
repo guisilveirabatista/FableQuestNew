@@ -55,7 +55,7 @@ func itemName(id string) string {
 	return id
 }
 
-var bodySlots = []string{"head", "main", "off", "torso", "legs", "acc1", "boots", "acc2"}
+var bodySlots = []string{"head", "main", "torso", "off", "legs", "acc1", "boots", "acc2"}
 
 // shop stock (the client opens the shop UI; the server validates the purchase).
 var shops = map[string][]string{
@@ -172,6 +172,35 @@ func equipTo(p *Player, id, slot string) bool {
 	}
 	p.equip[slot] = id
 	return true
+}
+
+func normalizeEquipment(p *Player) {
+	if p.equip == nil {
+		p.equip = map[string]string{}
+	}
+	if p.bag == nil {
+		p.bag = map[string]int{}
+	}
+	for slot, id := range p.equip {
+		if id == "" {
+			delete(p.equip, slot)
+			continue
+		}
+		if _, ok := items[id]; !ok {
+			delete(p.equip, slot)
+			continue
+		}
+		if canPlace(id, slot) {
+			continue
+		}
+		delete(p.equip, slot)
+		natural := slotFor(p, id)
+		if natural != "" && p.equip[natural] == "" && canPlace(id, natural) {
+			p.equip[natural] = id
+		} else {
+			addItem(p, id, 1)
+		}
+	}
 }
 
 // useItem: eat food or equip gear. Returns true if something happened.

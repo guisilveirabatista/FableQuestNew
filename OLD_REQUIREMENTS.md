@@ -65,3 +65,66 @@ Agility, Inteligence, Vitality, Strength, Dexterity, Magic Power, Luck. Those at
 - Backgroung music off by default.
 
 - Toggle logging with letter L
+
+- Sometimes when I'm walking using the mouse, it feels like the character is having a hiccup, going foward but freezing for a bit on every step. Could this be a bug because there are two ways of walking with the character both keyboard and mouse?
+
+- Why can't I see how much damage another player is getting from an enemy attack? Is that too expensive for memory in an mmo? If it's not too expensive, I want to be able to see that.
+
+- How do I attack another player? I want to be able to fight with other players in "combat zones".
+
+- How do I invite another player to a party?
+
+- I would like a system to save a contact of another player as a friend.
+
+- The boots I can buy at the shop are being equipped in the pants slot.
+
+- I would like to have multiple types of characters: Knight, Lancer, Wizard, Archer, Vampire, Holy. I also would like a character creation/selection screen after the login. The login name should not be the name of the character anymore, but rather a name picked in the characters screen.
+
+- The shortcuts are interfering in other screen, such as the character creation/selection screen. I'm trying to give a name with the letter L for example, but the L does not work when typing the name.
+
+- After I give the name, select the class, I tried clicking on enter the server but it didn't work. But when I closed the browser and logged in again, it went straight to the map screen.
+
+- When I logout, it should go back to the character selection screen, not the login screen. To character selection screen is always in between.
+
+- The character creation/selection screen needs to be improved. Now, there is a input box for the name and a list of classes under it. However, I want the creation of characters to be persistent. If I create a character with one name, then create another character with another name, both characters show appear in the characters selection screen. Then I select the one I want to enter the server with. Now the characters are not persistent.
+
+- The list of classes is also a problem because it's overlapping with the button to enter the server. Perhaps it should be a scrollable list. Or you can reimagine the character creation/selection screen completely to follow my requests and have a good UI.
+Maybe get some inspiration from existing games and see how they do it.
+
+- The character selection screen should have a button to go back to the login screen.
+
+
+- The "reset" button in shops and in the attribute distribution screen should only appear while there is a pending purchase or change in the attributes and disappear once it's confirmed/reset.
+
+- The dead bodies should display the name of the player of that body.
+
+- The log should also show when that you died and who killed you when and where.
+
+- I should be able to "lock on" and "follow" by holding alt and clicking on mouse 1 on other players just like it works for monster enemies. The battle should work the same.
+
+- The player should be able to use magic against other player, just like it already works against monster enemies.
+
+- EXP should also appear as a progress bar and with numbers on the top left hud
+
+Improvements
+- Enemy artificial intelligence
+    - Enemies should be more aggressive
+    - They should spot the player earlier and follow him
+- UI
+    - Rename button from "Cancel" to "Close" in the shops
+    - Maybe but a button "Close" in the Menu sub-windows
+- Character creation
+    - Each character class should have a different look/spritesheet
+    - The player should be able to customize it a bit, changing hair, clothing color
+    - Player should be able to interact with other players with the mouse, not only for attacking, but also trading, direct message, following. Perhaps we can change the lock on command to holding Ctrl and mouse 1 click. Mouse 2 button shouldn't be lock on anymore, not for players nor for monsters. It should be a button to interact. You can keep Alt + mouse 1 as is.
+- Skills
+    - Skills should also follow a point based evolution system
+    - Skills should have a skill tree system
+- Power balance
+    - The enemies should be more challenging in terms of power
+    - The player should take longer to be stronger, faster, etc
+
+- Remove "Lock" and "Close" from the menu of interaction with other players
+- The trade with other players is broken. The buttons are out of bundaries on the right of the trade window. I shouldn't be able to interact with other elements of the game when this window is open. There is also something wrong that if I have the trade window open and click anywhere on the window, it start adding gold to the trade, which is strange.
+- The menu with the shop NPCs should work the same way as the interacting with players. You can remove the button cancel, but leave Buy and Sell when I click with the right button on a shop owner.
+- Find a better place for the sprite of the character in the character creation screen.

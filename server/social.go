@@ -17,7 +17,7 @@ import (
 
 type chatLine struct {
 	From  string `json:"from"`
-	Scope string `json:"scope"` // "say" (same map) | "party" | "world"
+	Scope string `json:"scope"` // "say" (same map) | "party" | "world" | "tell"
 	Text  string `json:"text"`
 }
 
@@ -59,14 +59,24 @@ func (p *Player) drainChat() []chatLine {
 }
 
 // chat routes one message to its recipients (spam-limited by p.chatCool).
-func (h *Hub) chat(p *Player, scope, text string) {
+func (h *Hub) chat(p *Player, scope, text, target string) {
 	text = sanitizeChat(text)
 	if text == "" || p.chatCool > 0 {
 		return
 	}
 	p.chatCool = 0.5
-	line := chatLine{From: p.username, Scope: scope, Text: text}
+	line := chatLine{From: p.displayName(), Scope: scope, Text: text}
 	switch scope {
+	case "tell":
+		o := h.findPlayerByName(target)
+		if o == nil {
+			p.pushChat(chatLine{Scope: "system", Text: "Player not found."})
+			return
+		}
+		o.pushChat(line)
+		if o != p {
+			p.pushChat(chatLine{From: "To " + o.displayName(), Scope: "tell", Text: text})
+		}
 	case "party":
 		if p.partyID == 0 {
 			p.pushChat(chatLine{From: "", Scope: "system", Text: "You are not in a party."})
@@ -92,6 +102,29 @@ func (h *Hub) chat(p *Player, scope, text string) {
 
 func (h *Hub) systemTo(p *Player, text string) {
 	p.pushChat(chatLine{Scope: "system", Text: text})
+}
+
+func (h *Hub) findPlayerByName(name string) *Player {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil
+	}
+	if p := h.players[name]; p != nil {
+		return p
+	}
+	for _, p := range h.players {
+		if strings.EqualFold(p.displayName(), name) || strings.EqualFold(p.username, name) {
+			return p
+		}
+	}
+	return nil
+}
+
+func (h *Hub) playerLabel(username string) string {
+	if p := h.players[username]; p != nil {
+		return p.displayName()
+	}
+	return username
 }
 
 // ---- parties ---------------------------------------------------------------
@@ -126,7 +159,7 @@ func (h *Hub) partyOf(p *Player) *party {
 
 // partyInvite: any member invites an online target that isn't already grouped.
 func (h *Hub) partyInvite(p *Player, target string) {
-	o := h.players[target]
+	o := h.findPlayerByName(target)
 	if o == nil || o == p {
 		h.systemTo(p, "No such player here.")
 		return
@@ -147,8 +180,8 @@ func (h *Hub) partyInvite(p *Player, target string) {
 		return
 	}
 	o.partyInvite = pt.id
-	h.systemTo(o, p.username+" invites you to a party. (accept in the Party menu)")
-	h.systemTo(p, "Invited "+o.username+".")
+	h.systemTo(o, p.displayName()+" invites you to a party. (accept the prompt or type /join)")
+	h.systemTo(p, "Invited "+o.displayName()+".")
 }
 
 func (h *Hub) partyAccept(p *Player) {
@@ -214,7 +247,7 @@ func (h *Hub) partyKick(p *Player, target string) {
 	if pt == nil || pt.leader != p.username || target == p.username {
 		return
 	}
-	if o := h.players[target]; o != nil && o.partyID == pt.id {
+	if o := h.findPlayerByName(target); o != nil && o.partyID == pt.id {
 		h.systemTo(o, "You were removed from the party.")
 		h.leaveParty(o)
 	}
@@ -230,6 +263,7 @@ func (h *Hub) buildPartyView(p *Player) *partyView {
 		o := h.players[name]
 		m := partyMemberView{Name: name, Leader: name == pt.leader}
 		if o != nil {
+			m.Name = o.displayName()
 			m.Lv, m.HP, m.MaxHP, m.Map = o.lv, o.hp, o.maxhp, o.mapID
 		}
 		v.Members = append(v.Members, m)
@@ -293,7 +327,7 @@ func nearPlayers(a, b *Player) bool {
 }
 
 func (h *Hub) tradeRequest(p *Player, target string) {
-	o := h.players[target]
+	o := h.findPlayerByName(target)
 	if o == nil || o == p || !nearPlayers(p, o) {
 		h.systemTo(p, "Stand next to someone to trade.")
 		return
@@ -303,8 +337,8 @@ func (h *Hub) tradeRequest(p *Player, target string) {
 		return
 	}
 	o.tradeReq = p.username
-	h.systemTo(o, p.username+" wants to trade. (accept in the Trade menu)")
-	h.systemTo(p, "Trade request sent to "+o.username+".")
+	h.systemTo(o, p.displayName()+" wants to trade. (accept the prompt)")
+	h.systemTo(p, "Trade request sent to "+o.displayName()+".")
 }
 
 func (h *Hub) tradeAccept(p *Player) {
@@ -319,8 +353,8 @@ func (h *Hub) tradeAccept(p *Player) {
 		aItems: map[string]int{}, bItems: map[string]int{}}
 	h.trades[t.id] = t
 	other.tradeID, p.tradeID = t.id, t.id
-	h.systemTo(other, "Trading with "+p.username+".")
-	h.systemTo(p, "Trading with "+other.username+".")
+	h.systemTo(other, "Trading with "+p.displayName()+".")
+	h.systemTo(p, "Trading with "+other.displayName()+".")
 }
 
 func (h *Hub) tradeDecline(p *Player) { p.tradeReq = "" }
@@ -466,7 +500,11 @@ func (h *Hub) buildTradeView(p *Player) *tradeView {
 		for k, v := range items {
 			cp[k] = v
 		}
-		return tradeSideView{Name: name, Gold: *gold, Items: cp, Lock: *lock, OK: *ok}
+		label := name
+		if p := h.players[name]; p != nil {
+			label = p.displayName()
+		}
+		return tradeSideView{Name: label, Gold: *gold, Items: cp, Lock: *lock, OK: *ok}
 	}
 	return &tradeView{You: side(p.username), With: side(other)}
 }
@@ -484,7 +522,7 @@ func tradeSideByName(t *trade, name string) (map[string]int, *int, *bool, *bool)
 // world keeps the city safe and the field for leveling). Elsewhere two players
 // can only hurt each other if BOTH have opted in with the PvP flag, so nobody is
 // ganked against their will.
-var pvpMaps = map[string]bool{}
+var pvpMaps = map[string]bool{"field": true}
 
 func (h *Hub) canPvp(a, b *Player) bool {
 	if a == b || a.dead || b.dead || a.mapID != b.mapID {
@@ -493,12 +531,56 @@ func (h *Hub) canPvp(a, b *Player) bool {
 	return pvpMaps[a.mapID] || (a.pvp && b.pvp)
 }
 
+func (h *Hub) playerAtPoint(mapID string, x, y float64, self *Player) *Player {
+	for _, p := range h.players {
+		if p == self || p.dead || p.mapID != mapID {
+			continue
+		}
+		if x >= p.px-4 && x < p.px+20 && y >= p.py-16 && y < p.py+16 {
+			return p
+		}
+	}
+	return nil
+}
+
+func faceTowardPlayer(p, o *Player) string {
+	dx, dy := o.px-p.px, o.py-p.py
+	if math.Abs(dx) > math.Abs(dy) {
+		if dx > 0 {
+			return "right"
+		}
+		return "left"
+	}
+	if dy > 0 {
+		return "down"
+	}
+	return "up"
+}
+
 // slashReachesXY: is world point (px,py) inside the player's ~1-tile swing arc?
 func slashReachesXY(p *Player, dir string, px, py float64) bool {
 	d := dirVec[dir]
 	cx := float64((p.tx+d[0])*TS) + 8
 	cy := float64((p.ty+d[1])*TS) + 8
 	return math.Abs(px+8-cx) <= 13 && math.Abs(py+8-cy) <= 13
+}
+
+func (h *Hub) autoPvpMelee(p *Player) {
+	o := h.players[p.pvpTarget]
+	if o == nil || !h.canPvp(p, o) {
+		p.pvpTarget = ""
+		if p.lockID == 0 && p.followTarget == "" {
+			p.follow = false
+		}
+		return
+	}
+	if p.atkCool <= 0 {
+		dir := faceTowardPlayer(p, o)
+		if slashReachesXY(p, dir, o.px, o.py) {
+			p.dir = dir
+			h.doSlash(p)
+		}
+	}
 }
 
 // pvpMeleeSweep applies a melee/spin hit to every hostile player in range.
@@ -549,9 +631,53 @@ func (h *Hub) pvpHit(attacker, target *Player, dmg int, crit, magic bool) {
 	target.iframes = 0.5
 	if target.hp <= 0 {
 		attacker.gold += target.gold / 10 // a small bounty (from thin air, not the victim)
-		attacker.logMsg("You defeated " + target.username + "!")
-		h.playerDie(target, attacker.username)
+		attacker.logMsg("You defeated " + target.displayName() + "!")
+		h.playerDie(target, attacker.displayName())
 	}
+}
+
+// ---- friends ---------------------------------------------------------------
+
+func (h *Hub) friendAdd(p *Player, target string) {
+	target = strings.TrimSpace(target)
+	if p.friends == nil {
+		p.friends = map[string]bool{}
+	}
+	if o := h.findPlayerByName(target); o != nil && o != p {
+		target = o.displayName()
+	}
+	if !validName(target) || strings.EqualFold(target, p.displayName()) || strings.EqualFold(target, p.username) {
+		h.systemTo(p, "Choose a valid player name.")
+		return
+	}
+	p.friends[target] = true
+	h.systemTo(p, target+" added as a friend.")
+}
+
+func (h *Hub) friendRemove(p *Player, target string) {
+	if p.friends == nil {
+		return
+	}
+	for name := range p.friends {
+		if strings.EqualFold(name, target) {
+			delete(p.friends, name)
+			h.systemTo(p, name+" removed from friends.")
+			return
+		}
+	}
+	h.systemTo(p, "That player is not in your friends.")
+}
+
+func (h *Hub) friendList(p *Player) {
+	if len(p.friends) == 0 {
+		h.systemTo(p, "Friends: none yet.")
+		return
+	}
+	names := make([]string, 0, len(p.friends))
+	for name := range p.friends {
+		names = append(names, name)
+	}
+	h.systemTo(p, "Friends: "+strings.Join(names, ", "))
 }
 
 // ---- small helpers ---------------------------------------------------------

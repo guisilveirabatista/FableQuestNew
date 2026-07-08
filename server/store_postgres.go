@@ -3,7 +3,7 @@
 package main
 
 // PostgreSQL persistence, compiled in with `-tags postgres`. It stores each
-// account's salt/hash and the character as JSONB. Build & run, e.g.:
+// account's salt/hash and character roster as JSONB. Build & run, e.g.:
 //   go build -tags postgres && ./server -db postgres://user:pass@localhost/fablequest
 // (Untested against a live DB in this environment — no Postgres available here.)
 
@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS accounts (
   username TEXT PRIMARY KEY,
   salt     TEXT NOT NULL,
   hash     TEXT NOT NULL,
-  char     JSONB
+  characters JSONB
 )`)
 	if err != nil {
 		pool.Close()
@@ -42,12 +42,12 @@ CREATE TABLE IF NOT EXISTS accounts (
 	return &pgStore{pool: pool}, nil
 }
 
-func (s *pgStore) Login(user, pass string) (*charState, error) {
+func (s *pgStore) Login(user, pass string) ([]*charState, error) {
 	ctx := context.Background()
 	var salt, hash string
-	var charJSON []byte
-	err := s.pool.QueryRow(ctx, `SELECT salt, hash, char FROM accounts WHERE username=$1`, user).
-		Scan(&salt, &hash, &charJSON)
+	var charsJSON []byte
+	err := s.pool.QueryRow(ctx, `SELECT salt, hash, characters FROM accounts WHERE username=$1`, user).
+		Scan(&salt, &hash, &charsJSON)
 	if errors.Is(err, pgx.ErrNoRows) { // first login: register
 		saltBytes := make([]byte, 16)
 		rand.Read(saltBytes)
@@ -64,22 +64,37 @@ func (s *pgStore) Login(user, pass string) (*charState, error) {
 	if subtle.ConstantTimeCompare([]byte(hashPass(pass, salt)), []byte(hash)) != 1 {
 		return nil, errBadPassword
 	}
-	if len(charJSON) == 0 {
+	if len(charsJSON) == 0 {
 		return nil, nil
 	}
-	var ch charState
-	if err := json.Unmarshal(charJSON, &ch); err != nil {
+	var chars []*charState
+	if err := json.Unmarshal(charsJSON, &chars); err != nil {
 		return nil, err
 	}
-	return &ch, nil
+	return cloneChars(chars), nil
 }
 
 func (s *pgStore) Save(user string, ch *charState) error {
-	data, err := json.Marshal(ch)
+	if ch == nil || !validName(ch.Name) {
+		return errors.New("character needs a valid name")
+	}
+	var charsJSON []byte
+	err := s.pool.QueryRow(context.Background(), `SELECT characters FROM accounts WHERE username=$1`, user).Scan(&charsJSON)
 	if err != nil {
 		return err
 	}
-	_, err = s.pool.Exec(context.Background(), `UPDATE accounts SET char=$2 WHERE username=$1`, user, data)
+	var chars []*charState
+	if len(charsJSON) > 0 {
+		if err := json.Unmarshal(charsJSON, &chars); err != nil {
+			return err
+		}
+	}
+	chars = upsertCharacter(chars, ch)
+	data, err := json.Marshal(chars)
+	if err != nil {
+		return err
+	}
+	_, err = s.pool.Exec(context.Background(), `UPDATE accounts SET characters=$2 WHERE username=$1`, user, data)
 	return err
 }
 
