@@ -420,6 +420,7 @@ function onSnapshot(m) {
     let p = net.byId[v.id];
     if (!p) p = net.byId[v.id] = {
       id: v.id, name: v.id, px: v.px, py: v.py, tpx: v.px, tpy: v.py,
+      tx: v.tx, ty: v.ty,
       dir: v.dir, moving: v.moving, anim: v.anim, hp: v.hp, maxhp: v.maxhp,
     };
     else if (v.hp < p.hp - 0.01) {
@@ -427,6 +428,7 @@ function onSnapshot(m) {
       addPop('-' + Math.max(1, Math.round(p.hp - v.hp)), v.px + 8, v.py - 12, '#f76');
     }
     p.tpx = v.px; p.tpy = v.py; p.dir = v.dir; p.moving = v.moving; p.anim = v.anim;
+    p.tx = v.tx || p.tx; p.ty = v.ty || p.ty;
     p.hp = v.hp; p.maxhp = v.maxhp; p.name = v.name || v.id; p.class = v.class || '';
     p.dead = !!v.dead; p.pvp = !!v.pvp;
   }
@@ -591,19 +593,19 @@ function netFrame(frameDt) {
         if (shopNpc) openShopChoice(shopForNpc(shopNpc), c.x, c.y);
         else if (co && !co.decayed && nearHero(wx, wy)) { game.corpseOpen = co; sfx('Decision1'); }
         else if (pl) openPlayerMenu(pl, c.x, c.y);
-      } else if (c.b === 0 && c.ctrl && c.alt) { // Ctrl+Alt + left-click: lock AND follow (follow + attack)
+      } else if (c.b === 0 && c.ctrl && c.alt) { // Ctrl+Alt + left-click: activate both follow and attack (lock + follow)
         const en = enemyAtPoint(c.x + cam.x, c.y + cam.y);
         const pl = playerAtPoint(c.x + cam.x, c.y + cam.y);
         if (pl) {
           netSend(net, { t: 'lockPlayerAt', x: c.x + cam.x, y: c.y + cam.y });
-          netSend(net, { t: 'toggleFollow' }); // enable follow after lockPlayerAt forces it off
+          netSend(net, { t: 'toggleFollow' }); // force follow on after lock
           game.pvpTarget = pl; game.followPlayer = null; game.lock = null; game.follow = true; game.followEngaged = false; game.path = null; sfx('Decision1');
         }
         else if (en) {
           netSend(net, { t: 'followAt', x: c.x + cam.x, y: c.y + cam.y });
           game.lock = en; game.pvpTarget = null; game.followPlayer = null; game.follow = true; game.followEngaged = false; game.path = null; sfx('Decision1');
         }
-      } else if (c.b === 0 && c.ctrl) { // Ctrl+left-click: lock a target without following; re-click same enemy/player to release/unlock
+      } else if (c.b === 0 && c.ctrl) { // Ctrl+left-click: toggle lock for attack (re-click same to release/unlock)
         const en = enemyAtPoint(c.x + cam.x, c.y + cam.y);
         const pl = playerAtPoint(c.x + cam.x, c.y + cam.y);
         if (pl) {
@@ -624,12 +626,32 @@ function netFrame(frameDt) {
             game.lock = en; game.pvpTarget = null; game.followPlayer = null; game.follow = false; game.followEngaged = false; sfx('Cursor1');
           }
         }
-      } else if (c.b === 0 && c.alt) { // Alt + left-click: follow only (pure follow, works anywhere incl. outside combat zones for players)
-        netSend(net, { t: 'followAt', x: c.x + cam.x, y: c.y + cam.y });
+      } else if (c.b === 0 && c.alt) { // Alt + left-click: toggle "Follow mode" on the enemy/player (pure follow for players)
         const en = enemyAtPoint(c.x + cam.x, c.y + cam.y);
         const pl = playerAtPoint(c.x + cam.x, c.y + cam.y);
-        if (pl) { game.followPlayer = pl; game.pvpTarget = null; game.lock = null; game.follow = true; game.followEngaged = false; game.path = null; sfx('Decision1'); }
-        else if (en) { game.lock = en; game.pvpTarget = null; game.followPlayer = null; game.follow = true; game.followEngaged = false; game.path = null; sfx('Decision1'); }
+        if (pl) {
+          const isCurrentFollowTarget = (game.followPlayer === pl) || (game.pvpTarget === pl);
+          if (isCurrentFollowTarget) {
+            netSend(net, { t: 'toggleFollow' });
+            game.follow = !game.follow;
+            game.followEngaged = false;
+            sfx(game.follow ? 'Decision1' : 'Cancel1');
+          } else {
+            netSend(net, { t: 'followAt', x: c.x + cam.x, y: c.y + cam.y });
+            game.followPlayer = pl; game.pvpTarget = null; game.lock = null; game.follow = true; game.followEngaged = false; game.path = null; sfx('Decision1');
+          }
+        }
+        else if (en) {
+          if (game.lock === en) {
+            netSend(net, { t: 'toggleFollow' });
+            game.follow = !game.follow;
+            game.followEngaged = false;
+            sfx(game.follow ? 'Decision1' : 'Cancel1');
+          } else {
+            netSend(net, { t: 'followAt', x: c.x + cam.x, y: c.y + cam.y });
+            game.lock = en; game.pvpTarget = null; game.followPlayer = null; game.follow = true; game.followEngaged = false; game.path = null; sfx('Decision1');
+          }
+        }
       } else if (c.b === 0 && !game.invDrag) {
         const co = corpseAt(wx, wy);
         if (co && !co.decayed && nearHero(wx, wy) && c.dbl) {

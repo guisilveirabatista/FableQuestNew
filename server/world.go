@@ -316,7 +316,13 @@ func (h *Hub) followDir(p *Player) string {
 // playerAt reports whether another player occupies tile (x,y) on mapID.
 func (h *Hub) playerAt(mapID string, x, y int, self *Player) bool {
 	for _, o := range h.players {
-		if o != self && !o.dead && o.mapID == mapID && o.tx == x && o.ty == y {
+		ox, oy := o.tx, o.ty
+		if h.frozenPlayerPos != nil {
+			if pos, ok := h.frozenPlayerPos[o]; ok {
+				ox, oy = pos[0], pos[1]
+			}
+		}
+		if o != self && !o.dead && o.mapID == mapID && ox == x && oy == y {
 			return true
 		}
 	}

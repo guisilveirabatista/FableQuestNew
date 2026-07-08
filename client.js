@@ -2198,12 +2198,24 @@ function processInput(dt) {
       const co = corpseAt(wx, wy);
       if (shopNpc) openShopChoice(shopForNpc(shopNpc), c.x, c.y);
       else if (co && !co.decayed && nearHero(wx, wy)) { game.corpseOpen = co; sfx('Decision1'); }
-    } else if (c.b === 0 && c.ctrl && c.alt) { // Ctrl+Alt + left-click: lock AND follow (follow + attack)
+    } else if (game.net) {
+      // net mode combat clicks (Ctrl/Alt for lock/follow) are handled in netclient.js
+    } else if (c.b === 0 && c.ctrl && c.alt) { // Ctrl+Alt + left-click: activate both lock (attack) and follow
       pushIntent({ t: 'followAt', x: c.x + cam.x, y: c.y + cam.y });
-    } else if (c.b === 0 && c.ctrl) { // Ctrl+left-click: lock for attack; re-click same to unlock
+    } else if (c.b === 0 && c.ctrl) { // Ctrl+left-click: toggle lock for attack (re-click same to unlock)
       pushIntent({ t: 'lockAt', x: c.x + cam.x, y: c.y + cam.y });
-    } else if (c.b === 0 && c.alt) { // Alt + left-click: follow only
-      pushIntent({ t: 'followAt', x: c.x + cam.x, y: c.y + cam.y });
+    } else if (c.b === 0 && c.alt) { // Alt + left-click: toggle "Follow mode" on the enemy
+      const wx = c.x + cam.x;
+      const wy = c.y + cam.y;
+      const en = enemyAtPoint(wx, wy);
+      if (en && game.lock === en) {
+        // direct for local: toggle follow state + sfx (no need to push, apply would double)
+        game.follow = !game.follow;
+        game.followEngaged = false;
+        sfx(game.follow ? 'Decision1' : 'Cancel1');
+      } else if (en) {
+        pushIntent({ t: 'followAt', x: wx, y: wy });
+      }
     } else if (c.b === 0 && !game.invDrag) {
       const wx = Math.floor((c.x + cam.x) / TS), wy = Math.floor((c.y + cam.y) / TS);
       const co = corpseAt(wx, wy);

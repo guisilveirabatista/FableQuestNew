@@ -410,11 +410,16 @@ type Hub struct {
 	nextPartyID int
 	trades      map[int]*trade
 	nextTradeID int
+
+	// for freezing player positions during the step phase so collision decisions
+	// see pre-tick state (consistent with client's last snapshot)
+	frozenPlayerPos map[*Player][2]int
 }
 
 func newHub() *Hub {
 	return &Hub{
-		players:     map[string]*Player{},
+		players:         map[string]*Player{},
+		frozenPlayerPos: nil,
 		enemies:     map[string][]*enemy{},
 		spawnT:      map[string]float64{},
 		projectiles: map[string][]*projectile{},
@@ -689,6 +694,16 @@ func (h *Hub) run() {
 			}
 		}
 		// 2) per-player timers + regen, then advance from the latest move
+		// Freeze player positions for collision during decisions so that all
+		// see pre-tick state (matches client's last snapshot view of player
+		// blockers). This eliminates order-dependent crossing and the resulting
+		// client warp-back when server rejects a step.
+		h.frozenPlayerPos = make(map[*Player][2]int)
+		for _, p := range h.players {
+			if !p.dead {
+				h.frozenPlayerPos[p] = [2]int{p.tx, p.ty}
+			}
+		}
 		for _, p := range h.players {
 			if p.dead {
 				p.moveDir = ""
@@ -725,6 +740,7 @@ func (h *Hub) run() {
 			}
 			h.stepPlayer(p, dir, dt)
 		}
+		h.frozenPlayerPos = nil
 		// 2b) zone mode: players who stepped onto an exit to a map this zone does
 		//     not own are handed back to the gateway (which reconnects them to the
 		//     owning zone). Drop them from the sim now so they leave this tick's

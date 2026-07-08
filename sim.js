@@ -339,12 +339,13 @@ function pickEnemy() {
 }
 function addPop(s, x, y, color) { game.pops.push({ s, x, y, t: 0, color }); }
 function enemyAt(x, y) { return game.enemies.some(en => !en.dead && en.dying <= 0 && en.tx === x && en.ty === y); }
+function playerAt(x, y) { return (game.players || []).some(p => !p.dead && p.tx === x && p.ty === y); }
 function enemyAtPoint(x, y) { // point in the 24x32 sprite box
   return game.enemies.find(en => !en.dead && en.dying <= 0 &&
     x >= en.px - 4 && x < en.px + 20 && y >= en.py - 16 && y < en.py + 16);
 }
 
-// ---- click-to-move: BFS over walkable tiles, enemies count as walls
+// ---- click-to-move: BFS over walkable tiles, enemies and other players count as walls
 function findPath(sx, sy, tx, ty) {
   if (sx === tx && sy === ty) return [];
   const key = (x, y) => x + ',' + y;
@@ -354,7 +355,7 @@ function findPath(sx, sy, tx, ty) {
     const [x, y] = q.shift();
     for (const [dx, dy] of Object.values(DIRV)) {
       const nx = x + dx, ny = y + dy;
-      if (prev.has(key(nx, ny)) || isBlocked(nx, ny) || enemyAt(nx, ny)) continue;
+      if (prev.has(key(nx, ny)) || isBlocked(nx, ny) || enemyAt(nx, ny) || playerAt(nx, ny)) continue;
       prev.set(key(nx, ny), [x, y]);
       if (nx === tx && ny === ty) {
         const path = [];
@@ -370,11 +371,11 @@ function findPath(sx, sy, tx, ty) {
 function startPathTo(tx, ty) {
   const h = game.hero;
   let p = null;
-  if (!isBlocked(tx, ty) && !enemyAt(tx, ty)) p = findPath(h.tx, h.ty, tx, ty);
+  if (!isBlocked(tx, ty) && !enemyAt(tx, ty) && !playerAt(tx, ty)) p = findPath(h.tx, h.ty, tx, ty);
   if (!p) { // clicked a wall/NPC/enemy: walk up next to it instead
     for (const [dx, dy] of Object.values(DIRV)) {
       const nx = tx + dx, ny = ty + dy;
-      if (isBlocked(nx, ny) || enemyAt(nx, ny)) continue;
+      if (isBlocked(nx, ny) || enemyAt(nx, ny) || playerAt(nx, ny)) continue;
       const q = findPath(h.tx, h.ty, nx, ny);
       if (q && (!p || q.length < p.length)) p = q;
     }
@@ -978,14 +979,17 @@ function applyIntent(it) {
       }
       break;
     }
-    case 'followAt': {                                // Alt+click: follow only; Ctrl+Alt: follow+attack (lock and follow)
+    case 'followAt': {                                // used by Alt (on new target) or Ctrl+Alt to activate lock + follow
       const en = enemyAtPoint(it.x, it.y);
       if (en) { game.lock = en; game.follow = true; game.followEngaged = false; sfx('Decision1'); }
       break;
     }
     case 'toggleFollow':
-      if (game.lock) { game.follow = !game.follow; if (!game.follow) game.followEngaged = false; sfx(game.follow ? 'Decision1' : 'Cancel1'); }
-      else sfx('Buzzer1');
+      if (game.lock) {
+        game.follow = !game.follow;
+        game.followEngaged = false;
+        sfx(game.follow ? 'Decision1' : 'Cancel1');
+      } else sfx('Buzzer1');
       break;
     case 'unlock':
       game.lock = null;
@@ -1124,11 +1128,11 @@ function stepHero(dt) {
       h.anim += dt * 8.75; // keeps stepping against walls, like RM2k
       const d = DIRV[dir];
       const nx = h.tx + d[0], ny = h.ty + d[1];
-      if (!isBlocked(nx, ny) && !enemyAt(nx, ny)) { h.tx = nx; h.ty = ny; h.moving = true; }
+      if (!isBlocked(nx, ny) && !enemyAt(nx, ny) && !playerAt(nx, ny)) { h.tx = nx; h.ty = ny; h.moving = true; }
     } else if (game.path) { // click-to-move keeps walking under any UI
       const [nx, ny] = game.path[0];
       h.dir = nx > h.tx ? 'right' : nx < h.tx ? 'left' : ny > h.ty ? 'down' : 'up';
-      if (!isBlocked(nx, ny) && !enemyAt(nx, ny)) {
+      if (!isBlocked(nx, ny) && !enemyAt(nx, ny) && !playerAt(nx, ny)) {
         game.path.shift();
         h.tx = nx; h.ty = ny; h.moving = true;
       } else { // something wandered into the route: replan to the same goal
@@ -1156,7 +1160,7 @@ function stepHero(dt) {
           if (!dx && (fd === 'left' || fd === 'right')) continue;
           if (!dy && (fd === 'up' || fd === 'down')) continue;
           const nx = h.tx + dv[0], ny = h.ty + dv[1];
-          if (isBlocked(nx, ny) || enemyAt(nx, ny)) continue;
+          if (isBlocked(nx, ny) || enemyAt(nx, ny) || playerAt(nx, ny)) continue;
           h.dir = fd;
           h.tx = nx; h.ty = ny; h.moving = true;
           break;
