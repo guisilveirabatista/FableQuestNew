@@ -22,6 +22,19 @@ func TestDropGoesToFloorAndBack(t *testing.T) {
 	}
 }
 
+func TestDropItemHonorsQuantity(t *testing.T) {
+	h := newHub()
+	p := heroAt("field", 15, 10)
+	p.bag["potion"] = 3
+	h.applyIntent(p, inMsg{T: "dropItem", Id: "potion", N: 2})
+	if p.bag["potion"] != 1 {
+		t.Fatalf("dropping two potions should leave one in the bag, got %d", p.bag["potion"])
+	}
+	if len(h.floor["field"]) != 1 || h.floor["field"][0].id != "potion" || h.floor["field"][0].n != 2 {
+		t.Fatalf("dropping two potions should create one stack of two, got %+v", h.floor["field"])
+	}
+}
+
 func TestPickupNeedsReach(t *testing.T) {
 	h := newHub()
 	p := heroAt("field", 15, 10)
@@ -31,6 +44,60 @@ func TestPickupNeedsReach(t *testing.T) {
 	}
 	if len(h.floor["field"]) != 1 {
 		t.Fatal("the out-of-reach loot should still be on the floor")
+	}
+}
+
+func TestPickupRefusesWhenTooHeavy(t *testing.T) {
+	h := newHub()
+	p := heroAt("field", 15, 10)
+	p.bag["armor"] = 3
+	h.dropFloor("field", "potion", 1, 15, 10)
+	if h.pickupAt(p, 15, 10) {
+		t.Fatal("overweight player should not pick up floor loot")
+	}
+	if p.bag["potion"] != 3 || len(h.floor["field"]) != 1 {
+		t.Fatalf("failed pickup should leave bag and floor unchanged, bag=%+v floor=%+v", p.bag, h.floor["field"])
+	}
+	if !hasLog(p.log, carryTooMuchMsg) {
+		t.Fatalf("failed pickup should warn about carry weight, got %#v", p.log)
+	}
+}
+
+func TestMoveFloorItemFromReachToView(t *testing.T) {
+	h := newHub()
+	p := heroAt("field", 15, 10)
+	p.aoiW, p.aoiH = 14, 10
+	h.dropFloor("field", "bread", 2, 16, 10)
+	if !h.moveFloorItem(p, 16, 10, 27, 10, "bread") {
+		t.Fatal("should be able to drag nearby floor loot to a visible tile")
+	}
+	if len(h.floor["field"]) != 1 {
+		t.Fatalf("moving a single stack should keep one floor stack, got %+v", h.floor["field"])
+	}
+	f := h.floor["field"][0]
+	if f.id != "bread" || f.n != 2 || f.tx != 27 || f.ty != 10 {
+		t.Fatalf("floor loot should move intact to the destination, got %+v", f)
+	}
+}
+
+func TestMoveFloorItemNeedsReachAndView(t *testing.T) {
+	h := newHub()
+	p := heroAt("field", 15, 10)
+	p.aoiW, p.aoiH = 4, 4
+	h.dropFloor("field", "bread", 1, 20, 10)
+	if h.moveFloorItem(p, 20, 10, 16, 10, "bread") {
+		t.Fatal("should not be able to drag floor loot from out of reach")
+	}
+	if h.floor["field"][0].tx != 20 || h.floor["field"][0].ty != 10 {
+		t.Fatalf("out-of-reach loot should not move, got %+v", h.floor["field"][0])
+	}
+	h.floor["field"] = nil
+	h.dropFloor("field", "bread", 1, 16, 10)
+	if h.moveFloorItem(p, 16, 10, 24, 10, "bread") {
+		t.Fatal("should not be able to drop loot outside the player's view")
+	}
+	if h.floor["field"][0].tx != 16 || h.floor["field"][0].ty != 10 {
+		t.Fatalf("out-of-view drop should leave loot at the source, got %+v", h.floor["field"][0])
 	}
 }
 
@@ -75,6 +142,20 @@ func TestDeathWithEmptyPackStillLeavesCorpse(t *testing.T) {
 	}
 }
 
+func TestMoveCorpseFromReachToView(t *testing.T) {
+	h := newHub()
+	p := heroAt("field", 15, 10)
+	p.aoiW, p.aoiH = 12, 8
+	h.corpses["field"] = []*corpse{{tx: 16, ty: 10, name: "Hero", items: map[string]int{"potion": 3}}}
+	if !h.moveCorpse(p, 16, 10, 24, 10) {
+		t.Fatal("should be able to drag a nearby corpse to a visible tile")
+	}
+	c := h.corpses["field"][0]
+	if c.tx != 24 || c.ty != 10 || c.name != "Hero" || c.items["potion"] != 3 {
+		t.Fatalf("corpse should move intact to the destination, got %+v", c)
+	}
+}
+
 func TestTakeCorpseReturnsPack(t *testing.T) {
 	h := newHub()
 	p := heroAt("field", 15, 10)
@@ -85,6 +166,22 @@ func TestTakeCorpseReturnsPack(t *testing.T) {
 	}
 	if p.bag["potion"] != 3 || len(h.corpses["field"]) != 1 || len(h.corpses["field"][0].items) != 0 {
 		t.Fatalf("looting the corpse should refill the bag and leave an empty body (bag %d, corpses %+v)", p.bag["potion"], h.corpses["field"])
+	}
+}
+
+func TestTakeCorpseRefusesWhenTooHeavy(t *testing.T) {
+	h := newHub()
+	p := heroAt("field", 15, 10)
+	p.bag = map[string]int{"armor": 3}
+	h.corpses["field"] = []*corpse{{tx: 15, ty: 10, items: map[string]int{"potion": 1}}}
+	if h.takeCorpse(p, 15, 10, "potion") {
+		t.Fatal("overweight player should not loot a corpse")
+	}
+	if p.bag["potion"] != 0 || h.corpses["field"][0].items["potion"] != 1 {
+		t.Fatalf("failed corpse loot should leave items in place, bag=%+v corpse=%+v", p.bag, h.corpses["field"][0].items)
+	}
+	if !hasLog(p.log, carryTooMuchMsg) {
+		t.Fatalf("failed corpse loot should warn about carry weight, got %#v", p.log)
 	}
 }
 

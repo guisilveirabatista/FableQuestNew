@@ -367,10 +367,23 @@ const NPC_NAME = {
   guard: 'Guard',
 };
 function npcName(n) { return NPC_NAME[n.id] || n.id; }
-function itemId(id) {
-  if (typeof id === 'string') return id;
-  if (id && typeof id === 'object') return id.id || id.Id || id.name || id.Name || '';
+function itemId(id, depth = 0) {
+  if (depth > 3) return '';
+  if (typeof id === 'string') {
+    const key = id.trim();
+    return key && key !== '[object Object]' && key.toLowerCase() !== 'object object' ? key : '';
+  }
+  if (id && typeof id === 'object') {
+    for (const k of ['id', 'Id', 'ID', 'item', 'itemId', 'ItemId', 'name', 'Name']) {
+      const key = itemId(id[k], depth + 1);
+      if (key) return key;
+    }
+    return '';
+  }
   return id == null ? '' : String(id);
+}
+function itemDef(id) {
+  return ITEMS[itemId(id)] || null;
 }
 function itemName(id) {
   const key = itemId(id);
@@ -613,6 +626,56 @@ function updatePendingFloorLoot(takeFn) {
   game.path = null;
   return true;
 }
+function worldTileAtPoint(p) {
+  const cam = camPos();
+  const tx = Math.floor((p.x + cam.x) / TS), ty = Math.floor((p.y + cam.y) / TS);
+  return tx >= 0 && ty >= 0 && tx < MW && ty < MH ? { tx, ty } : null;
+}
+function floorDragStackAt(tx, ty) {
+  return floorAt(tx, ty).find(f => itemId(f.id)) || null;
+}
+function startWorldDragAt(p) {
+  if (p.b !== 0 || p.ctrl || p.alt || game.invDrag) return false;
+  const t = worldTileAtPoint(p);
+  if (!t || !nearHero(t.tx, t.ty)) return false;
+  const f = floorDragStackAt(t.tx, t.ty);
+  if (f) {
+    setCorpseWalkTarget(null);
+    setFloorLootTarget(null, null);
+    game.path = null;
+    game.worldDrag = { kind: 'floor', tx: f.tx, ty: f.ty, id: itemId(f.id), n: f.n || 1 };
+    sfx('Cursor1');
+    return true;
+  }
+  const co = corpseAt(t.tx, t.ty);
+  if (co) {
+    setCorpseWalkTarget(null);
+    setFloorLootTarget(null, null);
+    game.path = null;
+    game.worldDrag = { kind: 'corpse', tx: co.tx, ty: co.ty, name: corpseLabel(co), decayed: !!co.decayed };
+    sfx('Cursor1');
+    return true;
+  }
+  return false;
+}
+function finishWorldDrag(sendFn, p) {
+  const d = game.worldDrag;
+  if (!d || p.b !== 0) return false;
+  game.worldDrag = null;
+  if ((game.invOpen && inPanel(p)) || (game.corpseOpen && inCorpseWin(p))) return true;
+  const t = worldTileAtPoint(p);
+  if (!t) return true;
+  if (d.kind === 'floor') sendFn({ t: 'moveFloorItem', tx: d.tx, ty: d.ty, toTx: t.tx, toTy: t.ty, id: d.id });
+  else if (d.kind === 'corpse') sendFn({ t: 'moveCorpse', tx: d.tx, ty: d.ty, toTx: t.tx, toTy: t.ty });
+  sfx('Decision1');
+  return true;
+}
+function finishWorldDragFromReleases(sendFn) {
+  let consumed = false;
+  for (const r of releases) if (finishWorldDrag(sendFn, r)) consumed = true;
+  if (game.worldDrag && !mouse.down) { game.worldDrag = null; consumed = true; }
+  return consumed;
+}
 function updateCorpseDrag() {
   const d = game.corpseDrag;
   if (!d) return;
@@ -736,7 +799,7 @@ function updateInvPanel() {
         if (isHotbarItem(d.id)) pushIntent({ t: 'assignSkill', id: d.id, slot: hs });
         else sfx('Buzzer1');
       } else if (bs) pushIntent({ t: 'equip', id: d.id, bslot: bs });
-      else if (!inPanel(r)) pushIntent({ t: 'dropItem', id: d.id }); // dragged onto the map
+      else if (!inPanel(r)) requestDropItem(d.id); // dragged onto the map
     } else if (bs && bs !== d.slot && canPlace(d.id, bs)) {
       pushIntent({ t: 'unequip', bslot: d.slot }); // move between slots (ring to the other finger)
       pushIntent({ t: 'equip', id: d.id, bslot: bs });
@@ -759,7 +822,7 @@ function updateInvKeys() {
       if (pressed(['ArrowDown', 's']) && game.invCursor + C < ids.length) { game.invCursor += C; sfx('Cursor1'); }
       ensureBagCursorVisible(ids);
       if (pressed(CONFIRM)) pushIntent({ t: 'useItem', id: ids[game.invCursor] });
-      if (pressed(['q', 'Q'])) pushIntent({ t: 'dropItem', id: ids[game.invCursor] });
+      if (pressed(['q', 'Q'])) requestDropItem(ids[game.invCursor]);
     }
   } else { // body
     if (!game.invSlot) game.invSlot = 'torso';
@@ -770,9 +833,95 @@ function updateInvKeys() {
     if (pressed(CONFIRM) || pressed(['q', 'Q'])) pushIntent({ t: 'unequip', bslot: game.invSlot });
   }
 }
+function closeInventory() {
+  game.invOpen = false;
+  game.invFocus = null;
+  game.invDrag = null;
+  sfx('Cancel1');
+}
+function dropQtyMax(id) {
+  return Math.max(1, (game.hero.bag && game.hero.bag[id]) || 0);
+}
+function requestDropItem(id) {
+  const max = dropQtyMax(id);
+  if (max <= 1) {
+    pushIntent({ t: 'dropItem', id, n: 1 });
+    return;
+  }
+  game.dropPrompt = { id, n: 1 };
+  game.invDrag = null;
+  sfx('Cursor1');
+}
+function dropPromptLayout() {
+  const w = 168, h = 76, x = Math.floor((W - w) / 2), y = Math.floor((H - h) / 2);
+  return {
+    x, y, w, h,
+    minus: { x: x + 12, y: y + 35, w: 24, h: 18 },
+    plus: { x: x + 42, y: y + 35, w: 24, h: 18 },
+    all: { x: x + 72, y: y + 35, w: 34, h: 18 },
+    drop: { x: x + 112, y: y + 35, w: 44, h: 18 },
+    cancel: { x: x + 112, y: y + 56, w: 44, h: 14 },
+  };
+}
+function clampDropPrompt() {
+  const p = game.dropPrompt;
+  if (!p) return;
+  const max = dropQtyMax(p.id);
+  if (max <= 0) { game.dropPrompt = null; return; }
+  p.n = Math.max(1, Math.min(max, Math.floor(p.n || 1)));
+}
+function confirmDropPrompt() {
+  const p = game.dropPrompt;
+  if (!p) return;
+  clampDropPrompt();
+  if (game.dropPrompt) pushIntent({ t: 'dropItem', id: p.id, n: p.n });
+  game.dropPrompt = null;
+  sfx('Cancel1');
+}
+function updateDropPrompt() {
+  const p = game.dropPrompt;
+  if (!p) return false;
+  clampDropPrompt();
+  if (!game.dropPrompt) return true;
+  const l = dropPromptLayout(), max = dropQtyMax(p.id);
+  for (const c of clicks) {
+    if (c.b !== 0) continue;
+    if (hit(c, l.minus.x, l.minus.y, l.minus.w, l.minus.h)) { p.n--; clampDropPrompt(); sfx('Cursor1'); return true; }
+    if (hit(c, l.plus.x, l.plus.y, l.plus.w, l.plus.h)) { p.n++; clampDropPrompt(); sfx('Cursor1'); return true; }
+    if (hit(c, l.all.x, l.all.y, l.all.w, l.all.h)) { p.n = max; sfx('Cursor1'); return true; }
+    if (hit(c, l.drop.x, l.drop.y, l.drop.w, l.drop.h)) { confirmDropPrompt(); return true; }
+    if (hit(c, l.cancel.x, l.cancel.y, l.cancel.w, l.cancel.h) || !hit(c, l.x, l.y, l.w, l.h)) {
+      game.dropPrompt = null; sfx('Cancel1'); return true;
+    }
+  }
+  if (pressed(['ArrowLeft', 'a'])) { p.n--; clampDropPrompt(); sfx('Cursor1'); return true; }
+  if (pressed(['ArrowRight', 'd'])) { p.n++; clampDropPrompt(); sfx('Cursor1'); return true; }
+  if (pressed(CONFIRM)) { confirmDropPrompt(); return true; }
+  if (pressed(CANCEL)) { game.dropPrompt = null; sfx('Cancel1'); return true; }
+  return true;
+}
+function drawDropPrompt() {
+  const p = game.dropPrompt;
+  if (!p) return;
+  clampDropPrompt();
+  if (!game.dropPrompt) return;
+  const l = dropPromptLayout(), it = ITEMS[p.id], max = dropQtyMax(p.id);
+  drawWindow(l.x, l.y, l.w, l.h);
+  text('Drop', l.x + 12, l.y + 8, '#ffe080');
+  if (it) {
+    ctx.drawImage(img[it.img], l.x + 12, l.y + 17, 14, 14);
+    text(it.name, l.x + 32, l.y + 19, '#fff');
+  }
+  text(`${p.n}/${max}`, l.x + 116, l.y + 19, '#bcd');
+  drawWindow(l.minus.x, l.minus.y, l.minus.w, l.minus.h); text('-', l.minus.x + 9, l.minus.y + 6);
+  drawWindow(l.plus.x, l.plus.y, l.plus.w, l.plus.h); text('+', l.plus.x + 8, l.plus.y + 6);
+  drawWindow(l.all.x, l.all.y, l.all.w, l.all.h); text('All', l.all.x + 8, l.all.y + 6);
+  drawWindow(l.drop.x, l.drop.y, l.drop.w, l.drop.h); text('Drop', l.drop.x + 8, l.drop.y + 6);
+  drawWindow(l.cancel.x, l.cancel.y, l.cancel.w, l.cancel.h); text('Cancel', l.cancel.x + 3, l.cancel.y + 4, '#bcd');
+}
 
 function inventoryHoverItem() {
-  if (!game.invOpen || game.itemPopup || game.invDrag) return null;
+  if (!game.invOpen || game.itemPopup || game.invDrag || game.dropPrompt) return null;
   const ids = bagIds();
   const bi = bagCellAt(mouse.x, mouse.y);
   if (bi >= 0 && ids[bi]) return ids[bi];
@@ -900,10 +1049,6 @@ function shopItems(s = game.shop) {
   if (s.mode === 'sell') return bagIds();
   return SHOPS[s.who] ? SHOPS[s.who].stock : [];
 }
-function normalizeShopCursor(s, ids) {
-  const last = Math.max(0, ids.length - 1);
-  s.cursor = Math.max(0, Math.min(s.cursor || 0, last));
-}
 function shopVisibleRows(ids) {
   return Math.min(5, Math.max(1, ids.length));
 }
@@ -912,13 +1057,6 @@ function shopMaxScroll(s, ids = shopItems(s)) {
 }
 function clampShopScroll(s, ids = shopItems(s)) {
   s.scroll = Math.max(0, Math.min(s.scroll || 0, shopMaxScroll(s, ids)));
-}
-function ensureShopCursorVisible(s, ids, visibleRows = shopVisibleRows(ids)) {
-  clampShopScroll(s, ids);
-  if (!ids.length) return;
-  if (s.cursor < s.scroll) s.scroll = s.cursor;
-  else if (s.cursor >= s.scroll + visibleRows) s.scroll = s.cursor - visibleRows + 1;
-  clampShopScroll(s, ids);
 }
 function shopLayout(s = game.shop) {
   const ids = shopItems(s);
@@ -1075,7 +1213,6 @@ function updateShop() {
   if (s.mode === 'choice') { updateShopChoice(); return; }
   if (!s.qty) s.qty = {};
   const l = shopLayout(s), ids = l.ids;
-  normalizeShopCursor(s, ids);
   clampShopScroll(s, ids);
   if (wheelY && hit(mouse, l.listX, l.rowY, l.listW, l.listH)) {
     const old = s.scroll || 0;
@@ -1098,12 +1235,10 @@ function updateShop() {
       if (i >= ids.length) break;
       const r = shopRowLayout(l, vi);
       if (!hit(c, r.x, r.y, r.w, r.h)) continue;
-      s.cursor = i;
       if (hit(c, r.minus.x, r.minus.y, r.minus.w, r.minus.h)) adjustShopQty(ids[i], -1, s);
       else if (hit(c, r.plus.x, r.plus.y, r.plus.w, r.plus.h)) adjustShopQty(ids[i], 1, s);
       else if (hit(c, r.input.x, r.input.y, r.input.w, r.input.h)) beginShopEdit(ids[i], s);
       else if (c.dbl) adjustShopQty(ids[i], 1, s);
-      else sfx('Cursor1');
     }
     for (const b of shopButtons(l, s)) {
       if (!hit(c, b.x, b.y, b.w, b.h)) continue;
@@ -1113,26 +1248,13 @@ function updateShop() {
       return;
     }
   }
-  const hov = ids.slice(first, first + l.visibleRows).findIndex((_, vi) => {
-    const r = shopRowLayout(l, vi);
-    return hit(mouse, r.x, r.y, r.w, r.h);
-  });
-  if (hov >= 0) s.cursor = first + hov;
   if (s.edit) {
     if (pressed(CANCEL)) { finishShopEdit(s); sfx('Cancel1'); }
     else updateShopEdit(s);
     return;
   }
   if (pressed(CANCEL)) { game.shop = null; sfx('Cancel1'); return; }
-  if (ids.length) {
-    if (pressed(['ArrowUp', 'w'])) { s.cursor = (s.cursor + ids.length - 1) % ids.length; sfx('Cursor1'); }
-    if (pressed(['ArrowDown', 's'])) { s.cursor = (s.cursor + 1) % ids.length; sfx('Cursor1'); }
-    ensureShopCursorVisible(s, ids, l.visibleRows);
-    const id = ids[s.cursor];
-    if (pressed(['ArrowLeft', 'a'])) adjustShopQty(id, -1, s);
-    if (pressed(['ArrowRight', 'd'])) adjustShopQty(id, 1, s);
-    if (pressed(CONFIRM)) confirmShop(s);
-  }
+  if (pressed(CONFIRM)) confirmShop(s);
 }
 function drawShopChoice() {
   const s = game.shop, shop = SHOPS[s.who], l = shopChoiceLayout();
@@ -1148,7 +1270,6 @@ function drawShop() {
   const s = game.shop;
   if (s.mode === 'choice') { drawShopChoice(); return; }
   const h = game.hero, shop = SHOPS[s.who], l = shopLayout(s), ids = l.ids;
-  normalizeShopCursor(s, ids);
   clampShopScroll(s, ids);
   drawWindow(l.x, l.y, l.w, l.h);
   text(`${shop.name} ${shopModeLabel(s)} - Gold ${h.gold}`, l.x + 12, l.y + 8, '#ffe080');
@@ -1160,15 +1281,14 @@ function drawShop() {
     const i = first + vi;
     const it = ITEMS[id], r = shopRowLayout(l, vi), q = shopQty(id, s);
     const muted = s.mode === 'buy' && h.gold < it.price;
-    if (s.cursor === i) drawCursor(r.x, r.y, r.w, r.h);
     ctx.drawImage(img[it.img], r.iconX, r.y + 3, 16, 16);
     text(it.name, r.nameX, r.y + 7, muted ? '#999' : '#fff');
     text(sellValue(id) + 'g', r.priceX, r.y + 7, '#ffe080');
     text('x' + (h.bag[id] || 0), r.haveX, r.y + 7, '#bcd');
-    drawShopButton(r.minus, s.cursor === i && hit(mouse, r.minus.x, r.minus.y, r.minus.w, r.minus.h));
+    drawShopButton(r.minus, hit(mouse, r.minus.x, r.minus.y, r.minus.w, r.minus.h));
     text('-', r.minus.x + 6, r.minus.y + 4, q ? '#fff' : '#667');
     drawShopAmountBox(r.input, s.edit === id ? (s.editText || '') : q, s.edit === id);
-    drawShopButton(r.plus, s.cursor === i && hit(mouse, r.plus.x, r.plus.y, r.plus.w, r.plus.h));
+    drawShopButton(r.plus, hit(mouse, r.plus.x, r.plus.y, r.plus.w, r.plus.h));
     text('+', r.plus.x + 5, r.plus.y + 4, shopMaxQty(id, s) > q ? '#fff' : '#667');
   });
   const maxScroll = shopMaxScroll(s, ids);
@@ -1178,12 +1298,6 @@ function drawShop() {
     ctx.fillRect(sb.x, sb.y, 4, sb.h);
     ctx.fillStyle = '#9fb4c8';
     ctx.fillRect(sb.x, sb.thumbY, 4, sb.thumbH);
-  }
-  const selected = ids[s.cursor];
-  if (selected) {
-    const it = ITEMS[selected];
-    text(itemInfo(it) || 'Consumable item', l.x + 12, l.footerY, '#bcd');
-    text(`Weight ${it.w}   Carrying ${bagWeight().toFixed(1)}/${capacity()}`, l.x + 12, l.footerY + 12, '#bcd');
   }
   const total = shopTotal(s);
   const totalColor = s.mode === 'buy' && total > h.gold ? '#f76' : '#ffe080';
@@ -1402,7 +1516,7 @@ function updateDeathPopup() {
 }
 
 function hoverBlockedByUI() {
-  if (game.death || game.mapOpen || game.menu || game.shop || game.itemPopup || game.dialogue ||
+  if (game.worldDrag || game.death || game.mapOpen || game.menu || game.shop || game.itemPopup || game.dropPrompt || game.dialogue ||
     game.playerMenu || game.trade) return true;
   if (game.invOpen && inPanel(mouse)) return true;
   if (game.corpseOpen && inCorpseWin(mouse)) return true;
@@ -1489,6 +1603,29 @@ function drawHoverCard() {
   text(t.name, x + 8, y + 6, t.color || '#fff');
   if (hasHp) drawMeter(x + 8, y + 21, w - 16, 5, t.hp, t.maxhp, t.hpColor || hpColor(t.hp, t.maxhp));
 }
+function drawWorldDrag() {
+  const d = game.worldDrag;
+  if (!d) return;
+  ctx.save();
+  ctx.globalAlpha = 0.82;
+  if (d.kind === 'floor') {
+    const it = itemDef(d.id);
+    if (it && img[it.img]) {
+      ctx.drawImage(img[it.img], mouse.x - 9, mouse.y - 9, 18, 18);
+    } else {
+      drawWindow(mouse.x - 9, mouse.y - 9, 18, 18);
+      text('?', mouse.x - 2, mouse.y - 3, '#ffe080');
+    }
+    if (d.n > 1) text(String(d.n), mouse.x + 2, mouse.y + 5, '#ffe080');
+  } else if (d.decayed) {
+    ctx.translate(mouse.x, mouse.y);
+    ctx.rotate(Math.PI / 2);
+    ctx.drawImage(img.skeleton, -16, -10, 32, 20);
+  } else {
+    drawDeadHero(mouse.x - 8, mouse.y - 8, 0.82, game.hero);
+  }
+  ctx.restore();
+}
 
 const PLAYER_MENU_ITEMS = [
   ['trade', 'Trade'], ['message', 'Message'], ['follow', 'Follow'],
@@ -1554,6 +1691,7 @@ function openMapWindow() {
   game.menu = null;
   game.shop = null;
   game.itemPopup = null;
+  game.dropPrompt = null;
   game.playerMenu = null;
   game.invFocus = null;
   game.invDrag = null;
@@ -1662,6 +1800,7 @@ function clearMenuShortcutUi() {
   game.mapOpen = false;
   game.shop = null;
   game.itemPopup = null;
+  game.dropPrompt = null;
   game.invFocus = null;
   game.invDrag = null;
   game.lootDrag = null;
@@ -1677,7 +1816,7 @@ function openMenuSection(sel) {
   rootMenuSelect(sel);
 }
 function menuShortcutBlocked() {
-  return !!(game.death || game.shop || game.dialogue || game.itemPopup || game.corpseOpen || game.invFocus || game.playerMenu);
+  return !!(game.death || game.shop || game.dialogue || game.itemPopup || game.dropPrompt || game.corpseOpen || game.invFocus || game.playerMenu);
 }
 function handleWindowShortcuts() {
   if (menuShortcutBlocked()) return false;
@@ -1698,7 +1837,7 @@ function rootMenuSelect(sel) {
   const m = game.menu;
   if (sel === 'Inventory') { game.invOpen = !game.invOpen; game.menu = null; sfx('Decision1'); }
   else if (sel === 'Map') openMapWindow();
-  else if (sel === 'Skills') { m.mode = 'skills'; m.cursor2 = 0; m.assign = false; m.skillCarry = null; m.skillDrag = null; sfx('Decision1'); }
+  else if (sel === 'Skills') { m.mode = 'skills'; m.skillDrag = null; beginSkillDraft(m); sfx('Decision1'); }
   else if (sel === 'Attributes') { m.mode = 'attributes'; m.cursor2 = 0; beginAttrDraft(m); sfx('Decision1'); }
   else if (sel === 'Status' || sel === 'Quest') { m.mode = sel.toLowerCase(); sfx('Decision1'); }
   else if (sel === 'Options') { m.mode = 'options'; m.cursor2 = 0; sfx('Decision1'); }
@@ -1747,12 +1886,71 @@ function confirmAttrDraft(m) {
   m.attrBasePoints = m.attrPoints;
 }
 function skillUiLevel(id, h = game.hero) { return typeof skillLevel === 'function' ? skillLevel(id, h) : ((h.skillLevels && h.skillLevels[id]) || 1); }
-function skillReq(id, h = game.hero) {
+function skillReqForLevels(id, levels = null, h = game.hero) {
   const req = SKILL_TREE && SKILL_TREE[id];
-  return req && skillUiLevel(req, h) < 2 ? req : '';
+  const reqLevel = levels ? (levels[req] || skillUiLevel(req, h)) : skillUiLevel(req, h);
+  return req && reqLevel < 2 ? req : '';
+}
+function skillReq(id, h = game.hero) {
+  return skillReqForLevels(id, null, h);
 }
 function canUpgradeSkill(id, h = game.hero) {
   return !!(SKILLS[id] && (h.skillPoints || 0) > 0 && skillUiLevel(id, h) < MAX_SKILL_LEVEL && !skillReq(id, h));
+}
+function copySkillLevels(h = game.hero) {
+  return Object.fromEntries(Object.keys(SKILLS).map(id => [id, skillUiLevel(id, h)]));
+}
+function beginSkillDraft(m, h = game.hero) {
+  m.skillBase = copySkillLevels(h);
+  m.skillDraft = copySkillLevels(h);
+  m.skillBasePoints = h.skillPoints || 0;
+  m.skillPoints = h.skillPoints || 0;
+}
+function ensureSkillDraft(m) {
+  if (!m.skillBase || !m.skillDraft || m.skillBasePoints == null || m.skillPoints == null) beginSkillDraft(m);
+}
+function skillDraftLevel(m, id, h = game.hero) {
+  ensureSkillDraft(m);
+  return m.skillDraft[id] || skillUiLevel(id, h);
+}
+function skillPending(m, id) {
+  ensureSkillDraft(m);
+  return (m.skillDraft[id] || 1) > (m.skillBase[id] || 1);
+}
+function skillHasPending(m) {
+  ensureSkillDraft(m);
+  return Object.keys(SKILLS).some(id => skillPending(m, id));
+}
+function canUpgradeSkillDraft(m, id, h = game.hero) {
+  ensureSkillDraft(m);
+  return !!(SKILLS[id] && m.skillPoints > 0 && skillDraftLevel(m, id, h) < MAX_SKILL_LEVEL &&
+    !skillReqForLevels(id, m.skillDraft, h));
+}
+function addSkillDraft(m, id) {
+  ensureSkillDraft(m);
+  if (!canUpgradeSkillDraft(m, id)) { sfx('Buzzer1'); return; }
+  m.skillDraft[id] = skillDraftLevel(m, id) + 1;
+  m.skillPoints--;
+  sfx('Cursor1');
+}
+function resetSkillDraft(m) {
+  ensureSkillDraft(m);
+  m.skillDraft = { ...m.skillBase };
+  m.skillPoints = m.skillBasePoints;
+  sfx('Cancel1');
+}
+function confirmSkillDraft(m) {
+  ensureSkillDraft(m);
+  let spent = 0;
+  for (const id of Object.keys(SKILLS)) {
+    for (let i = 0; i < (m.skillDraft[id] || 1) - (m.skillBase[id] || 1); i++) {
+      pushIntent({ t: 'upgradeSkill', id });
+      spent++;
+    }
+  }
+  sfx(spent ? 'Decision1' : 'Cancel1');
+  m.skillBase = { ...m.skillDraft };
+  m.skillBasePoints = m.skillPoints;
 }
 function skillMpText(id, h = game.hero) {
   const cost = typeof skillCost === 'function' ? skillCost(id, h) : SKILLS[id].mp;
@@ -1760,8 +1958,8 @@ function skillMpText(id, h = game.hero) {
 }
 function skillLayout(ids = Object.keys(SKILLS)) {
   const w = 236, rowH = 18, y = 8, rowY = y + 28;
-  const slotsY = rowY + ids.length * rowH + 26;
-  return { x: subX(w), y, w, h: ids.length * rowH + 126, rowY, rowH, slotsY, buttonY: slotsY + 24, hintY: slotsY + 48 };
+  const slotsY = rowY + ids.length * rowH + 24;
+  return { x: subX(w), y, w, h: ids.length * rowH + 104, rowY, rowH, slotsY, buttonY: slotsY + 26, hintY: slotsY + 50 };
 }
 function skillSlotAt(l, px, py) {
   for (let j = 0; j < 5; j++) {
@@ -1797,16 +1995,6 @@ function drawHotbarEntry(id, x, y, selected = false, h = game.hero) {
 }
 function attrLayout() { const w = 224, h = 174; return { x: subX(w), y: 8, w, h }; }
 function optionsLayout() { const w = 132; return { x: subX(w), y: 8, w, h: OPTIONS_MENU.length * 16 + 16 }; }
-function menuCloseButton(l) { return { x: l.x + l.w - 50, y: l.y + 7, w: 38, h: 16 }; }
-function menuCloseHit(l, c) {
-  const b = menuCloseButton(l);
-  return hit(c, b.x, b.y, b.w, b.h);
-}
-function drawMenuClose(l) {
-  const b = menuCloseButton(l);
-  drawWindow(b.x, b.y, b.w, b.h);
-  text('Close', b.x + 7, b.y + 5, '#fff');
-}
 
 function updateMenu(dt) {
   const m = game.menu, h = game.hero;
@@ -1833,35 +2021,39 @@ function updateMenu(dt) {
     if (pressed(CANCEL)) { game.menu = null; sfx('Cancel1'); return; }
     if (pressed(CONFIRM)) rootMenuSelect(ROOT_MENU[m.cursor]);
   } else if (m.mode === 'skills') {
+    ensureSkillDraft(m);
     const ids = availableSkillIds(h);
-    if (m.cursor2 >= ids.length) m.cursor2 = ids.length - 1;
     const l = skillLayout(ids);
-    const hov = hoverRow(l.x + 8, l.rowY, l.w - 16, 16, ids.length, l.rowH);
-    if (hov >= 0) m.cursor2 = hov;
-    for (const c of mc) {
-      if (menuCloseHit(l, c)) { m.mode = 'root'; m.skillDrag = null; m.skillCarry = null; sfx('Cancel1'); return; }
-      if (!hit(c, l.x, l.y, l.w, l.h)) { m.mode = 'root'; m.skillDrag = null; m.skillCarry = null; sfx('Cancel1'); return; }
+    for (const c of clicks) if (c.b === 2 && hit(c, l.x, l.y, l.w, l.h)) {
       const slot = skillSlotAt(l, c.x, c.y);
       if (slot >= 0) {
-        const id = m.skillCarry || m.skillDrag;
-        if (id) { pushIntent({ t: 'assignSkill', id, slot }); m.skillCarry = null; m.skillDrag = null; m.assign = false; }
+        const id = h.slots[slot];
+        if (id) { pushIntent({ t: 'assignSkill', id, slot }); m.skillDrag = null; sfx('Cancel1'); }
+        else sfx('Buzzer1');
+        return;
+      }
+    }
+    for (const c of mc) {
+      if (!hit(c, l.x, l.y, l.w, l.h)) { m.mode = 'root'; m.skillDrag = null; sfx('Cancel1'); return; }
+      const slot = skillSlotAt(l, c.x, c.y);
+      if (slot >= 0) {
+        if (m.skillDrag) { pushIntent({ t: 'assignSkill', id: m.skillDrag, slot }); m.skillDrag = null; }
         else sfx('Buzzer1');
         continue;
       }
-      if (hit(c, l.x + 12, l.buttonY, 116, 18)) { m.skillCarry = ids[m.cursor2]; m.assign = true; sfx('Decision1'); continue; }
       for (let i = 0; i < ids.length; i++) {
         const ry = l.rowY + i * l.rowH;
         if (hit(c, l.x + l.w - 28, ry + 1, 16, 16)) {
-          m.cursor2 = i;
-          if (canUpgradeSkill(ids[i], h)) pushIntent({ t: 'upgradeSkill', id: ids[i] });
-          else sfx('Buzzer1');
+          addSkillDraft(m, ids[i]);
           continue;
         }
         if (hit(c, l.x + 8, ry, l.w - 16, 16)) {
-          m.cursor2 = i;
-          if (hit(c, l.x + 10, ry, 16, 16)) { m.skillDrag = ids[i]; m.skillCarry = null; m.assign = false; }
-          sfx('Cursor1');
+          if (hit(c, l.x + 10, ry, 16, 16)) { m.skillDrag = ids[i]; sfx('Cursor1'); }
         }
+      }
+      if (skillHasPending(m)) {
+        if (hit(c, l.x + 16, l.buttonY, 72, 18)) confirmSkillDraft(m);
+        if (hit(c, l.x + 96, l.buttonY, 56, 18)) resetSkillDraft(m);
       }
     }
     for (const r of releases) if (m.skillDrag) {
@@ -1870,47 +2062,35 @@ function updateMenu(dt) {
       m.skillDrag = null;
     }
     if (m.skillDrag && !mouse.down) m.skillDrag = null;
-    if (m.skillCarry) { // waiting for a slot number or slot click
-      if (pressed(CANCEL)) { m.skillCarry = null; m.assign = false; sfx('Cancel1'); return; }
+    if (m.skillDrag) {
       for (let i = 0; i < 5; i++) if (pressed([String(i + 1)])) {
-        pushIntent({ t: 'assignSkill', id: m.skillCarry, slot: i });
-        m.skillCarry = null; m.assign = false; return;
+        pushIntent({ t: 'assignSkill', id: m.skillDrag, slot: i });
+        m.skillDrag = null; return;
       }
     }
-    if (pressed(CANCEL)) { m.mode = 'root'; m.skillDrag = null; m.skillCarry = null; sfx('Cancel1'); return; }
-    if (pressed(['ArrowUp', 'w'])) { m.cursor2 = (m.cursor2 + ids.length - 1) % ids.length; sfx('Cursor1'); }
-    if (pressed(['ArrowDown', 's'])) { m.cursor2 = (m.cursor2 + 1) % ids.length; sfx('Cursor1'); }
-    if (pressed(['u', 'U'])) {
-      if (canUpgradeSkill(ids[m.cursor2], h)) pushIntent({ t: 'upgradeSkill', id: ids[m.cursor2] });
-      else sfx('Buzzer1');
-    }
-    if (pressed(CONFIRM)) { m.skillCarry = ids[m.cursor2]; m.assign = true; sfx('Decision1'); }
+    if (pressed(CANCEL)) { m.mode = 'root'; m.skillDrag = null; sfx('Cancel1'); return; }
+    if (pressed(CONFIRM) && skillHasPending(m)) confirmSkillDraft(m);
   } else if (m.mode === 'attributes') {
     ensureAttrDraft(m);
     const l = attrLayout();
-    const hov = hoverRow(l.x + 8, l.y + 30, 100, 15, ATTRS.length);
-    if (hov >= 0) m.cursor2 = hov;
     for (const c of mc) {
-      if (menuCloseHit(l, c)) { m.mode = 'root'; sfx('Cancel1'); return; }
       if (!hit(c, l.x, l.y, l.w, l.h)) { m.mode = 'root'; sfx('Cancel1'); return; }
       for (let i = 0; i < ATTRS.length; i++) {
         const y = l.y + 30 + i * 15;
-        if (hit(c, l.x + 8, y, 100, 15)) { m.cursor2 = i; sfx('Cursor1'); }
-        if (hit(c, l.x + 96, y, 14, 14)) { m.cursor2 = i; addAttrDraft(m, ATTRS[i][0]); }
+        if (hit(c, l.x + 96, y, 14, 14)) addAttrDraft(m, ATTRS[i][0]);
       }
-      if (hit(c, l.x + 16, l.y + l.h - 26, 72, 18)) confirmAttrDraft(m);
-      if (attrHasPending(m) && hit(c, l.x + 96, l.y + l.h - 26, 56, 18)) resetAttrDraft(m);
+      if (attrHasPending(m)) {
+        if (hit(c, l.x + 16, l.y + l.h - 26, 72, 18)) confirmAttrDraft(m);
+        if (hit(c, l.x + 96, l.y + l.h - 26, 56, 18)) resetAttrDraft(m);
+      }
     }
     if (pressed(CANCEL)) { m.mode = 'root'; sfx('Cancel1'); return; }
-    if (pressed(['ArrowUp', 'w'])) { m.cursor2 = (m.cursor2 + ATTRS.length - 1) % ATTRS.length; sfx('Cursor1'); }
-    if (pressed(['ArrowDown', 's'])) { m.cursor2 = (m.cursor2 + 1) % ATTRS.length; sfx('Cursor1'); }
-    if (pressed(['ArrowRight', 'd']) || pressed(CONFIRM)) addAttrDraft(m, ATTRS[m.cursor2][0]);
+    if (pressed(CONFIRM) && attrHasPending(m)) confirmAttrDraft(m);
   } else if (m.mode === 'options') {
     const l = optionsLayout();
     const hov = hoverRow(l.x + 6, l.y + 8, l.w - 12, 16, OPTIONS_MENU.length);
     if (hov >= 0) m.cursor2 = hov;
     for (const c of mc) {
-      if (menuCloseHit(l, c)) { m.mode = 'root'; sfx('Cancel1'); return; }
       if (!hit(c, l.x, l.y, l.w, l.h)) { m.mode = 'root'; sfx('Cancel1'); return; }
       for (let i = 0; i < OPTIONS_MENU.length; i++)
         if (hit(c, l.x + 6, l.y + 8 + i * 16, l.w - 12, 16)) { m.cursor2 = i; toggleOption(OPTIONS_MENU[i]); }
@@ -1933,24 +2113,22 @@ function drawMenu() {
     text(left > 0 ? `Log Out ${left}s` : s, rb.x + 14, rb.y + 10 + i * 16, left > 0 ? '#999' : '#fff');
   });
   if (m.mode === 'skills') {
+    ensureSkillDraft(m);
     const ids = availableSkillIds(h);
-    if (m.cursor2 >= ids.length) m.cursor2 = ids.length - 1;
     const l = skillLayout(ids);
     drawWindow(l.x, l.y, l.w, l.h);
     text('Skills', l.x + 12, l.y + 8, '#ffe080');
-    drawMenuClose(l);
-    text(`Pts ${h.skillPoints || 0}`, l.x + 92, l.y + 8, (h.skillPoints || 0) ? '#ffe080' : '#bcd');
+    text(`Pts ${m.skillPoints}`, l.x + 92, l.y + 8, m.skillPoints ? '#ffe080' : '#bcd');
     ids.forEach((id, i) => {
       const sk = SKILLS[id], slot = h.slots.indexOf(id);
-      const y = l.rowY + i * l.rowH;
-      if (m.cursor2 === i) drawCursor(l.x + 6, y - 1, l.w - 12, 18);
-      drawSkillIcon(id, l.x + 10, y, m.skillCarry === id || m.skillDrag === id);
+      const y = l.rowY + i * l.rowH, pending = skillPending(m, id);
+      drawSkillIcon(id, l.x + 10, y, false);
       text(sk.name, l.x + 32, y + 4);
-      text(`Lv${skillUiLevel(id, h)}`, l.x + 82, y + 4, '#ffe080');
+      text(`Lv${skillDraftLevel(m, id, h)}`, l.x + 82, y + 4, pending ? '#f76' : '#ffe080');
       text(skillMpText(id, h), l.x + 112, y + 4, '#bcd');
       if (slot >= 0) text(`[${slot + 1}]`, l.x + 154, y + 4, '#ffe080');
       drawWindow(l.x + l.w - 28, y, 16, 16);
-      text('+', l.x + l.w - 23, y + 4, canUpgradeSkill(id, h) ? '#fff' : '#777');
+      text('+', l.x + l.w - 23, y + 4, canUpgradeSkillDraft(m, id, h) ? '#fff' : '#777');
     });
     text('Slots', l.x + 12, l.slotsY - 13, '#9cf');
     for (let j = 0; j < 5; j++) { // clickable hotbar slot boxes
@@ -1958,29 +2136,26 @@ function drawMenu() {
       drawWindow(bx, by, 18, 18);
       text(String(j + 1), bx + 3, by - 8, '#9cf');
       const sid = h.slots[j];
-      if (sid) drawHotbarEntry(sid, bx + 1, by + 1, sid === ids[m.cursor2], h);
+      if (sid) drawHotbarEntry(sid, bx + 1, by + 1, false, h);
     }
-    drawWindow(l.x + 12, l.buttonY, 116, 18);
-    if (m.skillCarry) drawCursor(l.x + 15, l.buttonY + 3, 110, 12);
-    text('Assign skill to slot', l.x + 18, l.buttonY + 6, '#fff');
-    const selectedSkill = ids[m.cursor2];
-    const req = skillReq(selectedSkill, h);
-    text(req ? `Tree: ${SKILLS[selectedSkill].name} needs ${SKILLS[req].name} Lv2` : `Tree: ${SKILLS[selectedSkill].name} can evolve to Lv${MAX_SKILL_LEVEL}`,
-      l.x + 12, l.hintY, req ? '#f76' : '#bcd');
-    const heldSkill = m.skillCarry || m.skillDrag;
-    if (heldSkill) {
-      drawSkillIcon(heldSkill, mouse.x + 8, mouse.y + 8, true);
-      text(SKILLS[heldSkill].name, Math.min(W - 86, mouse.x + 28), mouse.y + 12, '#ffe080');
+    if (skillHasPending(m)) {
+      drawWindow(l.x + 16, l.buttonY, 72, 18);
+      text('Confirm', l.x + 30, l.buttonY + 6);
+      drawWindow(l.x + 96, l.buttonY, 56, 18);
+      text('Reset', l.x + 112, l.buttonY + 6);
+    }
+    text('Drag skill icons to slots.', l.x + 12, l.hintY, '#bcd');
+    if (m.skillDrag) {
+      drawSkillIcon(m.skillDrag, mouse.x - 8, mouse.y - 8, true);
+      text(SKILLS[m.skillDrag].name, Math.min(W - 86, mouse.x + 12), mouse.y - 3, '#ffe080');
     }
   } else if (m.mode === 'attributes') {
     ensureAttrDraft(m);
     const l = attrLayout(), st = statsForAttr(m.attrDraft);
     drawWindow(l.x, l.y, l.w, l.h);
-    drawMenuClose(l);
     text(`Points: ${m.attrPoints}`, l.x + 10, l.y + 10, m.attrPoints > 0 ? '#ffe080' : '#bcd');
     ATTRS.forEach(([k, label], i) => {
       const y = l.y + 30 + i * 15, pending = attrPending(m, k);
-      if (m.cursor2 === i) drawCursor(l.x + 6, y - 2, 106, 16);
       text(label, l.x + 10, y + 2);
       text('' + m.attrDraft[k], l.x + 80, y + 2, pending ? '#f76' : '#ffe080');
       drawWindow(l.x + 96, y, 14, 14);
@@ -1995,9 +2170,9 @@ function drawMenu() {
       text(label, l.x + 122, l.y + 16 + i * 15, '#bcd');
       text('' + v, l.x + 180, l.y + 16 + i * 15);
     });
-    drawWindow(l.x + 16, l.y + l.h - 26, 72, 18);
-    text('Confirm', l.x + 30, l.y + l.h - 20);
     if (attrHasPending(m)) {
+      drawWindow(l.x + 16, l.y + l.h - 26, 72, 18);
+      text('Confirm', l.x + 30, l.y + l.h - 20);
       drawWindow(l.x + 96, l.y + l.h - 26, 56, 18);
       text('Reset', l.x + 112, l.y + l.h - 20);
     }
@@ -2005,7 +2180,6 @@ function drawMenu() {
     const w = 188, x = subX(w);
     const l = { x, y: 8, w, h: 124 };
     drawWindow(l.x, l.y, l.w, l.h);
-    drawMenuClose(l);
     const lines = [
       `${heroDisplayName()}  Lv.${h.lv}`,
       `HP  ${Math.floor(h.hp)}/${h.maxhp}`,
@@ -2020,7 +2194,6 @@ function drawMenu() {
     const w = 188, x = subX(w);
     const l = { x, y: 8, w, h: 76 };
     drawWindow(l.x, l.y, l.w, l.h);
-    drawMenuClose(l);
     text('QUEST', x + 12, 16, '#ffe080');
     wrapText(
       game.won ? 'Complete! You are the hero of the valley.'
@@ -2029,7 +2202,6 @@ function drawMenu() {
   } else if (m.mode === 'options') {
     const l = optionsLayout();
     drawWindow(l.x, l.y, l.w, l.h);
-    drawMenuClose(l);
     OPTIONS_MENU.forEach((s, i) => {
       if (m.cursor2 === i) drawCursor(l.x + 6, l.y + 8 + i * 16, l.w - 12, 16);
       text(optionLabel(s), l.x + 14, l.y + 12 + i * 16);
@@ -2109,7 +2281,12 @@ function drawMap() {
     drawables.push({
       base: f.ty * TS + 2, // under actors on the same tile
       draw: () => {
-        ctx.drawImage(img[ITEMS[f.id].img], f.tx * TS + 2, f.ty * TS + 2, 12, 12);
+        const it = itemDef(f.id);
+        if (it && img[it.img]) ctx.drawImage(img[it.img], f.tx * TS + 2, f.ty * TS + 2, 12, 12);
+        else {
+          ctx.fillStyle = '#ffe080';
+          ctx.fillRect(f.tx * TS + 5, f.ty * TS + 5, 6, 6);
+        }
         if (f.n > 1) text('' + f.n, f.tx * TS + 10, f.ty * TS + 8, '#ffe080');
       },
     });
@@ -2192,6 +2369,8 @@ function drawMap() {
   if (game.invOpen) drawInvPanel();
   if (game.corpseOpen) drawCorpseWin();
   if (game.logOpen) drawLog();
+  drawWorldDrag();
+  drawDropPrompt();
   if (game.dialogue) {
     const d = game.dialogue;
     const dw = W - 8 - (game.invOpen ? panelWidth() : 0);
@@ -2247,6 +2426,11 @@ function processInput(dt) {
     updateDeathPopup();
     return;
   }
+  if (game.dropPrompt) {
+    pushIntent({ t: 'moveDir', dir: null });
+    updateDropPrompt();
+    return;
+  }
   if (handleWindowShortcuts()) {
     pushIntent({ t: 'moveDir', dir: null });
     return;
@@ -2262,7 +2446,7 @@ function processInput(dt) {
     return;
   }
   // walk command: the held direction, unless a UI panel owns the keyboard
-  const captured = game.shop || game.menu || game.dialogue || game.itemPopup || game.invFocus;
+  const captured = game.shop || game.menu || game.dialogue || game.itemPopup || game.dropPrompt || game.invFocus || game.worldDrag;
   const heldDir = captured ? null : dirHeld();
   if (heldDir) { setCorpseWalkTarget(null); setFloorLootTarget(null, null); }
   pushIntent({ t: 'moveDir', dir: heldDir });
@@ -2282,6 +2466,10 @@ function processInput(dt) {
   }
   if (game.corpseOpen) { // corpse window: take loot; walking stays live
     updateCorpseWinControls((c, id) => pushIntent({ t: 'takeCorpse', tx: c.tx, ty: c.ty, id }));
+  }
+  if (!game.corpseOpen && !game.shop && !game.menu && !game.dialogue && game.invOpen && pressed(CANCEL)) {
+    closeInventory();
+    return;
   }
   if (game.invOpen) updateInvPanel(); // panel mouse works in every mode
   if (game.shop) { updateShop(); return; }
@@ -2312,9 +2500,11 @@ function processInput(dt) {
   }
 
   const cam = camPos(); // screen clicks land in the scrolled world
+  finishWorldDragFromReleases(pushIntent);
   for (const c of clicks) {
     if (game.invOpen && inPanel(c)) continue; // the panel owns its clicks
     if (game.corpseOpen && inCorpseWin(c)) continue; // handled above
+    if (game.worldDrag) continue;
     if (c.b === 2) { // right-click: interact/open nearby things, no direct lock-on
       const wxp = c.x + cam.x, wyp = c.y + cam.y;
       const wx = Math.floor(wxp / TS), wy = Math.floor(wyp / TS);
@@ -2349,6 +2539,7 @@ function processInput(dt) {
         pushIntent({ t: 'followAt', x: wx, y: wy });
       }
     } else if (c.b === 0 && !game.invDrag) {
+      if (startWorldDragAt(c)) continue;
       const wx = Math.floor((c.x + cam.x) / TS), wy = Math.floor((c.y + cam.y) / TS);
       const co = corpseAt(wx, wy);
       if (co && !co.decayed && nearHero(wx, wy) && c.dbl) { setCorpseWalkTarget(null); setFloorLootTarget(null, null); game.corpseOpen = co; sfx('Decision1'); } // open your remains
@@ -2358,6 +2549,7 @@ function processInput(dt) {
       }
     }
   }
+  finishWorldDragFromReleases(pushIntent);
   game.lootDrag = null;
   if (pressed(CANCEL)) {
     if (game.invFocus) { game.invFocus = null; sfx('Cancel1'); return; }

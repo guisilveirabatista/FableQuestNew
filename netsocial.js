@@ -136,7 +136,10 @@ function drawPartyFrames() {
 
 // ---- trade window -----------------------------------------------------------
 
-function itemLabel(id) { return (typeof ITEMS !== 'undefined' && ITEMS[id] && ITEMS[id].name) || id; }
+function tradeItemLabel(id) {
+  if (typeof itemName === 'function') return itemName(id);
+  return (typeof ITEMS !== 'undefined' && ITEMS[id] && ITEMS[id].name) || id;
+}
 
 function tradeBox() {
   const w = 372, h = 208, x = Math.floor((W - w) / 2), y = Math.floor((H - h) / 2);
@@ -164,7 +167,7 @@ function drawTradeWindow() {
   game._tradeBagHit = [];
   bag.slice(0, 8).forEach((id, i) => {
     const rx = b.x + 12 + (i % 2) * (colW), ry = by + 12 + Math.floor(i / 2) * 11;
-    const label = itemLabel(id) + ' x' + game.hero.bag[id];
+    const label = tradeItemLabel(id) + ' x' + game.hero.bag[id];
     text(label.length > 20 ? label.slice(0, 20) : label, rx, ry, '#cfe');
     game._tradeBagHit.push({ id, x: rx, y: ry, w: colW - 4, h: 10 });
   });
@@ -190,7 +193,7 @@ function drawTradeSide(side, x, y, w, title) {
   text('gold: ' + (side.gold || 0), x, ry, '#fe8'); ry += 10;
   const items = side.items || {};
   for (const id of Object.keys(items)) {
-    text('· ' + itemLabel(id) + ' x' + items[id], x, ry, '#cfe'); ry += 10;
+    text('· ' + tradeItemLabel(id) + ' x' + items[id], x, ry, '#cfe'); ry += 10;
     if (ry > y + 62) break;
   }
 }

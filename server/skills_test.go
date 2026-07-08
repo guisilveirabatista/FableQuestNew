@@ -91,6 +91,49 @@ func TestCastBoltNoTargetIsFree(t *testing.T) {
 	}
 }
 
+func TestCastNovaDoesNotRequireLock(t *testing.T) {
+	h := newHub()
+	p := heroAt("field", 15, 10)
+	p.slots[4] = "nova"
+	near := slimeAt(1, 16, 10)
+	far := slimeAt(2, 20, 10)
+	h.enemies["field"] = []*enemy{near, far}
+	mp0 := p.mp
+
+	h.castSlot(p, 4)
+
+	if near.hp >= near.maxhp {
+		t.Fatalf("nova should damage nearby enemies without a lock (hp %d/%d)", near.hp, near.maxhp)
+	}
+	if far.hp != far.maxhp {
+		t.Fatalf("nova should not damage enemies outside the area (hp %d/%d)", far.hp, far.maxhp)
+	}
+	if p.mp != mp0-skillMP["nova"] {
+		t.Fatalf("nova should cost %v MP (had %v, now %v)", skillMP["nova"], mp0, p.mp)
+	}
+	if len(h.bolts["field"]) != 9 {
+		t.Fatalf("level 1 nova should spawn a 3x3 visual area, got %d bolts", len(h.bolts["field"]))
+	}
+}
+
+func TestCastNovaExpandsAtHigherLevel(t *testing.T) {
+	h := newHub()
+	p := heroAt("field", 15, 10)
+	p.slots[4] = "nova"
+	p.skillLevels["nova"] = 3
+	edge := slimeAt(1, 17, 10)
+	h.enemies["field"] = []*enemy{edge}
+
+	h.castSlot(p, 4)
+
+	if edge.hp >= edge.maxhp {
+		t.Fatalf("leveled nova should reach the expanded 4x4 area (hp %d/%d)", edge.hp, edge.maxhp)
+	}
+	if len(h.bolts["field"]) != 16 {
+		t.Fatalf("level 3 nova should spawn a 4x4 visual area, got %d bolts", len(h.bolts["field"]))
+	}
+}
+
 func TestCastSpellRequiresCombatTarget(t *testing.T) {
 	h := newHub()
 	p := heroAt("field", 15, 10)

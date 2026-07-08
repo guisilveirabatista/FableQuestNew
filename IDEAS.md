@@ -30,3 +30,7 @@ Fix
 Players are now hard obstacles (like walls) from both client prediction and server decision views. You can't initiate (or succeed) a cross; no warp. Monsters were already correct due to update ordering; now players match.
 
 Run go test ./server (or the full suite) to verify. If you see any remaining desync in heavy contention, we can add post-step conflict resolution or sort players by ID for determinism.
+
+- Items on the floor are not displaying their names when I hover my mouse over them. They are displaying "Object object" as their name
+
+- I want to be able to drag and drop an item using mouse 1 when I'm close to them. If I'm close I hold mouse 1 on them, I start dragging. When I release mouse 1 I drop it. I can drop it as far as I want in my field of view. Same works for corpses.

@@ -469,7 +469,13 @@ function onSnapshot(m) {
 
   // floor loot and corpses are shared world entities on the current map; tag them
   // with the map id so the existing renderer/queries (drawMap, floorAt, corpseAt) work
-  game.floor = (m.floor || []).map(v => ({ map: game.mapId, id: v.id, n: v.n, tx: v.tx, ty: v.ty }));
+  game.floor = (m.floor || []).map(v => ({
+    map: game.mapId,
+    id: itemId(v),
+    n: Math.max(1, Number(v.n ?? v.N ?? 1) || 1),
+    tx: Number(v.tx ?? v.Tx),
+    ty: Number(v.ty ?? v.Ty),
+  })).filter(v => itemId(v.id) && Number.isFinite(v.tx) && Number.isFinite(v.ty));
   const openCorpse = game.corpseOpen;
   game.corpses = (m.corpses || []).map(v => ({
     map: game.mapId, tx: v.tx, ty: v.ty, name: v.name || '', items: v.items || {}, decayed: !!v.decayed,
@@ -491,7 +497,8 @@ function netFrame(frameDt) {
     return;
   }
   let uiCaptured = false;
-  const hadBlockingUi = !!(game.death || game.mapOpen || game.menu || game.shop || game.invFocus || game.itemPopup || game.chatInput || game.trade || game.playerMenu);
+  const hadBlockingUi = !!(game.death || game.mapOpen || game.menu || game.shop || game.invFocus || game.itemPopup ||
+    game.dropPrompt || game.chatInput || game.trade || game.playerMenu);
 
   // 1) input -> intents. The menu and inventory panels reuse the single-player
   //    UI code: their pushIntent() calls forward to the server (sim.js pushIntent).
@@ -506,6 +513,9 @@ function netFrame(frameDt) {
     uiCaptured = true;
   } else if (game.playerMenu) {
     updatePlayerMenu();
+    uiCaptured = true;
+  } else if (game.dropPrompt) {
+    updateDropPrompt();
     uiCaptured = true;
   } else if (typeof toggleChatWindow === 'function' && keyTapped(CHAT_TOGGLE_KEYS)) {
     toggleChatWindow();
@@ -534,7 +544,8 @@ function netFrame(frameDt) {
       game.invFocus = game.invFocus === null ? 'bag' : game.invFocus === 'bag' ? 'body' : null;
       sfx('Cursor1');
     }
-    if (game.itemPopup && (pressed(CANCEL) || pressed(CONFIRM) || clicked(0))) { game.itemPopup = null; sfx('Cancel1'); }
+    const closedItemPopup = game.itemPopup && (pressed(CANCEL) || pressed(CONFIRM) || clicked(0));
+    if (closedItemPopup) { game.itemPopup = null; sfx('Cancel1'); }
     updatePendingCorpseOpen();
     updatePendingFloorLoot((tx, ty) => netSend(net, { t: 'takeLoot', tx, ty }));
     if (game.corpseOpen && (game.corpseOpen.map !== game.mapId ||
@@ -544,12 +555,21 @@ function netFrame(frameDt) {
     }
     if (game.corpseOpen) updateCorpseWinControls((co, id) =>
       netSend(net, { t: 'takeCorpse', tx: co.tx, ty: co.ty, id }));
-    if (game.invOpen && !game.itemPopup) updateInvPanel(); // mouse drag/click -> item intents
+    if (!closedItemPopup && !game.corpseOpen && game.invOpen && pressed(CANCEL)) {
+      closeInventory();
+      uiCaptured = true;
+    } else if (game.invOpen && !game.itemPopup) updateInvPanel(); // mouse drag/click -> item intents
+  }
+  if (game.death || game.mapOpen || game.menu || game.shop || game.dropPrompt || game.chatInput || game.trade || game.playerMenu) {
+    game.worldDrag = null;
+  } else {
+    if (finishWorldDragFromReleases(obj => netSend(net, obj))) uiCaptured = true;
+    if (game.worldDrag) uiCaptured = true;
   }
 
   // movement is blocked while a panel owns the keyboard
   const captured = uiCaptured || hadBlockingUi || game.death || game.mapOpen || game.menu || game.shop ||
-    game.invFocus || game.itemPopup || game.chatInput || game.trade || game.playerMenu;
+    game.invFocus || game.itemPopup || game.dropPrompt || game.chatInput || game.trade || game.playerMenu || game.worldDrag;
   const dir = captured ? '' : (dirHeld() || '');
   if (dir !== net.lastDir) {
     net.lastDir = dir;
@@ -578,18 +598,20 @@ function netFrame(frameDt) {
         sfx('Recovery1');
         continue;
       }
-      if (!skill || !skillAllowedForClass(sk, h) || h.mp < skillCost(sk, h) || (sk !== 'heal' && !target)) { sfx('Buzzer1'); continue; }
+      if (!skill || !skillAllowedForClass(sk, h) || h.mp < skillCost(sk, h) || (skillRequiresTarget(sk) && !target)) { sfx('Buzzer1'); continue; }
       netSend(net, { t: 'cast', slot: i });
       // optimistic local effect; damage and MP spending remain server-side
       if (sk === 'spin') { game.atkCool = 1.3 / stats().aspd; game.slashFx = { t: 0, spin: true, dur: 0.3 }; sfx('Sword1'); }
       else if (sk === 'heal') { game.atkCool = 0.4; game.healFx = 0.5; sfx('Recovery1'); }
       else if (sk === 'fire') { game.atkCool = 0.4; sfx('Flame1'); }
       else if (sk === 'bolt') { game.atkCool = 0.5; sfx('Thunder4'); }
+      else if (sk === 'nova') { game.atkCool = 0.8; addNovaBolts(h); sfx('Thunder4'); }
     }
     const cam = camPos();
     for (const c of clicks) {
       if (game.invOpen && inPanel(c)) continue; // the panel owns its own clicks
       if (game.corpseOpen && inCorpseWin(c)) continue;
+      if (game.worldDrag) continue;
       const wxp = c.x + cam.x, wyp = c.y + cam.y;
       const wx = Math.floor(wxp / TS), wy = Math.floor(wyp / TS);
       if (c.b === 2) { // right-click: open context/interact targets, not lock-on
@@ -673,6 +695,7 @@ function netFrame(frameDt) {
           }
         }
       } else if (c.b === 0 && !game.invDrag) {
+        if (startWorldDragAt(c)) continue;
         const co = corpseAt(wx, wy);
         if (co && !co.decayed && nearHero(wx, wy) && c.dbl) {
           setCorpseWalkTarget(null); setFloorLootTarget(null, null);
@@ -686,6 +709,7 @@ function netFrame(frameDt) {
         }
       }
     }
+    finishWorldDragFromReleases(obj => netSend(net, obj));
     game.lootDrag = null;
   }
 

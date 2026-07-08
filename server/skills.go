@@ -1,6 +1,6 @@
 package main
 
-// Server-authoritative skills (Phase 2c), ported from sim.js: the four hotbar
+// Server-authoritative skills (Phase 2c), ported from sim.js: hotbar magic
 // skills, homing fireballs, and lightning. MP costs and cooldowns are enforced
 // here, and every hit is resolved server-side. Fireballs and bolts become shared
 // world entities streamed in snapshots so everyone sees them.
@@ -10,7 +10,7 @@ import (
 	"math/rand"
 )
 
-var skillMP = map[string]float64{"fire": 4, "heal": 6, "spin": 3, "bolt": 6}
+var skillMP = map[string]float64{"fire": 4, "heal": 6, "spin": 3, "bolt": 6, "nova": 8}
 
 func skillCost(p *Player, id string) float64 {
 	base, ok := skillMP[id]
@@ -22,6 +22,14 @@ func skillCost(p *Player, id string) float64 {
 
 func skillMagicDamage(p *Player, id string, roll int) int {
 	return statsOf(p).matk*2 + roll + (skillLevel(p, id)-1)*4
+}
+
+func skillAreaDamage(p *Player, id string, roll int) int {
+	return statsOf(p).matk + roll + (skillLevel(p, id)-1)*3
+}
+
+func skillRequiresTarget(id string) bool {
+	return id != "heal" && id != "nova"
 }
 
 type projectile struct {
@@ -58,7 +66,7 @@ func (h *Hub) castSlot(p *Player, i int) {
 	if p.atkCool > 0 || cost <= 0 || !skillAllowedForClass(p.class, id) || p.mp < cost {
 		return
 	}
-	if id != "heal" && h.liveEnemyLock(p) == nil && h.livePvpTarget(p) == nil {
+	if skillRequiresTarget(id) && h.liveEnemyLock(p) == nil && h.livePvpTarget(p) == nil {
 		return
 	}
 	ok := false
@@ -71,6 +79,8 @@ func (h *Hub) castSlot(p *Player, i int) {
 		ok = h.castSpin(p)
 	case "bolt":
 		ok = h.castBolt(p)
+	case "nova":
+		ok = h.castNova(p)
 	}
 	if ok {
 		p.mp -= cost
@@ -157,6 +167,77 @@ func (h *Hub) castBolt(p *Player) bool {
 	p.atkCool = 0.5
 	h.bolts[p.mapID] = append(h.bolts[p.mapID], &bolt{x: target.px + 8, y: target.py + 4})
 	h.pvpHit(p, target, skillMagicDamage(p, "bolt", rand.Intn(6)), false, true)
+	return true
+}
+
+func novaSpan(p *Player) int {
+	if skillLevel(p, "nova") >= 3 {
+		return 4
+	}
+	return 3
+}
+
+func novaBounds(p *Player) (minTx, maxTx, minTy, maxTy int) {
+	span := novaSpan(p)
+	left := (span - 1) / 2
+	right := span - 1 - left
+	up, down := left, right
+	if span%2 == 0 {
+		switch p.dir {
+		case "left":
+			left, right = 2, 1
+		case "right":
+			left, right = 1, 2
+		}
+		switch p.dir {
+		case "up":
+			up, down = 2, 1
+		case "down":
+			up, down = 1, 2
+		}
+	}
+	return p.tx - left, p.tx + right, p.ty - up, p.ty + down
+}
+
+func inNovaBounds(p *Player, tx, ty int) bool {
+	minTx, maxTx, minTy, maxTy := novaBounds(p)
+	return tx >= minTx && tx <= maxTx && ty >= minTy && ty <= maxTy
+}
+
+func (h *Hub) addNovaBolts(p *Player) {
+	minTx, maxTx, minTy, maxTy := novaBounds(p)
+	for ty := minTy; ty <= maxTy; ty++ {
+		for tx := minTx; tx <= maxTx; tx++ {
+			if tx >= 0 && ty >= 0 && tx < MW && ty < MH {
+				h.bolts[p.mapID] = append(h.bolts[p.mapID], &bolt{x: float64(tx*TS) + 8, y: float64(ty*TS) + 8})
+			}
+		}
+	}
+}
+
+func (h *Hub) castNova(p *Player) bool {
+	p.atkCool = 0.8
+	h.addNovaBolts(p)
+	for _, en := range h.enemies[p.mapID] {
+		if en.dying > 0 || en.dead {
+			continue
+		}
+		tx := int(math.Floor((en.px + 8) / TS))
+		ty := int(math.Floor((en.py + 8) / TS))
+		if inNovaBounds(p, tx, ty) {
+			h.hitEnemy(p, en, skillAreaDamage(p, "nova", rand.Intn(5)), false)
+		}
+	}
+	for _, o := range h.players {
+		if o.mapID != p.mapID || !h.canPvp(p, o) {
+			continue
+		}
+		tx := int(math.Floor((o.px + 8) / TS))
+		ty := int(math.Floor((o.py + 8) / TS))
+		if inNovaBounds(p, tx, ty) {
+			h.pvpHit(p, o, skillAreaDamage(p, "nova", rand.Intn(5)), false, true)
+		}
+	}
 	return true
 }
 

@@ -233,7 +233,7 @@ func initHero(p *Player) {
 		p.cloth = defaultCloth
 	}
 	p.slots = defaultSlotsForClass("") // skill/item hotbar (keys 1-5)
-	p.skillLevels = map[string]int{"fire": 1, "heal": 1, "spin": 1, "bolt": 1}
+	p.skillLevels = map[string]int{"fire": 1, "heal": 1, "spin": 1, "bolt": 1, "nova": 1}
 	p.skillPoints = 0
 	p.bag = map[string]int{"potion": 3}
 	p.equip = map[string]string{}
@@ -367,10 +367,13 @@ func (h *Hub) killEnemy(p *Player, en *enemy) {
 		if rand.Float64() >= 0.7 {
 			id = "potion"
 		}
-		if p.autoloot {
+		if p.autoloot && canCarryItem(p, id, 1) {
 			addItem(p, id, 1)
 			p.logMsg(fmt.Sprintf("Looted %s x1", itemName(id)))
 		} else {
+			if p.autoloot {
+				warnCarryTooMuch(p)
+			}
 			h.dropFloor(p.mapID, id, 1, en.tx, en.ty)
 		}
 	}

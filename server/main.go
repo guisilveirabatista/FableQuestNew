@@ -51,6 +51,8 @@ type inMsg struct {
 	V     bool    `json:"v"`     // toggle value (e.g. autoloot)
 	Tx    int     `json:"tx"`    // tile for takeLoot/takeCorpse
 	Ty    int     `json:"ty"`
+	ToTx  int     `json:"toTx"` // destination tile for drag/drop world entities
+	ToTy  int     `json:"toTy"`
 	Key   string  `json:"key"` // attribute key for spendAttr
 	Who   string  `json:"who"` // shop id for buy
 	N     int     `json:"n"`   // item quantity for buy/sell
@@ -420,14 +422,14 @@ func newHub() *Hub {
 	return &Hub{
 		players:         map[string]*Player{},
 		frozenPlayerPos: nil,
-		enemies:     map[string][]*enemy{},
-		spawnT:      map[string]float64{},
-		projectiles: map[string][]*projectile{},
-		bolts:       map[string][]*bolt{},
-		floor:       map[string][]*floorItem{},
-		corpses:     map[string][]*corpse{},
-		parties:     map[int]*party{},
-		trades:      map[int]*trade{},
+		enemies:         map[string][]*enemy{},
+		spawnT:          map[string]float64{},
+		projectiles:     map[string][]*projectile{},
+		bolts:           map[string][]*bolt{},
+		floor:           map[string][]*floorItem{},
+		corpses:         map[string][]*corpse{},
+		parties:         map[int]*party{},
+		trades:          map[int]*trade{},
 	}
 }
 
@@ -1055,11 +1057,16 @@ func (h *Hub) applyIntent(p *Player, m inMsg) {
 		unequipSlot(p, m.Bslot)
 	case "dropItem":
 		if p.bag[m.Id] > 0 {
-			removeItem(p, m.Id, 1)
-			h.dropFloor(p.mapID, m.Id, 1, p.tx, p.ty)
+			n := clampInt(m.N, 1, p.bag[m.Id])
+			removeItem(p, m.Id, n)
+			h.dropFloor(p.mapID, m.Id, n, p.tx, p.ty)
 		}
 	case "takeLoot":
 		h.pickupAt(p, m.Tx, m.Ty)
+	case "moveFloorItem":
+		h.moveFloorItem(p, m.Tx, m.Ty, m.ToTx, m.ToTy, m.Id)
+	case "moveCorpse":
+		h.moveCorpse(p, m.Tx, m.Ty, m.ToTx, m.ToTy)
 	case "takeCorpse":
 		h.takeCorpse(p, m.Tx, m.Ty, m.Id)
 	case "spendAttr":

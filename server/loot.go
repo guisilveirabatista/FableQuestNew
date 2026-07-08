@@ -40,9 +40,33 @@ func near(p *Player, tx, ty int) bool {
 	return abs(tx-p.tx) <= 1 && abs(ty-p.ty) <= 1
 }
 
+func lootDropTileAllowed(mapID string, tx, ty int) bool {
+	return !blocked(mapID, tx, ty)
+}
+
+func inPlayerView(p *Player, tx, ty int) bool {
+	if p.aoiW <= 0 || p.aoiH <= 0 {
+		return true
+	}
+	return abs(tx-p.tx) <= p.aoiW && abs(ty-p.ty) <= p.aoiH
+}
+
 // pickupAt gathers every floor stack on a tile into the player's bag, if in reach.
 func (h *Hub) pickupAt(p *Player, tx, ty int) bool {
 	if !near(p, tx, ty) {
+		return false
+	}
+	stacks := map[string]int{}
+	for _, f := range h.floor[p.mapID] {
+		if f.tx == tx && f.ty == ty {
+			stacks[f.id] += f.n
+		}
+	}
+	if len(stacks) == 0 {
+		return false
+	}
+	if !canCarryStacks(p, stacks) {
+		warnCarryTooMuch(p)
 		return false
 	}
 	got := false
@@ -60,6 +84,26 @@ func (h *Hub) pickupAt(p *Player, tx, ty int) bool {
 	return got
 }
 
+func (h *Hub) moveFloorItem(p *Player, fromTx, fromTy, toTx, toTy int, want string) bool {
+	if !near(p, fromTx, fromTy) || !lootDropTileAllowed(p.mapID, toTx, toTy) || !inPlayerView(p, toTx, toTy) {
+		return false
+	}
+	list := h.floor[p.mapID]
+	for i, f := range list {
+		if f.tx != fromTx || f.ty != fromTy || (want != "" && f.id != want) || f.n <= 0 {
+			continue
+		}
+		if fromTx == toTx && fromTy == toTy {
+			return true
+		}
+		id, n := f.id, f.n
+		h.floor[p.mapID] = append(list[:i], list[i+1:]...)
+		h.dropFloor(p.mapID, id, n, toTx, toTy)
+		return true
+	}
+	return false
+}
+
 // dropCorpse turns a dead player's whole bag into a corpse at the fall site.
 // Even an empty pack leaves a body, so players can still open it until decay.
 func (h *Hub) dropCorpse(mapID string, tx, ty int, name string, bag map[string]int) {
@@ -70,6 +114,20 @@ func (h *Hub) dropCorpse(mapID string, tx, ty int, name string, bag map[string]i
 		}
 	}
 	h.corpses[mapID] = append(h.corpses[mapID], &corpse{tx: tx, ty: ty, name: name, items: items})
+}
+
+func (h *Hub) moveCorpse(p *Player, fromTx, fromTy, toTx, toTy int) bool {
+	if !near(p, fromTx, fromTy) || !lootDropTileAllowed(p.mapID, toTx, toTy) || !inPlayerView(p, toTx, toTy) {
+		return false
+	}
+	for _, c := range h.corpses[p.mapID] {
+		if c.tx == fromTx && c.ty == fromTy {
+			c.tx = toTx
+			c.ty = toTy
+			return true
+		}
+	}
+	return false
 }
 
 func (h *Hub) updateCorpses(dt float64) {
@@ -112,10 +170,18 @@ func (h *Hub) takeCorpse(p *Player, tx, ty int, want string) bool {
 				if n <= 0 {
 					return false
 				}
+				if !canCarryItem(p, want, n) {
+					warnCarryTooMuch(p)
+					return false
+				}
 				addItem(p, want, n)
 				p.logMsg(fmt.Sprintf("Looted %s x%d", itemName(want), n))
 				delete(c.items, want)
 				return true
+			}
+			if !canCarryStacks(p, c.items) {
+				warnCarryTooMuch(p)
+				return false
 			}
 			for id, n := range c.items {
 				addItem(p, id, n)

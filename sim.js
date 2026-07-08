@@ -60,7 +60,7 @@ function normalizeHeroSlots(h = game.hero) {
 }
 function normalizeSkillProgress(h = game.hero) {
   if (!h.skillLevels) h.skillLevels = {};
-  ['fire', 'heal', 'spin', 'bolt'].forEach(id => {
+  ['fire', 'heal', 'spin', 'bolt', 'nova'].forEach(id => {
     h.skillLevels[id] = Math.max(1, Math.min(MAX_SKILL_LEVEL, h.skillLevels[id] || 1));
   });
   h.skillPoints = Math.max(0, h.skillPoints || 0);
@@ -107,7 +107,7 @@ function resetGame() {
     kills: 0,
     slots: defaultSlotsForClass('Knight'), // skill/item hotbar, keys 1-5
     skillPoints: 0,
-    skillLevels: { fire: 1, heal: 1, spin: 1, bolt: 1 },
+    skillLevels: { fire: 1, heal: 1, spin: 1, bolt: 1, nova: 1 },
     attr: { ...BASE_ATTR },
     points: 0, // attribute points to spend (3 per level-up)
     bag: { potion: 3 },
@@ -144,8 +144,10 @@ function resetGame() {
   game.invDrag = null;
   game.bagScroll = 0;
   game.itemPopup = null;
+  game.dropPrompt = null;
   game.corpseOpen = null;
   game.lootDrag = null;
+  game.worldDrag = null;
   game.talkingNpc = null;
   game.mapOpen = false;
   game.minimapOpen = false;
@@ -576,11 +578,14 @@ function killEnemy(en) {
   logMsg(`Defeated ${e.name}: +${e.exp} EXP, +${e.gold} gold`);
   if (Math.random() < 0.25) { // loot: autoloot pockets it, otherwise it falls
     const id = Math.random() < 0.7 ? 'bread' : 'potion';
-    if (game.autoloot) {
+    if (game.autoloot && canCarryItem(id, 1)) {
       addItem(id, 1);
       logMsg(`Looted ${ITEMS[id].name} x1`);
       sfx('Item1');
-    } else dropFloor(id, 1, en.tx, en.ty);
+    } else {
+      if (game.autoloot) warnCarryTooMuch();
+      dropFloor(id, 1, en.tx, en.ty);
+    }
   }
   if (h.exp >= expToNextLevel(h.lv)) {
     h.exp -= expToNextLevel(h.lv);
@@ -650,7 +655,9 @@ const SKILLS = {
   heal: { name: 'Heal', mp: 6, desc: 'Mend your wounds for 15 HP.', cast: castHeal },
   spin: { name: 'Spin', mp: 3, desc: 'Sword sweep hitting all around you.', cast: castSpin },
   bolt: { name: 'Bolt', mp: 6, desc: 'Lightning strikes your lock or the nearest foe.', cast: castBolt },
+  nova: { name: 'Nova', mp: 8, desc: 'Area magic around you. No lock required.', cast: castNova },
 };
+function skillRequiresTarget(id) { return id !== 'heal' && id !== 'nova'; }
 function castSlot(i) {
   const h = game.hero, id = h.slots[i];
   if (game.atkCool > 0) return;
@@ -660,7 +667,7 @@ function castSlot(i) {
     return;
   }
   if (!SKILLS[id] || !skillAllowedForClass(id, h) || h.mp < skillCost(id, h)) { sfx('Buzzer1'); return; }
-  if (id !== 'heal' && !liveEnemyLock()) { sfx('Buzzer1'); return; }
+  if (skillRequiresTarget(id) && !liveEnemyLock()) { sfx('Buzzer1'); return; }
   if (SKILLS[id].cast()) h.mp -= skillCost(id, h);
   else sfx('Buzzer1');
 }
@@ -714,6 +721,48 @@ function castBolt() {
   game.bolts.push({ x: t.px + 8, y: t.py + 4, t: 0 });
   sfx('Thunder4');
   hitEnemy(t, stats().matk * 2 + rnd(6) + (skillLevel('bolt', h) - 1) * 4);
+  return true;
+}
+function novaSpan(h = game.hero) {
+  return skillLevel('nova', h) >= 3 ? 4 : 3;
+}
+function novaBounds(h = game.hero) {
+  const span = novaSpan(h);
+  let left = Math.floor((span - 1) / 2), right = span - 1 - left;
+  let up = left, down = right;
+  if (span % 2 === 0) {
+    if (h.dir === 'left') { left = 2; right = 1; }
+    else if (h.dir === 'right') { left = 1; right = 2; }
+    if (h.dir === 'up') { up = 2; down = 1; }
+    else if (h.dir === 'down') { up = 1; down = 2; }
+  }
+  return { minTx: h.tx - left, maxTx: h.tx + right, minTy: h.ty - up, maxTy: h.ty + down };
+}
+function inNovaBounds(tx, ty, h = game.hero) {
+  const b = novaBounds(h);
+  return tx >= b.minTx && tx <= b.maxTx && ty >= b.minTy && ty <= b.maxTy;
+}
+function addNovaBolts(h = game.hero) {
+  const b = novaBounds(h);
+  for (let ty = b.minTy; ty <= b.maxTy; ty++) {
+    for (let tx = b.minTx; tx <= b.maxTx; tx++) {
+      if (tx >= 0 && ty >= 0 && tx < MW && ty < MH) game.bolts.push({ x: tx * TS + 8, y: ty * TS + 8, t: 0 });
+    }
+  }
+}
+function novaDamage(h = game.hero) {
+  return stats().matk + rnd(5) + (skillLevel('nova', h) - 1) * 3;
+}
+function castNova() {
+  const h = game.hero;
+  game.atkCool = 0.8;
+  addNovaBolts(h);
+  sfx('Thunder4');
+  for (const en of game.enemies) {
+    if (en.dying > 0 || en.dead) continue;
+    const tx = Math.floor((en.px + 8) / TS), ty = Math.floor((en.py + 8) / TS);
+    if (inNovaBounds(tx, ty, h)) hitEnemy(en, novaDamage(h));
+  }
   return true;
 }
 function updateProjectiles(dt) {
@@ -820,6 +869,23 @@ function bagWeight() {
 }
 function capacity() { const h = game.hero; return 15 + h.lv * 2 + h.attr.str * 2; }
 function overloaded() { return bagWeight() > capacity(); }
+const CARRY_TOO_MUCH_MSG = "You're carrying too much weight already.";
+function itemStackWeight(id, n) {
+  const it = ITEMS[id];
+  return it ? it.w * Math.max(0, n || 0) : Infinity;
+}
+function canCarryItem(id, n) {
+  return bagWeight() + itemStackWeight(id, n) <= capacity();
+}
+function canCarryStacks(stacks) {
+  let w = bagWeight();
+  for (const [id, n] of Object.entries(stacks || {})) w += itemStackWeight(id, n);
+  return w <= capacity();
+}
+function warnCarryTooMuch() {
+  logMsg(CARRY_TOO_MUCH_MSG);
+  sfx('Buzzer1');
+}
 function addItem(id, n) {
   game.hero.bag[id] = (game.hero.bag[id] || 0) + n;
 }
@@ -853,6 +919,13 @@ function floorAt(tx, ty) {
 }
 function pickupAt(tx, ty) {
   const here = floorAt(tx, ty);
+  if (!here.length) return false;
+  const stacks = {};
+  for (const f of here) stacks[f.id] = (stacks[f.id] || 0) + f.n;
+  if (!canCarryStacks(stacks)) {
+    warnCarryTooMuch();
+    return false;
+  }
   for (const f of here) {
     addItem(f.id, f.n);
     addPop(`+${f.n} ${ITEMS[f.id].name}`, tx * TS + 8, ty * TS - 6, '#9f9');
@@ -865,6 +938,35 @@ function pickupAt(tx, ty) {
   }
   return false;
 }
+function simItemId(id, depth = 0) {
+  if (depth > 3) return '';
+  if (typeof id === 'string') {
+    const key = id.trim();
+    return key && key !== '[object Object]' && key.toLowerCase() !== 'object object' ? key : '';
+  }
+  if (id && typeof id === 'object') {
+    for (const k of ['id', 'Id', 'ID', 'item', 'itemId', 'ItemId', 'name', 'Name']) {
+      const key = simItemId(id[k], depth + 1);
+      if (key) return key;
+    }
+    return '';
+  }
+  return id == null ? '' : String(id);
+}
+function moveFloorItem(fromTx, fromTy, toTx, toTy, id) {
+  const want = simItemId(id);
+  if (![fromTx, fromTy, toTx, toTy].every(Number.isFinite)) return false;
+  if (!nearHero(fromTx, fromTy) || isBlocked(toTx, toTy)) return false;
+  const i = game.floor.findIndex(f => f.map === game.mapId && f.tx === fromTx && f.ty === fromTy &&
+    (!want || simItemId(f.id) === want));
+  if (i < 0) return false;
+  if (fromTx === toTx && fromTy === toTy) return true;
+  const f = game.floor[i], movedId = simItemId(f.id), n = f.n;
+  game.floor.splice(i, 1);
+  dropFloor(movedId, n, toTx, toTy);
+  sfx('Cancel1');
+  return true;
+}
 function nearHero(tx, ty) { // same tile or adjacent (loot reach)
   return Math.abs(tx - game.hero.tx) <= 1 && Math.abs(ty - game.hero.ty) <= 1;
 }
@@ -874,12 +976,27 @@ function corpseNear() {
 function corpseAt(tx, ty) {
   return game.corpses.find(c => c.map === game.mapId && c.tx === tx && c.ty === ty);
 }
+function moveCorpse(fromTx, fromTy, toTx, toTy) {
+  if (![fromTx, fromTy, toTx, toTy].every(Number.isFinite)) return false;
+  if (!nearHero(fromTx, fromTy) || isBlocked(toTx, toTy)) return false;
+  const c = corpseAt(fromTx, fromTy);
+  if (!c) return false;
+  c.tx = toTx;
+  c.ty = toTy;
+  sfx('Cancel1');
+  return true;
+}
 function takeFromCorpse(c, id) {
-  if (c.decayed || !c.items[id]) return;
+  if (c.decayed || !c.items[id]) return false;
+  if (!canCarryItem(id, c.items[id])) {
+    warnCarryTooMuch();
+    return false;
+  }
   addItem(id, c.items[id]);
   addPop(`+${c.items[id]} ${ITEMS[id].name}`, game.hero.px + 8, game.hero.py - 12, '#9f9');
   delete c.items[id];
   sfx('Item1');
+  return true;
 }
 
 // ---------------------------------------------------------------- shops
@@ -923,6 +1040,7 @@ function shopBuy(who, id, n = 1) {
   if (!it || !shopInStock(who, id)) { sfx('Buzzer1'); return; }
   const total = it.price * amount;
   if (h.gold < total) { sfx('Buzzer1'); return; }
+  if (!canCarryItem(id, amount)) { warnCarryTooMuch(); return; }
   h.gold -= total;
   addItem(id, amount);
   sfx('Item1');
@@ -1041,11 +1159,22 @@ function applyIntent(it) {
     case 'unequip':
       if (h.equip[it.bslot]) { unequipSlot(it.bslot); sfx('Cancel1'); } else sfx('Buzzer1'); break;
     case 'dropItem':
-      if (h.bag[it.id] > 0) { removeItem(it.id, 1); dropFloor(it.id, 1, h.tx, h.ty); sfx('Cancel1'); } break;
+      if (h.bag[it.id] > 0) {
+        const n = Math.max(1, Math.min(h.bag[it.id], Math.floor(it.n || 1)));
+        removeItem(it.id, n);
+        dropFloor(it.id, n, h.tx, h.ty);
+        sfx('Cancel1');
+      }
+      break;
     case 'takeLoot': pickupAt(it.tx, it.ty); break;
+    case 'moveFloorItem': moveFloorItem(it.tx, it.ty, it.toTx, it.toTy, it.id); break;
+    case 'moveCorpse': moveCorpse(it.tx, it.ty, it.toTx, it.toTy); break;
     case 'takeCorpse':
       if (game.corpseOpen) {
-        if (it.id === '*') Object.keys(game.corpseOpen.items).forEach(id => takeFromCorpse(game.corpseOpen, id));
+        if (it.id === '*') {
+          if (!canCarryStacks(game.corpseOpen.items)) warnCarryTooMuch();
+          else Object.keys(game.corpseOpen.items).forEach(id => takeFromCorpse(game.corpseOpen, id));
+        }
         else if (game.corpseOpen.items[it.id]) takeFromCorpse(game.corpseOpen, it.id);
       }
       break;

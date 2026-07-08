@@ -55,6 +55,40 @@ func itemName(id string) string {
 	return id
 }
 
+const carryTooMuchMsg = "You're carrying too much weight already."
+
+func itemStackWeight(id string, n int) (float64, bool) {
+	it, ok := items[id]
+	if !ok {
+		return 0, false
+	}
+	return it.w * float64(n), true
+}
+
+func canCarryItem(p *Player, id string, n int) bool {
+	if n <= 0 {
+		return true
+	}
+	w, ok := itemStackWeight(id, n)
+	return ok && bagWeight(p)+w <= capacity(p)
+}
+
+func canCarryStacks(p *Player, stacks map[string]int) bool {
+	w := bagWeight(p)
+	for id, n := range stacks {
+		add, ok := itemStackWeight(id, n)
+		if !ok {
+			return false
+		}
+		w += add
+	}
+	return w <= capacity(p)
+}
+
+func warnCarryTooMuch(p *Player) {
+	p.logMsg(carryTooMuchMsg)
+}
+
 var bodySlots = []string{"head", "main", "torso", "off", "legs", "acc1", "boots", "acc2"}
 
 // shop stock (the client opens the shop UI; the server validates the purchase).
@@ -84,6 +118,10 @@ func shopBuy(p *Player, who, id string, n int) {
 	}
 	price := it.price * n
 	if p.gold < price {
+		return
+	}
+	if !canCarryItem(p, id, n) {
+		warnCarryTooMuch(p)
 		return
 	}
 	p.gold -= price

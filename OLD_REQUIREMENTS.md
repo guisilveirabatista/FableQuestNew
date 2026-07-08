@@ -156,3 +156,31 @@ Improvements
 - Like with the body, any object that I can interact with the mouse 2 button and that requires the player to be with the character close to it, like picking up an item from the floow, should walk up to the item when clicking mouse 2.
 
 - When the items are on the floor, and I hover my mouse over name, their names are appearing as "Object", instead of the real name of the item
+
+- When you are above your weight limit you can't pick up any more items or loot. If you try it, you should get a warning "You're carrying too much weight already" or a better message if you can think of one.
+
+- I should also be able to close the Inventory with the "Esc" button
+
+- The skill window should follow the same way the attribute window works with the button "Confirm" and "Reset"
+
+- You can remove the "Close" button from the sub-menus from the main menu
+
+- You can remove the button "Assign skill to slot". 
+
+- When I click on a skill to drag to a slot, the icon of the skill should be just below my cursor. Right now it's off to the side a bit, makes it harder to drag it to the slot.
+
+- You can remove that selection rectangle that highlights/selects a skill when I pass my mouse over it. Also remove it from the keyboard navigation from the skills window. There should be not selection of skill on that way.
+
+- Clicking with mouse 2 on the slots inside the skill window clears the slot
+
+- Like in the skills window, the attributes window also does not need the selection rectangle with the mouse or keyboard.
+
+- When I'm dropping an item on the floor from my inventory which I have more than one unit, I should be prompted a small window with buttons to add or subtract the amount I want to drop, and an "all" button
+
+- I just realised the "Confirm" buttons don't need to appear when you didn't change anything on attributes or skills. it should appear the same way the reset button appears. 
+
+- The icon of the skill is better than before, but is still off to the bottom of the mouse cursor, can you fix it
+
+- Can you remove the row hover/keyboard selection behavior from the shops buying/selling windows as well
+
+- Can you implement an area based magic attack? This one does not need a lock on to be in use, it will affect all the squares around the player. as I level up this area attack, it can take up more squares, up to 4x4.
