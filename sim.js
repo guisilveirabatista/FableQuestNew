@@ -97,6 +97,7 @@ function resetGame() {
   game.healFx = 0;
   game.lock = null;
   game.follow = false;
+  game.followEngaged = false;
   game.path = null;
   game.moveDir = null;   // current walk command (set by the 'moveDir' intent)
   game.intents = [];      // queued player actions, drained each tick in stepWorld
@@ -238,6 +239,8 @@ function switchMap(to, tx, ty) {
   game.enemies = [];
   game.spawnT = 1;
   game.lock = null;
+  game.follow = false;
+  game.followEngaged = false;
   game.path = null;
   game.projectiles = [];
   game.bolts = [];
@@ -499,6 +502,7 @@ function die(cause) {
   game.moveDir = null;
   game.lock = null;
   game.follow = false;
+  game.followEngaged = false;
   addPop('You died!', h.px + 8, h.py - 14, '#f76');
 }
 
@@ -955,26 +959,38 @@ function applyIntent(it) {
     case 'moveDir':                                   // held-key walk command
       game.moveDir = it.dir; if (it.dir) game.path = null; break;
     case 'moveTo':                                    // click-to-move (cancels follow)
-      game.follow = false; startPathTo(it.tx, it.ty); break;
+      game.follow = false; game.followEngaged = false; startPathTo(it.tx, it.ty); break;
     case 'confirm':                                   // talk/read only; melee is lock-on automatic
       if (interact()) game.path = null;
       break;
     case 'cast': castSlot(it.slot); break;
     case 'cycleLock': cycleLock(); break;
-    case 'lockAt': {                                  // Ctrl+click: lock for attack
+    case 'lockAt': {                                  // Ctrl+click: lock for attack (no follow); Ctrl+click same target again to unlock/release
       const en = enemyAtPoint(it.x, it.y);
-      game.lock = en || null; game.follow = false;
-      if (en) sfx('Cursor1');
+      if (en && game.lock === en) {
+        game.lock = null;
+        game.follow = false;
+        game.followEngaged = false;
+        sfx('Cancel1');
+      } else {
+        game.lock = en || null; game.follow = false; game.followEngaged = false;
+        if (en) sfx('Cursor1');
+      }
       break;
     }
-    case 'followAt': {                                // alt+click: lock and follow
+    case 'followAt': {                                // Alt+click: follow only; Ctrl+Alt: follow+attack (lock and follow)
       const en = enemyAtPoint(it.x, it.y);
-      if (en) { game.lock = en; game.follow = true; sfx('Decision1'); }
+      if (en) { game.lock = en; game.follow = true; game.followEngaged = false; sfx('Decision1'); }
       break;
     }
     case 'toggleFollow':
-      if (game.lock) { game.follow = !game.follow; sfx(game.follow ? 'Decision1' : 'Cancel1'); }
+      if (game.lock) { game.follow = !game.follow; if (!game.follow) game.followEngaged = false; sfx(game.follow ? 'Decision1' : 'Cancel1'); }
       else sfx('Buzzer1');
+      break;
+    case 'unlock':
+      game.lock = null;
+      game.follow = false;
+      game.followEngaged = false;
       break;
     case 'useItem': if (!useItem(it.id)) sfx('Buzzer1'); break;
     case 'equip': if (!equipTo(it.id, it.bslot)) sfx('Buzzer1'); break;
@@ -1032,7 +1048,7 @@ function advanceWorld(dt) {
   updateProjectiles(dt);
   game.bolts.forEach(b => b.t += dt);
   game.bolts = game.bolts.filter(b => b.t < 0.25);
-  if (game.lock && (game.lock.dead || game.lock.dying > 0)) { game.lock = null; game.follow = false; }
+  if (game.lock && (game.lock.dead || game.lock.dying > 0)) { game.lock = null; game.follow = false; game.followEngaged = false; }
   faceFollowTargetIfInReach();
   // locked on and in reach: the sword strikes by itself, menus or not
   if (game.lock && game.atkCool <= 0) {
@@ -1049,7 +1065,7 @@ function liveFollowLock() {
 }
 function followLockInReach(en) {
   const h = game.hero, dx = en.tx - h.tx, dy = en.ty - h.ty;
-  return Math.abs(dx) <= 1 && Math.abs(dy) <= 1 && !(dx !== 0 && dy !== 0);
+  return Math.abs(dx) <= 1 && Math.abs(dy) <= 1; // one square around (incl. diagonal): in "reach" for follow facing
 }
 function faceFollowTargetIfInReach() {
   const h = game.hero, en = liveFollowLock();
@@ -1125,7 +1141,14 @@ function stepHero(dt) {
       const en = game.lock;
       const dx = en.tx - h.tx, dy = en.ty - h.ty;
       h.dir = faceToward(en);
-      if (Math.max(Math.abs(dx), Math.abs(dy)) > 1 || (dx !== 0 && dy !== 0)) {
+      const within = Math.max(Math.abs(dx), Math.abs(dy)) <= 1;
+      if (within && game.followEngaged) {
+        // just face, stop chasing (rule active after first close)
+      } else {
+        // chase if far, or on initial follow (even if within)
+        if (within) {
+          game.followEngaged = true;
+        }
         const hd = dx > 0 ? 'right' : 'left', vd = dy > 0 ? 'down' : 'up';
         const dirs = Math.abs(dx) > Math.abs(dy) ? [hd, vd] : [vd, hd];
         for (const fd of dirs) {

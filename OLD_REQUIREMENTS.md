@@ -128,3 +128,13 @@ Improvements
 - The trade with other players is broken. The buttons are out of bundaries on the right of the trade window. I shouldn't be able to interact with other elements of the game when this window is open. There is also something wrong that if I have the trade window open and click anywhere on the window, it start adding gold to the trade, which is strange.
 - The menu with the shop NPCs should work the same way as the interacting with players. You can remove the button cancel, but leave Buy and Sell when I click with the right button on a shop owner.
 - Find a better place for the sprite of the character in the character creation screen.
+
+- I figured out a better following system. When the player or monster is just one square distance around me, and I have follow mode activated, I don't keep following causing the other player or monster walking to be blocked. I rather just turn my body to the direction where the player monster is. As soon as they are more than one square of distance of me, I start following again to close the distance. Can you make this refactoring to this system?
+- Player should be notified when the other player declines a trade
+
+- When someone sends a message on the chat, no matter if it's global, party or direct message, their name should come in front of the message
+
+- I would like another refactor. Instead of Alt + mouse 1 creating a follow + attack, I want it to be when the user holds Ctrl + Alt + presses mouse 1 to activate "follow and attack". This will keep the battle system consistent for both pvp and pvm.
+
+- Alt + mouse 1 should follow only. But you can use this anywhere, even outside combat zones.
+- A previous changed I asked to only start following when the other player/monster being followed is more than one square distance. However, the first time I click to follow them, this rule does not apply. Only after I already closed distance, this rule activates. This hopefully will solve a bug. 

@@ -182,23 +182,23 @@ func sign(v float64) float64 {
 
 // followDir returns the step the player should take to chase its locked target,
 // or "" when it's already within one square (just face, no chase) or has no clear step.
-// When within one square and follow active, we face only (avoids blocking the target's walk);
-// chase resumes automatically as soon as target is more than one square away.
-// (ported from sim.js stepHero's follow branch). Follow mode is set by Ctrl+Alt+click / F.
+// The within-1 stop (to avoid blocking) is bypassed on the *first* follow click (followEngaged=false);
+// it only activates after we've closed distance once. Then resume only if >1 away.
+// (ported from sim.js stepHero's follow branch). Follow mode is set by Ctrl+Alt+click / F (or Alt for follow-only).
 func (h *Hub) followDir(p *Player) string {
 	if p.followTarget != "" {
 		o := h.players[p.followTarget]
 		if o == nil || o.dead || o.mapID != p.mapID {
 			p.followTarget = ""
 			if p.lockID == 0 && p.pvpTarget == "" {
-				p.follow = false
+				p.follow, p.followEngaged = false, false
 			}
 			return ""
 		}
 		dx, dy := o.tx-p.tx, o.ty-p.ty
-		if abs(dx) <= 1 && abs(dy) <= 1 {
+		if abs(dx) <= 1 && abs(dy) <= 1 && p.followEngaged {
 			p.dir = faceTowardPlayer(p, o)
-			return "" // one square around: just face (don't chase, to avoid blocking target's movement); resume chase only when farther
+			return "" // one square around: just face (don't chase...); rule activates only after first close
 		}
 		hd, vd := "left", "up"
 		if dx > 0 {
@@ -224,6 +224,10 @@ func (h *Hub) followDir(p *Player) string {
 				continue
 			}
 			return fd
+		}
+		if abs(dx) <= 1 && abs(dy) <= 1 {
+			p.followEngaged = true
+			p.dir = faceTowardPlayer(p, o)
 		}
 		return ""
 	}
@@ -233,9 +237,9 @@ func (h *Hub) followDir(p *Player) string {
 			return ""
 		}
 		dx, dy := o.tx-p.tx, o.ty-p.ty
-		if abs(dx) <= 1 && abs(dy) <= 1 {
+		if abs(dx) <= 1 && abs(dy) <= 1 && p.followEngaged {
 			p.dir = faceTowardPlayer(p, o)
-			return "" // one square around: just face (don't chase, to avoid blocking target's movement); resume chase only when farther
+			return "" // one square around: just face (don't chase...); rule activates only after first close
 		}
 		hd, vd := "left", "up"
 		if dx > 0 {
@@ -262,6 +266,10 @@ func (h *Hub) followDir(p *Player) string {
 			}
 			return fd
 		}
+		if abs(dx) <= 1 && abs(dy) <= 1 {
+			p.followEngaged = true
+			p.dir = faceTowardPlayer(p, o)
+		}
 		return ""
 	}
 	en := h.enemyByID(p.mapID, p.lockID)
@@ -269,9 +277,9 @@ func (h *Hub) followDir(p *Player) string {
 		return ""
 	}
 	dx, dy := en.tx-p.tx, en.ty-p.ty
-	if abs(dx) <= 1 && abs(dy) <= 1 {
+	if abs(dx) <= 1 && abs(dy) <= 1 && p.followEngaged {
 		p.dir = faceToward(p, en)
-		return "" // one square around: just face (don't chase, to avoid blocking target's movement); resume chase only when farther
+		return "" // one square around: just face (don't chase...); rule activates only after first close
 	}
 	hd, vd := "left", "up"
 	if dx > 0 {
@@ -297,6 +305,10 @@ func (h *Hub) followDir(p *Player) string {
 			continue
 		}
 		return fd
+	}
+	if abs(dx) <= 1 && abs(dy) <= 1 {
+		p.followEngaged = true
+		p.dir = faceToward(p, en)
 	}
 	return ""
 }

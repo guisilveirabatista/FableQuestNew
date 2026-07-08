@@ -102,8 +102,8 @@ function drawChatPanel() {
   lines.forEach((c, i) => {
     const y = b.y + 15 + i * b.lh;
     let s = c.text, col = CHAT_COLORS[c.scope] || '#fff';
-    if (c.scope === 'say' || c.scope === 'world' || c.scope === 'party') {
-      const tag = c.scope === 'world' ? '[W] ' : c.scope === 'party' ? '[P] ' : '';
+    if (c.scope === 'say' || c.scope === 'world' || c.scope === 'party' || c.scope === 'tell') {
+      const tag = c.scope === 'world' ? '[W] ' : c.scope === 'party' ? '[P] ' : c.scope === 'tell' ? '[T] ' : '';
       s = tag + (c.from ? c.from + ': ' : '') + c.text;
     }
     text(s.length > 58 ? s.slice(0, 58) : s, b.x + 8, y, col);

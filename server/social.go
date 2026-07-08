@@ -577,7 +577,7 @@ func (h *Hub) autoPvpMelee(p *Player) {
 	if o == nil || !h.canPvp(p, o) {
 		p.pvpTarget = ""
 		if p.lockID == 0 && p.followTarget == "" {
-			p.follow = false
+			p.follow, p.followEngaged = false, false
 		}
 		return
 	}

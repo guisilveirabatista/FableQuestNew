@@ -1,1 +1,0 @@
-- There is a bug in the player to player following system. The player following should be at least one square of distance away from the player being followed.

@@ -247,6 +247,7 @@ type Player struct {
 	pvpTarget        string
 	followTarget     string
 	follow           bool // Ctrl+Alt+click / F: chase the locked target (follow + attack)
+	followEngaged    bool // false right after followAt (initial click); the within-1-square stop only kicks in after first close. Bypasses for first follow click.
 	log              []string
 	dead             bool
 	deathCause       string
@@ -607,7 +608,7 @@ func (h *Hub) disconnect(p *Player, expected netConn) {
 	p.lockID = 0
 	p.pvpTarget = ""
 	p.followTarget = ""
-	p.follow = false
+	p.follow, p.followEngaged = false, false
 	clearPath(p)
 	if h.shouldLingerAfterDisconnect(p) {
 		log.Printf("~ %s disconnected in combat; lingering %.0fs (%d online)", p.id, p.combatLogoutT, h.connectedCountLocked())
@@ -645,7 +646,7 @@ func (h *Hub) leaveCharacter(p *Player, expected netConn) (*charState, string, b
 	p.lockID = 0
 	p.pvpTarget = ""
 	p.followTarget = ""
-	p.follow = false
+	p.follow, p.followEngaged = false, false
 	clearPath(p)
 	ch := charStateOf(p)
 	delete(h.players, p.id)
@@ -709,7 +710,7 @@ func (h *Hub) run() {
 				if o := h.players[p.pvpTarget]; o == nil || !h.canPvp(p, o) {
 					p.pvpTarget = ""
 					if p.lockID == 0 && p.followTarget == "" {
-						p.follow = false
+						p.follow, p.followEngaged = false, false
 					}
 				}
 			}
@@ -963,7 +964,7 @@ func (h *Hub) applyIntent(p *Player, m inMsg) {
 			clearPath(p)
 		}
 	case "moveTo":
-		p.follow = false
+		p.follow, p.followEngaged = false, false
 		p.followTarget = ""
 		h.startPathTo(p, m.Tx, m.Ty)
 	case "attack":
@@ -971,17 +972,28 @@ func (h *Hub) applyIntent(p *Player, m inMsg) {
 			h.doSlash(p)
 		}
 	case "lockAt":
-		p.lockID = h.enemyAtPoint(p.mapID, m.X, m.Y)
+		target := h.enemyAtPoint(p.mapID, m.X, m.Y)
+		if target != 0 && target == p.lockID {
+			p.lockID = 0
+		} else {
+			p.lockID = target
+		}
 		p.pvpTarget = ""
 		p.followTarget = ""
-		p.follow = false // Ctrl+click: lock for attack only, no chasing
+		p.follow, p.followEngaged = false, false // Ctrl+click: lock for attack only (re-click same to unlock), no chasing
 	case "lockPlayerAt":
 		if o := h.playerAtPoint(p.mapID, m.X, m.Y, p); o != nil {
-			if h.canPvp(p, o) {
+			if p.pvpTarget == o.username {
+				// re-click same to unlock, even if pvp rules changed
+				p.pvpTarget = ""
+				p.followTarget = ""
+				p.lockID = 0
+				p.follow, p.followEngaged = false, false
+			} else if h.canPvp(p, o) {
 				p.pvpTarget = o.username
 				p.followTarget = ""
 				p.lockID = 0
-				p.follow = false
+				p.follow, p.followEngaged = false, false
 				p.dir = faceTowardPlayer(p, o)
 			} else {
 				h.systemTo(p, "PvP is only allowed in combat zones or when both players enable /pvp.")
@@ -993,12 +1005,14 @@ func (h *Hub) applyIntent(p *Player, m inMsg) {
 			p.pvpTarget = ""
 			p.lockID = 0
 			p.follow = true
+			p.followEngaged = false // first click to follow bypasses the dist rule
 			p.dir = faceTowardPlayer(p, o)
 		} else if en := h.enemyAtPoint(p.mapID, m.X, m.Y); en != 0 { // Ctrl+Alt+click: lock AND follow (for attack)
 			p.lockID = en
 			p.pvpTarget = ""
 			p.followTarget = ""
 			p.follow = true
+			p.followEngaged = false // first click to follow bypasses the dist rule
 		}
 	case "toggleFollow":
 		if p.lockID != 0 || p.pvpTarget != "" || p.followTarget != "" {
@@ -1010,7 +1024,7 @@ func (h *Hub) applyIntent(p *Player, m inMsg) {
 		p.lockID = 0
 		p.pvpTarget = ""
 		p.followTarget = ""
-		p.follow = false
+		p.follow, p.followEngaged = false, false
 	case "cast":
 		h.castSlot(p, m.Slot)
 	case "upgradeSkill":

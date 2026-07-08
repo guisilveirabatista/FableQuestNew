@@ -382,7 +382,7 @@ func (h *Hub) playerDie(p *Player, cause string) {
 	p.lockID = 0
 	p.pvpTarget = ""
 	p.followTarget = ""
-	p.follow = false
+	p.follow, p.followEngaged = false, false
 	p.combatLogoutT = 0
 }
 
@@ -405,7 +405,7 @@ func (h *Hub) respawnPlayer(p *Player) {
 	p.lockID = 0
 	p.pvpTarget = ""
 	p.followTarget = ""
-	p.follow = false
+	p.follow, p.followEngaged = false, false
 	p.combatLogoutT = 0
 }
 
@@ -461,7 +461,7 @@ func (h *Hub) cycleLock(p *Player) {
 	}
 	p.pvpTarget = ""
 	p.followTarget = ""
-	p.follow = false
+	p.follow, p.followEngaged = false, false
 }
 
 // autoMelee: while locked on and off cooldown, the sword strikes by itself when

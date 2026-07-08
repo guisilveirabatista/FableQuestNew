@@ -14,9 +14,11 @@ Open `index.html` in a browser (double-click it, or `open index.html`).
 | --- | --- |
 | Arrows / WASD | Move (the most recently pressed direction wins; release it and the other held direction takes back over) / navigate menus |
 | Left click | Walk to the clicked tile (the hero finds his own way around obstacles). Clicking to move cancels Follow |
-| Alt/Option + left click | Lock the enemy under the cursor and **Follow** it — the hero walks after it (blue marker) until it's in reach |
-| Right click | Lock the enemy under the cursor for attack (no follow), or open your corpse if you're next to it (right-click empty ground to unlock) |
-| F | Toggle **Follow** on the current lock (shown by a blue marker outside the yellow lock) |
+| Ctrl + left click | Lock the target (enemy or player) for attack only (no follow; yellow marker). Re-click same with Ctrl to unlock/release. |
+| Alt + left click | **Follow** only (chases with blue marker; pure follow, works anywhere even outside combat zones for players) |
+| Ctrl + Alt + left click | Lock + **Follow** the target for attack (chases + auto-attacks; consistent for PvM and PvP) |
+| Right click | Interact (open shop, corpse loot, or player menu), or unlock if on empty ground |
+| F | Toggle **Follow** on the current lock/target |
 | Enter / Space / Z | Talk or read when facing someone, otherwise swing your sword |
 | 1–5 | Cast the skill equipped in that hotbar slot (equip via menu → Skills) |
 | Tab | Lock on to the nearest enemy (press again to cycle) |

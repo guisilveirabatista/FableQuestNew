@@ -319,6 +319,8 @@ function loadGame() {
   game.pops = [];
   game.iframes = 1;
   game.lock = null;
+  game.follow = false;
+  game.followEngaged = false;
   game.path = null;
   if (!h.slots) h.slots = ['fire', 'heal', 'spin', 'bolt', null]; // pre-skillbar save
   if (!h.attr) { // pre-attribute save: default attrs, level-ups worth of points to spend
@@ -1369,7 +1371,7 @@ function playerMenuAction(id) {
   else if (id === 'follow' && game.net) {
     netSend(game.net, { t: 'followAt', x: m.wx, y: m.wy });
     const p = (game.players || []).find(o => o.id === m.id);
-    if (p) { game.followPlayer = p; game.pvpTarget = null; game.lock = null; game.follow = true; game.path = null; }
+    if (p) { game.followPlayer = p; game.pvpTarget = null; game.lock = null; game.follow = true; game.followEngaged = false; game.path = null; }
   }
   sfx('Decision1');
   closePlayerMenu();
@@ -2196,9 +2198,11 @@ function processInput(dt) {
       const co = corpseAt(wx, wy);
       if (shopNpc) openShopChoice(shopForNpc(shopNpc), c.x, c.y);
       else if (co && !co.decayed && nearHero(wx, wy)) { game.corpseOpen = co; sfx('Decision1'); }
-    } else if (c.b === 0 && c.ctrl) {
+    } else if (c.b === 0 && c.ctrl && c.alt) { // Ctrl+Alt + left-click: lock AND follow (follow + attack)
+      pushIntent({ t: 'followAt', x: c.x + cam.x, y: c.y + cam.y });
+    } else if (c.b === 0 && c.ctrl) { // Ctrl+left-click: lock for attack; re-click same to unlock
       pushIntent({ t: 'lockAt', x: c.x + cam.x, y: c.y + cam.y });
-    } else if (c.b === 0 && c.alt) { // Alt+click locks an enemy AND follows it
+    } else if (c.b === 0 && c.alt) { // Alt + left-click: follow only
       pushIntent({ t: 'followAt', x: c.x + cam.x, y: c.y + cam.y });
     } else if (c.b === 0 && !game.invDrag) {
       const wx = Math.floor((c.x + cam.x) / TS), wy = Math.floor((c.y + cam.y) / TS);

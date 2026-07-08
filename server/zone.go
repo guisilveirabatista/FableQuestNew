@@ -157,7 +157,7 @@ func (h *Hub) beginZoneLeave(p *Player, link netConn) bool {
 	p.lockID = 0
 	p.pvpTarget = ""
 	p.followTarget = ""
-	p.follow = false
+	p.follow, p.followEngaged = false, false
 	clearPath(p)
 	if h.shouldLingerAfterDisconnect(p) {
 		p.logoutPending = true
