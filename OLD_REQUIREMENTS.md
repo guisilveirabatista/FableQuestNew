@@ -201,3 +201,5 @@ Improvements
   one shot, the animation of "slash" in case of a sword being equipped, or whatever it could be the weapon or hands, the animation is not even
   playing. I don't know the details of how the combat animations are being displayed, but I would like to see the animation being displayed for
   every strike. Can you investigate and come up with a solution for it?
+
+  - In the Quests window, I would like to see only the name of the quest first, and then, if I click on details of that quest, it should show me more info. This way I can have a list of many quests there. Both quests active and completed should have the same UI concept. Maybe making each row of the quests a collapsable grid and the list of quests also scrollable.
