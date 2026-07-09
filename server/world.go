@@ -443,6 +443,9 @@ func dirBetween(fromX, fromY, toX, toY int) string {
 // tile in the desired direction if it isn't blocked or occupied (honoring exits).
 func (h *Hub) stepPlayer(p *Player, moveDir string, dt float64) {
 	base := 70.0
+	if adminCheatEnabled(p, "superSpeed") {
+		base = 140
+	}
 	if overloaded(p) { // an over-stuffed pack halves your pace
 		base = 32
 	}

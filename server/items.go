@@ -69,11 +69,17 @@ func canCarryItem(p *Player, id string, n int) bool {
 	if n <= 0 {
 		return true
 	}
+	if adminCheatEnabled(p, "infiniteWeight") {
+		return true
+	}
 	w, ok := itemStackWeight(id, n)
 	return ok && bagWeight(p)+w <= capacity(p)
 }
 
 func canCarryStacks(p *Player, stacks map[string]int) bool {
+	if adminCheatEnabled(p, "infiniteWeight") {
+		return true
+	}
 	w := bagWeight(p)
 	for id, n := range stacks {
 		add, ok := itemStackWeight(id, n)
@@ -270,9 +276,16 @@ func bagWeight(p *Player) float64 {
 	return w
 }
 
-func capacity(p *Player) float64 { return 15 + float64(p.lv*2) + float64(p.attr.Str*2) }
+func capacity(p *Player) float64 {
+	if adminCheatEnabled(p, "infiniteWeight") {
+		return 999999
+	}
+	return 15 + float64(p.lv*2) + float64(effectiveAttr(p).Str*2)
+}
 
-func overloaded(p *Player) bool { return bagWeight(p) > capacity(p) }
+func overloaded(p *Player) bool {
+	return !adminCheatEnabled(p, "infiniteWeight") && bagWeight(p) > capacity(p)
+}
 
 // equipBonus sums the worn gear's contribution to the derived stats.
 func equipBonus(p *Player) derived {

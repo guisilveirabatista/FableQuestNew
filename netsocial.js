@@ -7,8 +7,42 @@
 
 const CHAT_COLORS = {
   say: '#e8eef4', world: '#9cf', party: '#8f8',
-  dm: '#f6a6ff', system: '#fc6', reward: '#bcd', pvp: '#f88',
+  dm: '#f6a6ff', system: '#fc6', announcement: '#ffe020', reward: '#bcd', pvp: '#f88',
 };
+const CHAT_CHEAT_ALIASES = {
+  invulnerable: 'invulnerable',
+  infiniteweight: 'infiniteWeight',
+  infinite_weight: 'infiniteWeight',
+  infinite_weight_capacity: 'infiniteWeight',
+  weight: 'infiniteWeight',
+  infinitehealth: 'infiniteVitals',
+  infinite_health: 'infiniteVitals',
+  infinitehp: 'infiniteVitals',
+  infinite_hp: 'infiniteVitals',
+  infinite_mp: 'infiniteVitals',
+  infinite_mana: 'infiniteVitals',
+  infinite_vitals: 'infiniteVitals',
+  infinite_health_and_mp: 'infiniteVitals',
+  hpmp: 'infiniteVitals',
+  vitals: 'infiniteVitals',
+  maxattributes: 'maxAttributes',
+  max_attributes: 'maxAttributes',
+  attributes: 'maxAttributes',
+  attrs: 'maxAttributes',
+  maxstats: 'maxStats',
+  max_stats: 'maxStats',
+  maxed_out_stats: 'maxStats',
+  stats: 'maxStats',
+  allskills: 'allSkills',
+  all_skills: 'allSkills',
+  all_skills_available: 'allSkills',
+  skills: 'allSkills',
+  superspeed: 'superSpeed',
+  super_speed: 'superSpeed',
+  speed: 'superSpeed',
+};
+const CHAT_CHEAT_HELP = 'cheats: invulnerable, infinite weight, infinite health/mp, max attributes, max stats, all skills, super speed';
+const CHAT_CHEAT_VALUES = new Set(['on', 'off', 'true', 'false', '1', '0', 'toggle']);
 
 // ---- chat feed + input ------------------------------------------------------
 
@@ -39,6 +73,40 @@ function sendChat() {
   netSend(game.net, { t: 'chat', scope: 'say', text: t });
 }
 
+function chatCheatKey(name) {
+  const key = (name || '').toLowerCase().trim().replace(/[\s-]+/g, '_');
+  return CHAT_CHEAT_ALIASES[key] || CHAT_CHEAT_ALIASES[key.replace(/_/g, '')] || '';
+}
+
+function chatCheatEnabled(key) {
+  if (typeof cheatEnabled === 'function') return cheatEnabled(key, game.hero);
+  return !!(game.hero && game.hero.cheats && game.hero.cheats[key]);
+}
+
+function handleCheatCommand(rest) {
+  if (!game.isAdmin) { pushChatLine({ scope: 'system', text: 'Admin only.' }); return; }
+  const parts = rest.split(/\s+/).filter(Boolean);
+  if (parts.length === 0 || (parts.length === 1 && parts[0].toLowerCase() === 'help')) {
+    pushChatLine({ scope: 'system', text: CHAT_CHEAT_HELP });
+    pushChatLine({ scope: 'system', text: 'usage: /cheat name [on|off|toggle]' });
+    return;
+  }
+  const last = parts[parts.length - 1].toLowerCase();
+  const hasValue = CHAT_CHEAT_VALUES.has(last);
+  const name = (hasValue ? parts.slice(0, -1) : parts).join(' ');
+  const key = chatCheatKey(name);
+  if (!key) {
+    pushChatLine({ scope: 'system', text: 'Unknown cheat. Try /cheat help' });
+    return;
+  }
+  let v = !chatCheatEnabled(key);
+  if (hasValue) {
+    if (last === 'on' || last === 'true' || last === '1') v = true;
+    else if (last === 'off' || last === 'false' || last === '0') v = false;
+  }
+  netSend(game.net, { t: 'adminSetCheat', key, v });
+}
+
 // slash commands drive every social action that isn't a windowed UI
 function handleSlash(t) {
   const net = game.net;
@@ -64,9 +132,37 @@ function handleSlash(t) {
     case '/unfriend': if (rest) netSend(net, { t: 'friendRemove', id: rest }); break;
     case '/friends': netSend(net, { t: 'friendList' }); break;
     case '/pvp': netSend(net, { t: 'setPvp', v: !game.youPvp }); break;
+    case '/cheat': handleCheatCommand(rest); break;
+    case '/announce': if (rest) netSend(net, { t: 'adminAnnounce', text: rest }); break;
+    case '/ban': if (rest) netSend(net, { t: 'adminBanAccount', target: rest }); break;
+    case '/unban': if (rest) netSend(net, { t: 'adminUnbanAccount', target: rest }); break;
+    case '/banchar': {
+      const cut = rest.indexOf(' ');
+      if (cut > 0) netSend(net, { t: 'adminBanCharacter', target: rest.slice(0, cut), name: rest.slice(cut + 1).trim() });
+      break;
+    }
+    case '/unbanchar': {
+      const cut = rest.indexOf(' ');
+      if (cut > 0) netSend(net, { t: 'adminUnbanCharacter', target: rest.slice(0, cut), name: rest.slice(cut + 1).trim() });
+      break;
+    }
+    case '/item': {
+      const parts = rest.split(/\s+/).filter(Boolean);
+      if (parts[0]) netSend(net, { t: 'adminGrantItem', id: parts[0], n: Number(parts[1] || 1) });
+      break;
+    }
+    case '/summon': {
+      const parts = rest.split(/\s+/).filter(Boolean);
+      if (parts[0]) netSend(net, {
+        t: 'adminSummon', id: parts[0], n: Number(parts[1] || 1),
+        map: parts[2] || game.mapId, tx: Number(parts[3] || game.hero.tx), ty: Number(parts[4] || game.hero.ty),
+      });
+      break;
+    }
     case '/help':
       pushChatLine({ scope: 'system', text: 'chat: /w world, /p party, /dm name text, /invite name' });
       pushChatLine({ scope: 'system', text: '/trade name, /friend name, /friends, /pvp; right-click players in combat zones' });
+      if (game.isAdmin) pushChatLine({ scope: 'system', text: 'admin: /announce, /ban, /unban, /banchar, /unbanchar, /item, /summon, /cheat' });
       break;
     default: pushChatLine({ scope: 'system', text: 'Unknown command — try /help' });
   }
@@ -102,8 +198,8 @@ function drawChatPanel() {
   lines.forEach((c, i) => {
     const y = b.y + 15 + i * b.lh;
     let s = c.text, col = CHAT_COLORS[c.scope] || '#fff';
-    if (c.scope === 'say' || c.scope === 'world' || c.scope === 'party' || c.scope === 'dm') {
-      const tag = c.scope === 'world' ? '[W] ' : c.scope === 'party' ? '[P] ' : c.scope === 'dm' ? '[DM] ' : '';
+    if (c.scope === 'say' || c.scope === 'world' || c.scope === 'party' || c.scope === 'dm' || c.scope === 'announcement') {
+      const tag = c.scope === 'world' ? '[W] ' : c.scope === 'party' ? '[P] ' : c.scope === 'dm' ? '[DM] ' : c.scope === 'announcement' ? '[!] ' : '';
       s = tag + (c.from ? c.from + ': ' : '') + c.text;
     }
     text(s.length > 58 ? s.slice(0, 58) : s, b.x + 8, y, col);

@@ -95,8 +95,24 @@ function clearKeys() {
   dirOrder = [];
 }
 function hasInputKey(ids, keys) { return keys.some(k => ids.includes(normKey(k))); }
+function domTextInputActive() {
+  const el = document.activeElement;
+  if (!el || el === cv) return false;
+  const tag = (el.tagName || '').toLowerCase();
+  return tag === 'input' || tag === 'textarea' || el.isContentEditable;
+}
+function gameTextInputActive() {
+  if (typeof game === 'undefined') return false;
+  if (game.login || game.chatInput) return true;
+  if (game.charSelect && game.charSelect.mode === 'create' && game.charSelect.field === 'name') return true;
+  if (game.shop && game.shop.edit) return true;
+  if (game.trade && game.tradeGoldFocused) return true;
+  if (game.menu && game.menu.mode === 'admin' && game.menu.admin && game.menu.admin.section !== 'root') return true;
+  return false;
+}
+function textInputActive() { return domTextInputActive() || gameTextInputActive(); }
 function tryImmediateShortcut(ids) {
-  if (typeof game === 'undefined' || game.scene !== 'map' || game.login || game.charSelect || game.chatInput) return false;
+  if (typeof game === 'undefined' || game.scene !== 'map' || textInputActive() || game.charSelect) return false;
   if (typeof toggleChatWindow === 'function' && game.net && hasInputKey(ids, CHAT_TOGGLE_KEYS)) {
     toggleChatWindow();
     return true;
@@ -127,8 +143,10 @@ function tryImmediateShortcut(ids) {
 addEventListener('keydown', e => {
   const ids = eventInputIds(e);
   const modified = e.altKey || e.ctrlKey || e.metaKey;
-  if (!modified && ids.some(k => CAPTURE_KEYS.includes(k))) e.preventDefault();
+  const domInput = domTextInputActive();
+  if (!modified && !domInput && ids.some(k => CAPTURE_KEYS.includes(k))) e.preventDefault();
   if (modified) return;
+  if (domInput) return;
   focusGame();
   const holdId = eventHoldId(e);
   const fresh = !held[holdId];
@@ -167,16 +185,23 @@ let clicks = [], releases = [];
 let wheelY = 0;
 const mouse = { x: 0, y: 0, down: false };
 let lastClick = { t: 0, x: -99, y: -99 };
+let buttonFeedback = [];
+const BUTTON_FEEDBACK_MS = 1000;
 function canvasXY(e) {
   const r = cv.getBoundingClientRect();
   return { x: (e.clientX - r.left) * W / r.width, y: (e.clientY - r.top) * H / r.height };
+}
+function recordButtonFeedback(p) {
+  const now = performance.now();
+  buttonFeedback = buttonFeedback.filter(f => now - f.t < BUTTON_FEEDBACK_MS);
+  buttonFeedback.push({ x: p.x, y: p.y, t: now });
 }
 cv.addEventListener('contextmenu', e => e.preventDefault());
 cv.addEventListener('mousemove', e => Object.assign(mouse, canvasXY(e)));
 cv.addEventListener('wheel', e => {
   const p = canvasXY(e);
   Object.assign(mouse, p);
-  if (inPanel(p) || game.shop) {
+  if (inPanel(p) || game.shop || game.menu) {
     e.preventDefault();
     wheelY += e.deltaY;
   }
@@ -192,6 +217,7 @@ cv.addEventListener('mousedown', e => {
     Math.abs(p.x - lastClick.x) < 8 && Math.abs(p.y - lastClick.y) < 8;
   if (e.button === 0) lastClick = { t: dbl ? 0 : now, x: p.x, y: p.y };
   clicks.push({ b: e.button, x: p.x, y: p.y, dbl, alt: e.altKey, ctrl: e.ctrlKey || e.metaKey });
+  if (e.button === 0) recordButtonFeedback(p);
   if (!audioOk) { audioOk = true; syncMusic(); }
 });
 addEventListener('mouseup', e => {
@@ -211,14 +237,43 @@ function dirHeld() {
 }
 
 // ---------------------------------------------------------------- windows & text
+function buttonFeedbackEligible(w, h) {
+  return w <= 110 && h <= 26;
+}
+function buttonFeedbackAlpha(x, y, w, h, force = false) {
+  if (!force && !buttonFeedbackEligible(w, h)) return 0;
+  const now = performance.now();
+  let alpha = 0;
+  buttonFeedback = buttonFeedback.filter(f => {
+    const age = now - f.t;
+    if (age >= BUTTON_FEEDBACK_MS) return false;
+    if (f.x >= x && f.x < x + w && f.y >= y && f.y < y + h) {
+      alpha = Math.max(alpha, 0.42 * (1 - age / BUTTON_FEEDBACK_MS));
+    }
+    return true;
+  });
+  return alpha;
+}
 function drawWindow(x, y, w, h) {
   const s = img.system;
   ctx.globalAlpha = 0.85;
   ctx.drawImage(s, 0, 0, 32, 32, x + 1, y + 1, w - 2, h - 2);
   ctx.globalAlpha = 1;
   nineSlice(s, 32, 0, x, y, w, h);
+  const feedback = buttonFeedbackAlpha(x, y, w, h);
+  if (feedback > 0) {
+    ctx.fillStyle = `rgba(0,0,0,${feedback})`;
+    ctx.fillRect(x + 2, y + 2, Math.max(0, w - 4), Math.max(0, h - 4));
+  }
 }
-function drawCursor(x, y, w, h) { nineSlice(img.system, 64, 0, x, y, w, h); }
+function drawCursor(x, y, w, h) {
+  nineSlice(img.system, 64, 0, x, y, w, h);
+  const feedback = buttonFeedbackAlpha(x, y, w, h, true);
+  if (feedback > 0) {
+    ctx.fillStyle = `rgba(0,0,0,${feedback})`;
+    ctx.fillRect(x + 2, y + 2, Math.max(0, w - 4), Math.max(0, h - 4));
+  }
+}
 function nineSlice(s, sx, sy, x, y, w, h) {
   const b = 8, m = 32 - 2 * b;
   ctx.drawImage(s, sx, sy, b, b, x, y, b, b);
@@ -1679,9 +1734,18 @@ function drawWorldDrag() {
 const PLAYER_MENU_ITEMS = [
   ['trade', 'Trade'], ['message', 'Message'], ['follow', 'Follow'],
 ];
+function playerMenuItems() {
+  if (!game.isAdmin) return PLAYER_MENU_ITEMS;
+  return PLAYER_MENU_ITEMS.concat([
+    ['adminTeleport', 'Teleport To'],
+    ['adminBanAccount', 'Ban Account'],
+    ['adminBanCharacter', 'Ban Character'],
+  ]);
+}
 function openPlayerMenu(p, sx, sy) {
   if (!p) return;
-  const w = 90, h = 22 + PLAYER_MENU_ITEMS.length * 16;
+  const items = playerMenuItems();
+  const w = 104, h = 22 + items.length * 16;
   game.playerMenu = {
     id: p.id, name: p.name || p.id || 'Player', wx: p.px + 8, wy: p.py + 4,
     x: Math.max(4, Math.min(W - w - 4, sx)), y: Math.max(4, Math.min(H - h - 4, sy)), cursor: 0,
@@ -1690,7 +1754,7 @@ function openPlayerMenu(p, sx, sy) {
 }
 function playerMenuBox() {
   const m = game.playerMenu;
-  return { x: m.x, y: m.y, w: 90, h: 22 + PLAYER_MENU_ITEMS.length * 16, rowY: m.y + 20, rowH: 16 };
+  return { x: m.x, y: m.y, w: 104, h: 22 + playerMenuItems().length * 16, rowY: m.y + 20, rowH: 16 };
 }
 function closePlayerMenu() { game.playerMenu = null; }
 function playerMenuAction(id) {
@@ -1703,32 +1767,37 @@ function playerMenuAction(id) {
     const p = (game.players || []).find(o => o.id === m.id);
     if (p) { game.followPlayer = p; game.pvpTarget = null; game.lock = null; game.follow = true; game.followEngaged = false; game.path = null; }
   }
+  else if (id === 'adminTeleport' && game.net) netSend(game.net, { t: 'adminTeleport', target: m.id });
+  else if (id === 'adminBanAccount' && game.net) netSend(game.net, { t: 'adminBanAccount', target: m.id });
+  else if (id === 'adminBanCharacter' && game.net) netSend(game.net, { t: 'adminBanCharacter', target: m.id, name: m.name });
   sfx('Decision1');
   closePlayerMenu();
 }
 function updatePlayerMenu() {
   const m = game.playerMenu;
   if (!m) return;
+  const items = playerMenuItems();
   const b = playerMenuBox();
-  const hov = hoverRow(b.x + 6, b.rowY, b.w - 12, b.rowH, PLAYER_MENU_ITEMS.length);
+  const hov = hoverRow(b.x + 6, b.rowY, b.w - 12, b.rowH, items.length);
   if (hov >= 0) m.cursor = hov;
   for (const c of clicks) if (c.b === 0) {
     if (!hit(c, b.x, b.y, b.w, b.h)) { closePlayerMenu(); sfx('Cancel1'); return; }
     const row = Math.floor((c.y - b.rowY) / b.rowH);
-    if (row >= 0 && row < PLAYER_MENU_ITEMS.length) { m.cursor = row; playerMenuAction(PLAYER_MENU_ITEMS[row][0]); return; }
+    if (row >= 0 && row < items.length) { m.cursor = row; playerMenuAction(items[row][0]); return; }
   }
   if (pressed(CANCEL)) { closePlayerMenu(); sfx('Cancel1'); return; }
-  if (pressed(['ArrowUp', 'w'])) { m.cursor = (m.cursor + PLAYER_MENU_ITEMS.length - 1) % PLAYER_MENU_ITEMS.length; sfx('Cursor1'); }
-  if (pressed(['ArrowDown', 's'])) { m.cursor = (m.cursor + 1) % PLAYER_MENU_ITEMS.length; sfx('Cursor1'); }
-  if (pressed(CONFIRM)) playerMenuAction(PLAYER_MENU_ITEMS[m.cursor][0]);
+  if (pressed(['ArrowUp', 'w'])) { m.cursor = (m.cursor + items.length - 1) % items.length; sfx('Cursor1'); }
+  if (pressed(['ArrowDown', 's'])) { m.cursor = (m.cursor + 1) % items.length; sfx('Cursor1'); }
+  if (pressed(CONFIRM)) playerMenuAction(items[m.cursor][0]);
 }
 function drawPlayerMenu() {
   const m = game.playerMenu;
   if (!m) return;
+  const items = playerMenuItems();
   const b = playerMenuBox();
   drawWindow(b.x, b.y, b.w, b.h);
   text(m.name, b.x + 10, b.y + 7, '#ffe080');
-  PLAYER_MENU_ITEMS.forEach((it, i) => {
+  items.forEach((it, i) => {
     const y = b.rowY + i * b.rowH;
     if (m.cursor === i) drawCursor(b.x + 6, y, b.w - 12, b.rowH);
     text(it[1], b.x + 14, y + 4);
@@ -1792,6 +1861,11 @@ const MENU_W = 120;
 const MRX = W - 124; // right column: same grid as the inventory windows
 const ROOT_MENU = ['Inventory', 'Map', 'Skills', 'Attributes', 'Status', 'Quest', 'Options', 'Log Out'];
 const OPTIONS_MENU = ['Music', 'Autoloot', 'Mini Map', 'Log', 'Network'];
+function syncAdminMenuEntry() {
+  const has = ROOT_MENU.includes('Admin');
+  if (game.isAdmin && !has) ROOT_MENU.splice(ROOT_MENU.length - 1, 0, 'Admin');
+  else if (!game.isAdmin && has) ROOT_MENU.splice(ROOT_MENU.indexOf('Admin'), 1);
+}
 function rootBox() { return { x: MRX, y: 8, w: MENU_W, h: ROOT_MENU.length * 16 + 12 }; }
 function subX(w) { return Math.max(4, MRX - w - 6); }
 function optionLabel(s) {
@@ -1817,7 +1891,7 @@ function toggleOption(sel) {
 }
 function logOut() {
   if (game.net) {
-    const left = Math.ceil(game.hero.combatLogoutT || 0);
+    const left = game.isAdmin ? 0 : Math.ceil(game.hero.combatLogoutT || 0);
     if (left > 0) {
       sfx('Buzzer1');
       logMsg(`You cannot log out during combat. Wait ${left}s.`);
@@ -1857,6 +1931,7 @@ function clearMenuShortcutUi() {
   game.lootDrag = null;
 }
 function openRootMenu(cursor = 0) {
+  syncAdminMenuEntry();
   clearMenuShortcutUi();
   game.menu = { mode: 'root', cursor };
   sfx('Decision1');
@@ -1870,7 +1945,7 @@ function menuShortcutBlocked() {
   return !!(game.death || game.shop || game.dialogue || game.itemPopup || game.dropPrompt || game.corpseOpen || game.invFocus || game.playerMenu);
 }
 function handleWindowShortcuts() {
-  if (menuShortcutBlocked()) return false;
+  if (textInputActive() || menuShortcutBlocked()) return false;
   if (keyTapped(MENU_KEYS)) {
     if (game.menu) { game.menu = null; sfx('Cancel1'); }
     else openRootMenu();
@@ -1893,6 +1968,7 @@ function rootMenuSelect(sel) {
   else if (sel === 'Status') { m.mode = 'status'; sfx('Decision1'); }
   else if (sel === 'Quest') { m.mode = 'quest'; m.questTab = 'active'; sfx('Decision1'); }
   else if (sel === 'Options') { m.mode = 'options'; m.cursor2 = 0; sfx('Decision1'); }
+  else if (sel === 'Admin' && typeof openAdminMenu === 'function') openAdminMenu(m);
   else if (sel === 'Log Out') logOut();
 }
 function hit(c, x, y, w, hgt) { return c.x >= x && c.x < x + w && c.y >= y && c.y < y + hgt; }
@@ -2147,6 +2223,7 @@ function updateQuestMenu(m, mc) {
 
 function updateMenu(dt) {
   const m = game.menu, h = game.hero;
+  syncAdminMenuEntry();
   if (m.msg) {
     m.msgT += dt;
     if (m.msgT > 1.1 || pressed(CONFIRM) || clicked(0)) m.msg = null;
@@ -2250,17 +2327,20 @@ function updateMenu(dt) {
     if (pressed(['ArrowUp', 'w'])) { m.cursor2 = (m.cursor2 + OPTIONS_MENU.length - 1) % OPTIONS_MENU.length; sfx('Cursor1'); }
     if (pressed(['ArrowDown', 's'])) { m.cursor2 = (m.cursor2 + 1) % OPTIONS_MENU.length; sfx('Cursor1'); }
     if (pressed(CONFIRM)) toggleOption(OPTIONS_MENU[m.cursor2]);
+  } else if (m.mode === 'admin' && typeof updateAdminMenu === 'function') {
+    updateAdminMenu(m, mc, dt);
   } else { // status
     if (pressed(CONFIRM) || pressed(CANCEL) || clicked(0)) { m.mode = 'root'; sfx('Cancel1'); }
   }
 }
 function drawMenu() {
   const m = game.menu, h = game.hero;
+  syncAdminMenuEntry();
   const rb = rootBox();
   drawWindow(rb.x, rb.y, rb.w, rb.h);
   ROOT_MENU.forEach((s, i) => {
     if (m.mode === 'root' && m.cursor === i) drawCursor(rb.x + 6, rb.y + 6 + i * 16, rb.w - 12, 16);
-    const left = s === 'Log Out' && game.net ? Math.ceil(h.combatLogoutT || 0) : 0;
+    const left = s === 'Log Out' && game.net && !game.isAdmin ? Math.ceil(h.combatLogoutT || 0) : 0;
     text(left > 0 ? `Log Out ${left}s` : s, rb.x + 14, rb.y + 10 + i * 16, left > 0 ? '#999' : '#fff');
   });
   if (m.mode === 'skills') {
@@ -2448,6 +2528,8 @@ function drawMenu() {
       if (m.cursor2 === i) drawCursor(l.x + 6, l.y + 8 + i * 16, l.w - 12, 16);
       text(optionLabel(s), l.x + 14, l.y + 12 + i * 16);
     });
+  } else if (m.mode === 'admin' && typeof drawAdminMenu === 'function') {
+    drawAdminMenu(m);
   }
   if (m.msg) {
     drawWindow((W - 140) / 2, (H - 30) / 2, 140, 30);
@@ -2497,7 +2579,7 @@ function drawHud() {
   if (overloaded()) text('OVERWEIGHT', l.x + 8, l.y + 89, '#f76');
 }
 
-function drawMap() {
+function drawMap(drawMenuLayer = true) {
   const h = game.hero, m = cur();
   const cam = camPos();
   game.camY = cam.y; // drawBolts anchors lightning to the visible sky
@@ -2609,7 +2691,7 @@ function drawMap() {
       drawWindow(x, y, 20, 20);
       text(String(i + 1), x + 3, y + 2, '#9cf');
       if (id) {
-        const canUse = SKILLS[id] ? (skillAllowedForClass(id, h) && h.mp >= skillCost(id, h)) : ((h.bag && h.bag[id]) > 0);
+        const canUse = SKILLS[id] ? (skillAllowedForClass(id, h) && skillMpAvailable(id, h)) : ((h.bag && h.bag[id]) > 0);
         ctx.globalAlpha = canUse ? 1 : 0.55;
         drawHotbarEntry(id, x + 2, y + 3, false, h);
         ctx.globalAlpha = 1;
@@ -2634,12 +2716,12 @@ function drawMap() {
     if (d.chars >= full.length && Math.floor(performance.now() / 400) % 2)
       text('▼', dw - 16, H - 18);
   }
-  if (game.menu) drawMenu();
   if (game.shop) drawShop();
   if (game.itemPopup) drawItemPopup();
   if (game.mapOpen) drawWorldMapWindow();
   if (game.playerMenu) drawPlayerMenu();
   if (game.death) drawDeathPopup();
+  if (drawMenuLayer && game.menu) drawMenu();
 }
 
 function updateDialogue(dt) {
@@ -2713,7 +2795,7 @@ function processInput(dt) {
     pushIntent({ t: 'moveDir', dir: null });
     return;
   }
-  if (keyTapped(MAP_KEYS)) {
+  if (!textInputActive() && keyTapped(MAP_KEYS)) {
     pushIntent({ t: 'moveDir', dir: null });
     toggleMapWindow();
     return;

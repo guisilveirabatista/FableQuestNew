@@ -19,6 +19,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -30,11 +31,12 @@ type Gateway struct {
 
 	mu          sync.Mutex
 	online      map[string]int // one live client session per account
+	sessions    map[string]*gwSession
 	nextSession int
 }
 
 func newGateway(zones map[string]string) *Gateway {
-	return &Gateway{zones: zones, online: map[string]int{}}
+	return &Gateway{zones: zones, online: map[string]int{}, sessions: map[string]*gwSession{}}
 }
 
 func (gw *Gateway) zoneFor(mapID string) string { return gw.zones[mapID] }
@@ -58,6 +60,44 @@ func (gw *Gateway) setOffline(user string, token int) {
 		delete(gw.online, user)
 	}
 	gw.mu.Unlock()
+}
+
+func (gw *Gateway) registerSession(s *gwSession) {
+	gw.mu.Lock()
+	gw.sessions[s.user] = s
+	gw.mu.Unlock()
+}
+
+func (gw *Gateway) unregisterSession(s *gwSession) {
+	gw.mu.Lock()
+	if gw.sessions[s.user] == s {
+		delete(gw.sessions, s.user)
+	}
+	gw.mu.Unlock()
+}
+
+func (gw *Gateway) broadcastChat(line chatLine) {
+	gw.mu.Lock()
+	sessions := make([]*gwSession, 0, len(gw.sessions))
+	for _, s := range gw.sessions {
+		sessions = append(sessions, s)
+	}
+	gw.mu.Unlock()
+	for _, s := range sessions {
+		s.systemLine(line)
+	}
+}
+
+func (gw *Gateway) kickUser(user, msg string) {
+	gw.mu.Lock()
+	s := gw.sessions[user]
+	gw.mu.Unlock()
+	if s == nil {
+		return
+	}
+	s.system(msg)
+	s.beginLeave()
+	s.client.Close()
 }
 
 // initialCharState builds a brand-new character (fresh account) at the spawn.
@@ -126,6 +166,10 @@ selectCharacter:
 					loginErr("wrong password")
 					continue
 				}
+				if err == errAccountBanned {
+					loginErr("account banned")
+					continue
+				}
 				if err != nil {
 					loginErr("login failed")
 					continue
@@ -159,13 +203,24 @@ selectCharacter:
 					writeCharacterList(c, chars, "", "Select a character.")
 					continue
 				}
+				banned, err := store.CharacterBanned(user, ch.Name)
+				if err != nil {
+					writeCharacterList(c, chars, ch.Name, "Could not check character access.")
+					continue
+				}
+				if banned {
+					writeCharacterList(c, chars, ch.Name, "That character is banned.")
+					continue
+				}
 				char = ch
 				break selectCharacter
 			}
 		}
 	}
 
-	s := &gwSession{gw: gw, user: user, token: token, client: c, char: char}
+	s := &gwSession{gw: gw, user: user, token: token, admin: isAdminUser(user), client: c, char: char}
+	gw.registerSession(s)
+	defer gw.unregisterSession(s)
 	if err := s.connect(char); err != nil { // dial the zone owning the starting map
 		log.Printf("gateway: connect %s: %v", user, err)
 		loginErr("world unavailable, try again")
@@ -186,6 +241,7 @@ type gwSession struct {
 	gw     *Gateway
 	user   string
 	token  int
+	admin  bool
 	client *wsConn
 
 	mu      sync.Mutex
@@ -215,7 +271,7 @@ func (s *gwSession) connect(ch *charState) error {
 	s.mu.Lock()
 	vw, vh := s.vw, s.vh
 	s.mu.Unlock()
-	if err := fc.WriteJSON(enterMsg{T: "enter", ID: s.user, Char: ch, Vw: vw, Vh: vh}); err != nil {
+	if err := fc.WriteJSON(enterMsg{T: "enter", ID: s.user, Admin: s.admin, Char: ch, Vw: vw, Vh: vh}); err != nil {
 		fc.Close()
 		return err
 	}
@@ -257,10 +313,15 @@ func (s *gwSession) clientPump() {
 			s.client.writeFrame(opPong, data)
 		case opText:
 			var m inMsg // sniff the viewport so re-enters keep the area of interest
-			if json.Unmarshal(data, &m) == nil && m.T == "view" {
-				s.mu.Lock()
-				s.vw, s.vh = m.Vw, m.Vh
-				s.mu.Unlock()
+			if json.Unmarshal(data, &m) == nil {
+				if m.T == "view" {
+					s.mu.Lock()
+					s.vw, s.vh = m.Vw, m.Vh
+					s.mu.Unlock()
+				}
+				if s.handleGatewayAdmin(m) {
+					continue
+				}
 			}
 			s.sendToZone(data)
 		}
@@ -319,11 +380,27 @@ func (s *gwSession) zoneLoop() {
 			if s.isClosing() {
 				continue // client gone; keep draining until the final save/EOF
 			}
+			if s.admin {
+				data = s.withAdminBanLists(data)
+			}
 			if err := s.client.WriteText(data); err != nil {
 				s.beginLeave()
 			}
 		}
 	}
+}
+
+func (s *gwSession) withAdminBanLists(data []byte) []byte {
+	var sm snapMsg
+	if json.Unmarshal(data, &sm) != nil || sm.T != "snap" {
+		return data
+	}
+	sm.BanLists = currentBanLists()
+	next, err := json.Marshal(sm)
+	if err != nil {
+		return data
+	}
+	return next
 }
 
 func (s *gwSession) sendToZone(b []byte) {
@@ -389,6 +466,97 @@ func (s *gwSession) save(ch *charState) {
 	if err := store.Save(s.user, ch); err != nil {
 		log.Printf("gateway: save %s: %v", s.user, err)
 	}
+}
+
+func (s *gwSession) system(text string) {
+	s.systemLine(adminSystemLine(text))
+}
+
+func (s *gwSession) systemLine(line chatLine) {
+	if s != nil && s.client != nil && !s.isClosing() {
+		writeChat(s.client, line)
+	}
+}
+
+func (s *gwSession) handleGatewayAdmin(m inMsg) bool {
+	switch m.T {
+	case "adminAnnounce", "adminBanAccount", "adminUnbanAccount", "adminBanCharacter", "adminUnbanCharacter":
+	default:
+		return false
+	}
+	if !s.admin || !isAdminUser(s.user) {
+		s.system("Admin only.")
+		return true
+	}
+	switch m.T {
+	case "adminAnnounce":
+		text := sanitizeChat(m.Text)
+		if text == "" {
+			s.system("Announcement text is empty.")
+			return true
+		}
+		s.gw.broadcastChat(announcementLine(text))
+	case "adminBanAccount":
+		target := strings.TrimSpace(m.Target)
+		if !validName(target) {
+			s.system("Choose a valid account name.")
+			return true
+		}
+		if strings.EqualFold(target, s.user) {
+			s.system("You cannot ban your own account.")
+			return true
+		}
+		if err := store.SetAccountBan(target, true); err != nil {
+			s.system("Could not ban account.")
+			return true
+		}
+		s.gw.kickUser(target, "Your account has been banned.")
+		s.system("Banned account " + target + ".")
+	case "adminUnbanAccount":
+		target := strings.TrimSpace(m.Target)
+		if !validName(target) {
+			s.system("Choose a valid account name.")
+			return true
+		}
+		if err := store.SetAccountBan(target, false); err != nil {
+			s.system("Could not unban account.")
+			return true
+		}
+		s.system("Unbanned account " + target + ".")
+	case "adminBanCharacter":
+		target, name := strings.TrimSpace(m.Target), strings.TrimSpace(m.Name)
+		if !validName(target) || !validName(name) {
+			s.system("Choose a valid account and character name.")
+			return true
+		}
+		if strings.EqualFold(target, s.user) && s.char != nil && strings.EqualFold(name, s.char.Name) {
+			s.system("You cannot ban the character you are using.")
+			return true
+		}
+		if err := store.SetCharacterBan(target, name, true); err != nil {
+			s.system("Could not ban character.")
+			return true
+		}
+		s.gw.mu.Lock()
+		targetSession := s.gw.sessions[target]
+		s.gw.mu.Unlock()
+		if targetSession != nil && targetSession.char != nil && strings.EqualFold(targetSession.char.Name, name) {
+			s.gw.kickUser(target, "This character has been banned.")
+		}
+		s.system("Banned character " + target + "/" + name + ".")
+	case "adminUnbanCharacter":
+		target, name := strings.TrimSpace(m.Target), strings.TrimSpace(m.Name)
+		if !validName(target) || !validName(name) {
+			s.system("Choose a valid account and character name.")
+			return true
+		}
+		if err := store.SetCharacterBan(target, name, false); err != nil {
+			s.system("Could not unban character.")
+			return true
+		}
+		s.system("Unbanned character " + target + "/" + name + ".")
+	}
+	return true
 }
 
 type ctrlMsg struct {

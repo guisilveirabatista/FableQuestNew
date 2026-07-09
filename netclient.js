@@ -49,6 +49,7 @@ function netStart(url) {
     const m = JSON.parse(e.data);
     if (m.t === 'welcome') {
       net.id = m.id;
+      game.isAdmin = !!m.admin;
       net.characters = m.characters || net.characters || [];
       game.hero.name = m.name || m.id;
       game.hero.class = m.class || '';
@@ -69,6 +70,8 @@ function netStart(url) {
     } else if (m.t === 'snap') {
       net.ack = m.ack;
       onSnapshot(m);
+    } else if (m.t === 'chat') {
+      if (m.chat) for (const c of m.chat) pushChatLine(c);
     } else if (m.t === 'pong') {
       net.ping = Math.max(0, Math.round(performance.now() - (m.ts || performance.now())));
       net.pingPending = false;
@@ -397,6 +400,9 @@ function onSnapshot(m) {
   h.hp = you.hp; h.maxhp = you.maxhp; h.mp = you.mp; h.maxmp = you.maxmp;
   h.lv = you.lv; h.exp = you.exp; h.gold = you.gold; h.kills = you.kills;
   h.name = you.name || h.name || net.id;
+  game.isAdmin = !!you.admin;
+  h.cheats = you.cheats || {};
+  game.adminBans = game.isAdmin ? (m.banLists || { accounts: [], characters: [] }) : null;
   h.class = you.class || h.class || '';
   h.hair = you.hair || h.hair;
   h.cloth = you.cloth || h.cloth;
@@ -574,15 +580,15 @@ function netFrame(frameDt) {
     uiCaptured = true;
   } else if (handleHudToggleClicks()) {
     uiCaptured = true;
-  } else if (typeof toggleChatWindow === 'function' && keyTapped(CHAT_TOGGLE_KEYS)) {
+  } else if (!textInputActive() && typeof toggleChatWindow === 'function' && keyTapped(CHAT_TOGGLE_KEYS)) {
     toggleChatWindow();
     uiCaptured = true;
   } else if (handleWindowShortcuts()) {
     uiCaptured = true;
-  } else if (keyTapped(MAP_KEYS)) {
+  } else if (!textInputActive() && keyTapped(MAP_KEYS)) {
     toggleMapWindow();
     uiCaptured = true;
-  } else if (keyTapped(NET_OVERLAY_TOGGLE_KEYS)) {
+  } else if (!textInputActive() && keyTapped(NET_OVERLAY_TOGGLE_KEYS)) {
     toggleNetOverlayWindow();
     uiCaptured = true;
   } else if (game.mapOpen) {
@@ -658,7 +664,7 @@ function netFrame(frameDt) {
         sfx('Recovery1');
         continue;
       }
-      if (!skill || !skillAllowedForClass(sk, h) || h.mp < skillCost(sk, h) || (skillRequiresTarget(sk) && !target)) { sfx('Buzzer1'); continue; }
+      if (!skill || !skillAllowedForClass(sk, h) || !skillMpAvailable(sk, h) || (skillRequiresTarget(sk) && !target)) { sfx('Buzzer1'); continue; }
       netSend(net, { t: 'cast', slot: i });
       // optimistic local effect; damage and MP spending remain server-side
       if (sk === 'spin') { game.atkCool = 1.3 / stats().aspd; game.slashFx = { t: 0, spin: true, dur: 0.3 }; sfx('Sword1'); }
@@ -807,10 +813,11 @@ function netFrame(frameDt) {
   // 4) draw the world (hero interpolated by the leftover accumulator)
   const a = Math.max(0, Math.min(1, net.acc / FIXED));
   applyInterp(a);
-  drawMap();
+  drawMap(false);
   clearInterp();
   drawNetSocial(); // chat feed, party frames, name tags, trade window, prompts
   drawNetOverlay();
+  if (game.menu) drawMenu();
 }
 
 function predictNetMeleeFx() {

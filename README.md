@@ -178,6 +178,23 @@ decided on the server, so none of it can be spoofed.
   be damaged by — other players who are *also* flagged, so nobody is ganked;
   whole maps can be marked as free-for-all arenas server-side.
 
+### Admin tools
+
+Start the server with admin account names to unlock the in-game **Admin** menu:
+
+```
+cd server
+go run . -admins admin,gm
+```
+
+Admins can broadcast yellow public announcements, ban or unban accounts and
+individual characters, teleport, create items, edit their own
+level/class/attributes/skills, summon monsters on any map, and toggle
+per-character admin cheats from the menu or `/cheat`. Ban windows include
+scrollable lists of currently banned accounts and characters. The browser only sends requests; the Go server
+checks the admin allowlist, validates every target/item/stat/monster/cheat, and
+persists bans in the configured store.
+
 Persistence defaults to a JSON file (`-db file:PATH`, zero setup). For
 PostgreSQL, build with the tag and point `-db` at your database:
 

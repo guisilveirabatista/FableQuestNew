@@ -63,7 +63,8 @@ func (h *Hub) castSlot(p *Player, i int) {
 		return
 	}
 	cost := skillCost(p, id)
-	if p.atkCool > 0 || cost <= 0 || !skillAllowedForClass(p.class, id) || p.mp < cost {
+	freeCast := adminCheatEnabled(p, "infiniteVitals")
+	if p.atkCool > 0 || cost <= 0 || !playerSkillAllowed(p, id) || (!freeCast && p.mp < cost) {
 		return
 	}
 	if skillRequiresTarget(id) && h.liveEnemyLock(p) == nil && h.livePvpTarget(p) == nil {
@@ -82,8 +83,10 @@ func (h *Hub) castSlot(p *Player, i int) {
 	case "nova":
 		ok = h.castNova(p)
 	}
-	if ok {
+	if ok && !freeCast {
 		p.mp -= cost
+	} else if ok {
+		p.mp = float64(p.maxmp)
 	}
 }
 

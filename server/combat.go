@@ -46,6 +46,10 @@ func skillAllowedForClass(class, id string) bool {
 	return id != "heal" || class == "Holy"
 }
 
+func playerSkillAllowed(p *Player, id string) bool {
+	return adminCheatEnabled(p, "allSkills") || skillAllowedForClass(p.class, id)
+}
+
 func hotbarItem(id string) bool {
 	it, ok := items[id]
 	return ok && it.heal > 0
@@ -56,7 +60,7 @@ func hotbarEntryAllowed(p *Player, id string) bool {
 		return false
 	}
 	if _, ok := skillMP[id]; ok {
-		return skillAllowedForClass(p.class, id)
+		return playerSkillAllowed(p, id)
 	}
 	return hotbarItem(id)
 }
@@ -92,7 +96,7 @@ func normalizeSlots(p *Player) {
 	}
 	seen := map[string]bool{}
 	for i, id := range p.slots {
-		if id == "heal" && !skillAllowedForClass(p.class, id) {
+		if id == "heal" && !playerSkillAllowed(p, id) {
 			id = "potion"
 		}
 		if id == "" || !hotbarEntryAllowed(p, id) || seen[id] {
@@ -112,7 +116,7 @@ type derived struct {
 }
 
 func statsOf(p *Player) derived {
-	a := p.attr
+	a := effectiveAttr(p)
 	eq := equipBonus(p) // worn gear bonuses
 	return derived{
 		atk:   1 + a.Str*2 + a.Dex/2 + eq.atk,
@@ -124,6 +128,13 @@ func statsOf(p *Player) derived {
 		dodge: min(60, a.Agi+a.Luck/2+eq.dodge),
 		aspd:  1 + float64(a.Agi-1)*0.06,
 	}
+}
+
+func effectiveAttr(p *Player) AttrSet {
+	if adminCheatEnabled(p, "maxStats") || adminCheatEnabled(p, "maxAttributes") {
+		return AttrSet{Agi: 99, Int: 99, Vit: 99, Str: 99, Dex: 99, Mag: 99, Luck: 99}
+	}
+	return p.attr
 }
 
 // spendAttr raises one primary attribute if the player has a point to spend.
@@ -202,7 +213,7 @@ func skillLevel(p *Player, id string) int {
 
 func upgradeSkill(p *Player, id string) bool {
 	normalizeSkillProgress(p)
-	if _, ok := skillMP[id]; !ok || !skillAllowedForClass(p.class, id) || p.skillPoints <= 0 || p.skillLevels[id] >= maxSkillLevel {
+	if _, ok := skillMP[id]; !ok || !playerSkillAllowed(p, id) || p.skillPoints <= 0 || p.skillLevels[id] >= maxSkillLevel {
 		return false
 	}
 	if req := skillTree[id]; req != "" && p.skillLevels[req] < 2 {
@@ -214,8 +225,14 @@ func upgradeSkill(p *Player, id string) bool {
 }
 
 func recalcMax(p *Player) {
-	p.maxhp = 18 + p.lv*4 + p.attr.Vit*4
-	p.maxmp = 6 + p.lv*2 + p.attr.Int*2
+	a := effectiveAttr(p)
+	p.maxhp = 18 + p.lv*4 + a.Vit*4
+	p.maxmp = 6 + p.lv*2 + a.Int*2
+	if adminCheatEnabled(p, "infiniteVitals") {
+		p.hp = float64(p.maxhp)
+		p.mp = float64(p.maxmp)
+		return
+	}
 	p.hp = math.Min(p.hp, float64(p.maxhp))
 	p.mp = math.Min(p.mp, float64(p.maxmp))
 }
@@ -408,6 +425,14 @@ func (h *Hub) attackHero(en *enemy, p *Player) {
 	}
 	en.lunge = 0.22
 	en.wait = 0.8 + rand.Float64()*0.4
+	if adminCheatEnabled(p, "invulnerable") {
+		return
+	}
+	if adminCheatEnabled(p, "infiniteVitals") {
+		p.hp = float64(p.maxhp)
+		p.mp = float64(p.maxmp)
+		return
+	}
 	if p.iframes > 0 {
 		return
 	}

@@ -37,8 +37,11 @@ const BASE_ATTR = { agi: 1, int: 1, vit: 2, str: 2, dex: 1, mag: 1, luck: 1 };
 const ATTR_POINTS_PER_LEVEL = 2, SKILL_POINTS_PER_LEVEL = 1, MAX_SKILL_LEVEL = 5;
 const SKILL_TREE = { bolt: 'fire', spin: 'fire' };
 function expToNextLevel(lv) { return Math.max(1, lv || 1) * 14; }
+function cheatEnabled(id, h = game.hero) {
+  return !!(h && h.cheats && h.cheats[id]);
+}
 function skillAllowedForClass(id, h = game.hero) {
-  return id !== 'heal' || (h && h.class === 'Holy');
+  return cheatEnabled('allSkills', h) || id !== 'heal' || (h && h.class === 'Holy');
 }
 function availableSkillIds(h = game.hero) {
   return Object.keys(SKILLS).filter(id => skillAllowedForClass(id, h));
@@ -81,6 +84,9 @@ function skillLevel(id, h = game.hero) { normalizeSkillProgress(h); return h.ski
 function skillCost(id, h = game.hero) {
   return SKILLS[id] ? SKILLS[id].mp + skillLevel(id, h) - 1 : 0;
 }
+function skillMpAvailable(id, h = game.hero) {
+  return cheatEnabled('infiniteVitals', h) || h.mp >= skillCost(id, h);
+}
 function statsForAttr(attr) {
   const a = attr;
   const eq = { atk: 0, def: 0, mdef: 0, dodge: 0, crit: 0 }; // worn gear bonuses
@@ -101,11 +107,22 @@ function statsForAttr(attr) {
     aspd: 1 + (a.agi - 1) * 0.06,                           // attack cooldown divider
   };
 }
-function stats() { return statsForAttr(game.hero.attr); }
+function effectiveAttr(h = game.hero) {
+  return cheatEnabled('maxStats', h) || cheatEnabled('maxAttributes', h)
+    ? { agi: 99, int: 99, vit: 99, str: 99, dex: 99, mag: 99, luck: 99 }
+    : h.attr;
+}
+function stats() { return statsForAttr(effectiveAttr(game.hero)); }
 function recalcMax() { // Vitality/Intelligence feed max HP/MP
   const h = game.hero;
-  h.maxhp = 18 + h.lv * 4 + h.attr.vit * 4;
-  h.maxmp = 6 + h.lv * 2 + h.attr.int * 2;
+  const a = effectiveAttr(h);
+  h.maxhp = 18 + h.lv * 4 + a.vit * 4;
+  h.maxmp = 6 + h.lv * 2 + a.int * 2;
+  if (cheatEnabled('infiniteVitals', h)) {
+    h.hp = h.maxhp;
+    h.mp = h.maxmp;
+    return;
+  }
   h.hp = Math.min(h.hp, h.maxhp);
   h.mp = Math.min(h.mp, h.maxmp);
 }
@@ -120,6 +137,7 @@ function resetGame() {
     slots: defaultSlotsForClass('Knight'), // skill/item hotbar, keys 1-5
     skillPoints: 0,
     skillLevels: { fire: 1, heal: 1, spin: 1, bolt: 1, nova: 1 },
+    cheats: {},
     quests: {},
     attr: { ...BASE_ATTR },
     points: 0, // attribute points to spend (3 per level-up)
@@ -580,6 +598,11 @@ function attackHero(en) {
   const h = game.hero, e = ENEMIES[en.kind];
   en.lunge = 0.22;
   en.wait = 0.8 + Math.random() * 0.4;
+  if (cheatEnabled('invulnerable', h) || cheatEnabled('infiniteVitals', h)) {
+    h.hp = h.maxhp;
+    h.mp = h.maxmp;
+    return;
+  }
   if (game.iframes > 0) return;
   const st = stats();
   if (rnd(100) < st.dodge) {
@@ -758,10 +781,12 @@ function castSlot(i) {
     if (!useItem(id)) sfx('Buzzer1');
     return;
   }
-  if (!SKILLS[id] || !skillAllowedForClass(id, h) || h.mp < skillCost(id, h)) { sfx('Buzzer1'); return; }
+  if (!SKILLS[id] || !skillAllowedForClass(id, h) || !skillMpAvailable(id, h)) { sfx('Buzzer1'); return; }
   if (skillRequiresTarget(id) && !liveEnemyLock()) { sfx('Buzzer1'); return; }
-  if (SKILLS[id].cast()) h.mp -= skillCost(id, h);
-  else sfx('Buzzer1');
+  const ok = SKILLS[id].cast();
+  if (!ok) { sfx('Buzzer1'); return; }
+  if (cheatEnabled('infiniteVitals', h)) h.mp = h.maxmp;
+  else h.mp -= skillCost(id, h);
 }
 
 function liveEnemyLock() {
@@ -959,8 +984,12 @@ function bagIds() { return Object.keys(ITEMS).filter(id => game.hero.bag[id] > 0
 function bagWeight() {
   return Object.entries(game.hero.bag).reduce((s, [id, n]) => s + ITEMS[id].w * n, 0);
 }
-function capacity() { const h = game.hero; return 15 + h.lv * 2 + h.attr.str * 2; }
-function overloaded() { return bagWeight() > capacity(); }
+function capacity() {
+  const h = game.hero;
+  if (cheatEnabled('infiniteWeight', h)) return 999999;
+  return 15 + h.lv * 2 + effectiveAttr(h).str * 2;
+}
+function overloaded() { return !cheatEnabled('infiniteWeight') && bagWeight() > capacity(); }
 const CARRY_TOO_MUCH_MSG = "You're carrying too much weight already.";
 function itemStackWeight(id, n) {
   const it = ITEMS[id];
@@ -1387,7 +1416,7 @@ function stepHero(dt) {
   const h = game.hero;
   if (h.dead || game.death) return false;
   if (h.moving) {
-    const speed = (overloaded() ? 32 : 70) * dt; // trudge when the pack is too heavy
+    const speed = (overloaded() ? 32 : (cheatEnabled('superSpeed') ? 140 : 70)) * dt; // trudge when the pack is too heavy
     const gx = h.tx * TS, gy = h.ty * TS;
     h.px += Math.sign(gx - h.px) * Math.min(speed, Math.abs(gx - h.px));
     h.py += Math.sign(gy - h.py) * Math.min(speed, Math.abs(gy - h.py));

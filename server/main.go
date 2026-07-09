@@ -65,6 +65,39 @@ type inMsg struct {
 	Text  string  `json:"text"`  // chat message
 	Scope string  `json:"scope"` // chat scope: say | party | world
 	Ts    float64 `json:"ts"`    // client timestamp echoed by ping/pong
+
+	// admin-only payload fields. They are ignored unless the authenticated
+	// account is in the server's admin allowlist.
+	Target         string         `json:"target"` // account/player target
+	Map            string         `json:"map"`
+	Level          *int           `json:"level,omitempty"`
+	GoldSet        *int           `json:"gold,omitempty"`
+	PointsSet      *int           `json:"points,omitempty"`
+	SkillPointsSet *int           `json:"skillPoints,omitempty"`
+	HPSet          *float64       `json:"hp,omitempty"`
+	MPSet          *float64       `json:"mp,omitempty"`
+	Attr           *AttrSet       `json:"attr,omitempty"`
+	SkillLv        map[string]int `json:"skillLv,omitempty"`
+}
+
+type adminCheats struct {
+	Invulnerable   bool `json:"invulnerable,omitempty"`
+	InfiniteWeight bool `json:"infiniteWeight,omitempty"`
+	InfiniteVitals bool `json:"infiniteVitals,omitempty"`
+	MaxAttributes  bool `json:"maxAttributes,omitempty"`
+	MaxStats       bool `json:"maxStats,omitempty"`
+	AllSkills      bool `json:"allSkills,omitempty"`
+	SuperSpeed     bool `json:"superSpeed,omitempty"`
+}
+
+type bannedCharacterView struct {
+	Account string `json:"account"`
+	Name    string `json:"name"`
+}
+
+type banListView struct {
+	Accounts   []string              `json:"accounts,omitempty"`
+	Characters []bannedCharacterView `json:"characters,omitempty"`
 }
 
 type loginErrMsg struct {
@@ -111,6 +144,8 @@ type playerView struct {
 	SkillPts     int                   `json:"skillPts"`
 	SkillLv      map[string]int        `json:"skillLv,omitempty"`
 	Quests       map[string]QuestState `json:"quests,omitempty"`
+	Admin        bool                  `json:"admin,omitempty"`
+	Cheats       adminCheats           `json:"cheats,omitempty"`
 }
 type projView struct {
 	X    float64 `json:"x"`
@@ -131,6 +166,7 @@ type welcomeMsg struct {
 	Hair       string             `json:"hair"`
 	Cloth      string             `json:"cloth"`
 	Map        string             `json:"map"`
+	Admin      bool               `json:"admin,omitempty"`
 	Tx         int                `json:"tx,omitempty"`
 	Ty         int                `json:"ty,omitempty"`
 	Dir        string             `json:"dir,omitempty"`
@@ -154,6 +190,10 @@ type characterListMsg struct {
 	Classes    []string           `json:"classes"`
 	Selected   string             `json:"selected,omitempty"`
 	Error      string             `json:"error,omitempty"`
+}
+type chatMsg struct {
+	T    string     `json:"t"`
+	Chat []chatLine `json:"chat"`
 }
 type enemyView struct {
 	ID     int     `json:"id"`
@@ -187,6 +227,7 @@ type snapMsg struct {
 	Autoloot bool              `json:"autoloot"`
 	Attr     AttrSet           `json:"attr"`
 	Log      []string          `json:"log,omitempty"`
+	BanLists *banListView      `json:"banLists,omitempty"`
 	// social (Phase 6): private to the receiving player
 	Chat     []chatLine `json:"chat,omitempty"`
 	Party    *partyView `json:"party,omitempty"`
@@ -224,6 +265,8 @@ type Player struct {
 	class    string
 	hair     string
 	cloth    string
+	admin    bool
+	cheats   adminCheats
 	conn     netConn
 
 	mu    sync.Mutex // guards inbox (read goroutine appends, tick drains)
@@ -292,9 +335,9 @@ func (p *Player) view() playerView {
 		Tx: p.tx, Ty: p.ty, Px: p.px, Py: p.py, Dir: p.dir, Moving: p.moving, Anim: p.anim,
 		HP: p.hp, MaxHP: p.maxhp, MP: p.mp, MaxMP: p.maxmp, Lv: p.lv, Exp: p.exp, Gold: p.gold, Kills: p.kills,
 		Lock: p.lockID, Slots: p.slots, Follow: p.follow, FollowTarget: p.followTarget, Dead: p.dead, DeathCause: p.deathCause,
-		Pvp: p.pvp, PvpTarget: p.pvpTarget, CombatLog: p.combatLogoutT,
+		Pvp: p.pvp, PvpTarget: p.pvpTarget, CombatLog: combatLogoutRemaining(p),
 		Hair: p.hair, Cloth: p.cloth, SkillPts: p.skillPoints, SkillLv: skillLv,
-		Quests: cloneQuestStates(p.quests),
+		Quests: cloneQuestStates(p.quests), Admin: p.admin, Cheats: p.cheats,
 	}
 }
 
@@ -393,7 +436,7 @@ func writeWelcome(c netConn, user string, ch *charState, chars []*charState, nee
 		hair, cloth = ch.Hair, ch.Cloth
 	}
 	writeJSON(c, welcomeMsg{
-		T: "welcome", ID: user, Name: name, Class: class, Hair: hair, Cloth: cloth, Map: mapID, Tx: tx, Ty: ty, Dir: dir,
+		T: "welcome", ID: user, Name: name, Class: class, Hair: hair, Cloth: cloth, Map: mapID, Admin: isAdminUser(user), Tx: tx, Ty: ty, Dir: dir,
 		Tick: tickHz, NeedChar: needChar, Classes: characterClasses, Characters: characterSummaries(chars),
 	})
 }
@@ -468,6 +511,7 @@ func (h *Hub) addPlayer(c netConn, user string, ch *charState) *Player {
 	if p := h.players[user]; p != nil && (p.conn == nil || p.logoutPending) {
 		old := p.conn
 		p.conn = c
+		p.admin = isAdminUser(user)
 		p.logoutPending = false
 		p.moveDir = ""
 		p.logMsg("Reconnected.")
@@ -479,7 +523,18 @@ func (h *Hub) addPlayer(c netConn, user string, ch *charState) *Player {
 		return p
 	}
 	defer h.mu.Unlock()
-	p := &Player{id: user, username: user, conn: c, dir: "down", aoiW: 22, aoiH: 16, friends: map[string]bool{}}
+	p := &Player{id: user, username: user, admin: isAdminUser(user), conn: c, dir: "down", aoiW: 22, aoiH: 16, friends: map[string]bool{}}
+	if p.admin {
+		p.cheats = adminCheats{
+			Invulnerable:   true,
+			InfiniteWeight: true,
+			InfiniteVitals: true,
+			MaxAttributes:  true,
+			MaxStats:       true,
+			AllSkills:      true,
+			SuperSpeed:     true,
+		}
+	}
 	if ch != nil {
 		applyCharState(p, ch)
 	} else {
@@ -547,13 +602,24 @@ func (h *Hub) remove(p *Player) {
 }
 
 func (h *Hub) markCombat(p *Player) {
+	if p != nil && p.isAdmin() {
+		p.combatLogoutT = 0
+		return
+	}
 	if p != nil && !p.dead {
 		p.combatLogoutT = combatLogoutSeconds
 	}
 }
 
+func combatLogoutRemaining(p *Player) float64 {
+	if p == nil || p.isAdmin() {
+		return 0
+	}
+	return p.combatLogoutT
+}
+
 func (h *Hub) shouldLingerAfterDisconnect(p *Player) bool {
-	return p != nil && !p.dead && p.combatLogoutT > 0
+	return p != nil && !p.dead && combatLogoutRemaining(p) > 0
 }
 
 func saveCharacter(user string, ch *charState) {
@@ -728,8 +794,13 @@ func (h *Hub) run() {
 			p.iframes = max(0, p.iframes-dt)
 			p.chatCool = max(0, p.chatCool-dt)
 			p.combatLogoutT = max(0, p.combatLogoutT-dt)
-			p.mp = math.Min(float64(p.maxmp), p.mp+dt*0.35)
-			p.hp = math.Min(float64(p.maxhp), p.hp+dt*0.4)
+			if adminCheatEnabled(p, "infiniteVitals") {
+				p.hp = float64(p.maxhp)
+				p.mp = float64(p.maxmp)
+			} else {
+				p.mp = math.Min(float64(p.maxmp), p.mp+dt*0.35)
+				p.hp = math.Min(float64(p.maxhp), p.hp+dt*0.4)
+			}
 			// drop a stale lock/follow (target died or left the map)
 			if p.lockID != 0 {
 				if en := h.enemyByID(p.mapID, p.lockID); en == nil || en.dead || en.dying > 0 {
@@ -890,12 +961,17 @@ func (h *Hub) run() {
 			p.mu.Lock()
 			ack := p.ackSeq
 			p.mu.Unlock()
+			attr := p.attr
+			if adminCheatEnabled(p, "maxStats") || adminCheatEnabled(p, "maxAttributes") {
+				attr = effectiveAttr(p)
+			}
 			data, _ := json.Marshal(snapMsg{
 				T: "snap", Map: p.mapID, Ack: ack, You: p.view(),
 				Players: others, Enemies: enemies, Projectiles: proj, Bolts: bolts,
 				Floor: fl, Corpses: cp,
-				Bag: p.bag, Equip: p.equip, Points: p.points, Autoloot: p.autoloot, Attr: p.attr,
+				Bag: p.bag, Equip: p.equip, Points: p.points, Autoloot: p.autoloot, Attr: attr,
 				Log:      p.drainLog(),
+				BanLists: adminBanListsFor(p),
 				Chat:     p.drainChat(),
 				Party:    h.buildPartyView(p),
 				Trade:    h.buildTradeView(p),
@@ -1145,6 +1221,27 @@ func (h *Hub) applyIntent(p *Player, m inMsg) {
 		h.friendRemove(p, m.Id)
 	case "friendList":
 		h.friendList(p)
+	// ---- admin ----
+	case "adminAnnounce":
+		h.adminAnnounce(p, m.Text)
+	case "adminBanAccount":
+		h.adminBanAccount(p, m.Target)
+	case "adminUnbanAccount":
+		h.adminUnbanAccount(p, m.Target)
+	case "adminBanCharacter":
+		h.adminBanCharacter(p, m.Target, m.Name)
+	case "adminUnbanCharacter":
+		h.adminUnbanCharacter(p, m.Target, m.Name)
+	case "adminTeleport":
+		h.adminTeleport(p, m)
+	case "adminGrantItem":
+		h.adminGrantItem(p, m.Id, m.N)
+	case "adminEditSelf":
+		h.adminEditSelf(p, m)
+	case "adminSummon":
+		h.adminSummon(p, m)
+	case "adminSetCheat":
+		h.adminSetCheat(p, m.Key, m.V)
 	}
 }
 
@@ -1198,6 +1295,10 @@ readloop:
 						loginErr("wrong password")
 						continue
 					}
+					if err == errAccountBanned {
+						loginErr("account banned")
+						continue
+					}
 					if err != nil {
 						loginErr("login failed")
 						continue
@@ -1232,6 +1333,15 @@ readloop:
 					ch := findCharacter(chars, m.Name)
 					if ch == nil {
 						writeCharacterList(c, chars, "", "Select a character.")
+						continue
+					}
+					banned, err := store.CharacterBanned(user, ch.Name)
+					if err != nil {
+						writeCharacterList(c, chars, ch.Name, "Could not check character access.")
+						continue
+					}
+					if banned {
+						writeCharacterList(c, chars, ch.Name, "That character is banned.")
 						continue
 					}
 					p = h.addPlayer(c, user, ch)
@@ -1270,6 +1380,7 @@ func main() {
 	spawnAt := flag.String("spawn", "city", "player spawn map: city (safe plaza) or field (among monsters, for testing)")
 	spread := flag.Bool("spread", false, "scatter players across the field (for load-testing area-of-interest)")
 	db := flag.String("db", "file:fablequest.db.json", "persistence: file:PATH (default) or postgres://... (needs -tags postgres)")
+	admins := flag.String("admins", "", "comma-separated admin account names")
 	mode := flag.String("mode", "solo", "solo (all-in-one) | zone (simulate some maps) | gateway (client-facing proxy)")
 	zoneMaps := flag.String("maps", "", "zone mode: comma-separated maps this zone owns, e.g. city,field")
 	zaddr := flag.String("zaddr", ":9101", "zone mode: internal TCP address the gateway links to")
@@ -1277,6 +1388,7 @@ func main() {
 	flag.Var(&zoneRoutes, "zone", "gateway mode: map=addr route, repeatable, e.g. -zone city=:9101 -zone field=:9102")
 	flag.Parse()
 	spawnSpread = *spread
+	configureAdmins(*admins)
 
 	buildMaps()
 	if *spawnAt == "field" { // dev/testing: drop players straight into monster territory

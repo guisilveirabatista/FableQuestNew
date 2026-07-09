@@ -617,6 +617,14 @@ func (h *Hub) pvpHit(attacker, target *Player, dmg int, crit, magic bool) {
 	if !h.canPvp(attacker, target) || target.iframes > 0 {
 		return
 	}
+	if adminCheatEnabled(target, "invulnerable") {
+		return
+	}
+	if adminCheatEnabled(target, "infiniteVitals") {
+		target.hp = float64(target.maxhp)
+		target.mp = float64(target.maxmp)
+		return
+	}
 	st := statsOf(target)
 	if rand.Intn(100) < st.dodge {
 		return

@@ -13,11 +13,13 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 )
 
 var errBadPassword = errors.New("wrong password")
+var errAccountBanned = errors.New("account banned")
 
 const (
 	defaultHair  = "#6b3f22"
@@ -81,6 +83,11 @@ type charState struct {
 type Store interface {
 	Login(user, pass string) (chars []*charState, err error)
 	Save(user string, ch *charState) error
+	SetAccountBan(user string, banned bool) error
+	AccountBanned(user string) (bool, error)
+	SetCharacterBan(user, name string, banned bool) error
+	CharacterBanned(user, name string) (bool, error)
+	ListBans() (banListView, error)
 	Close() error
 }
 
@@ -106,10 +113,12 @@ func openStore(dsn string) (Store, error) {
 // ---- file store ------------------------------------------------------------
 
 type account struct {
-	Salt       string       `json:"salt"`
-	Hash       string       `json:"hash"`
-	Char       *charState   `json:"char,omitempty"`       // legacy single-character save
-	Characters []*charState `json:"characters,omitempty"` // current multi-character roster
+	Salt             string       `json:"salt"`
+	Hash             string       `json:"hash"`
+	Banned           bool         `json:"banned,omitempty"`
+	BannedCharacters []string     `json:"bannedCharacters,omitempty"`
+	Char             *charState   `json:"char,omitempty"`       // legacy single-character save
+	Characters       []*charState `json:"characters,omitempty"` // current multi-character roster
 }
 
 type fileStore struct {
@@ -151,6 +160,19 @@ func (s *fileStore) Login(user, pass string) ([]*charState, error) {
 		}
 		return nil, nil // brand-new character
 	}
+	if a.Banned {
+		return nil, errAccountBanned
+	}
+	if a.Salt == "" && a.Hash == "" { // reserved moderation row; finish registration
+		saltBytes := make([]byte, 16)
+		rand.Read(saltBytes)
+		a.Salt = hex.EncodeToString(saltBytes)
+		a.Hash = hashPass(pass, a.Salt)
+		if err := s.persistLocked(); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	}
 	// constant-time compare to avoid leaking timing info
 	if subtle.ConstantTimeCompare([]byte(hashPass(pass, a.Salt)), []byte(a.Hash)) != 1 {
 		return nil, errBadPassword
@@ -190,6 +212,80 @@ func (s *fileStore) Save(user string, ch *charState) error {
 	return s.persistLocked()
 }
 
+func (s *fileStore) SetAccountBan(user string, banned bool) error {
+	if !validName(user) {
+		return errors.New("invalid account name")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	a := s.accounts[user]
+	if a == nil {
+		a = &account{}
+		s.accounts[user] = a
+	}
+	a.Banned = banned
+	return s.persistLocked()
+}
+
+func (s *fileStore) AccountBanned(user string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	a := s.accounts[user]
+	return a != nil && a.Banned, nil
+}
+
+func (s *fileStore) SetCharacterBan(user, name string, banned bool) error {
+	if !validName(user) || !validName(name) {
+		return errors.New("invalid account or character name")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	a := s.accounts[user]
+	if a == nil {
+		a = &account{}
+		s.accounts[user] = a
+	}
+	a.BannedCharacters = setNameInList(a.BannedCharacters, name, banned)
+	return s.persistLocked()
+}
+
+func (s *fileStore) CharacterBanned(user, name string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	a := s.accounts[user]
+	if a == nil {
+		return false, nil
+	}
+	return nameInList(a.BannedCharacters, name), nil
+}
+
+func (s *fileStore) ListBans() (banListView, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := banListView{}
+	for user, a := range s.accounts {
+		if a == nil {
+			continue
+		}
+		if a.Banned {
+			out.Accounts = append(out.Accounts, user)
+		}
+		for _, name := range a.BannedCharacters {
+			if validName(name) {
+				out.Characters = append(out.Characters, bannedCharacterView{Account: user, Name: name})
+			}
+		}
+	}
+	sort.Strings(out.Accounts)
+	sort.Slice(out.Characters, func(i, j int) bool {
+		if !strings.EqualFold(out.Characters[i].Account, out.Characters[j].Account) {
+			return strings.ToLower(out.Characters[i].Account) < strings.ToLower(out.Characters[j].Account)
+		}
+		return strings.ToLower(out.Characters[i].Name) < strings.ToLower(out.Characters[j].Name)
+	})
+	return out, nil
+}
+
 func (s *fileStore) persistLocked() error {
 	data, err := json.MarshalIndent(s.accounts, "", "  ")
 	if err != nil {
@@ -212,6 +308,29 @@ func normalizeAccountCharacters(a *account) ([]*charState, bool) {
 		migrated = true
 	}
 	return a.Characters, migrated
+}
+
+func nameInList(list []string, name string) bool {
+	for _, s := range list {
+		if strings.EqualFold(s, name) {
+			return true
+		}
+	}
+	return false
+}
+
+func setNameInList(list []string, name string, present bool) []string {
+	out := list[:0]
+	for _, s := range list {
+		if strings.EqualFold(s, name) {
+			continue
+		}
+		out = append(out, s)
+	}
+	if present {
+		out = append(out, name)
+	}
+	return out
 }
 
 func cloneChar(ch *charState) *charState {

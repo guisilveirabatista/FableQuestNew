@@ -49,6 +49,7 @@ type enemy struct {
 	// combat fields
 	flash, dying, stun, hurtT, lunge float64
 	dead                             bool
+	summoned                         bool
 }
 
 func pickKind() string {
@@ -128,11 +129,23 @@ func enemyAt(list []*enemy, x, y int, except *enemy) bool {
 
 // updateEnemies advances every monster on every spawn map for one tick.
 func (h *Hub) updateEnemies(playersByMap map[string][]*Player, dt float64) {
+	seen := map[string]bool{}
+	var mapIDs []string
 	for _, mapID := range spawnMaps {
+		seen[mapID] = true
+		mapIDs = append(mapIDs, mapID)
+	}
+	for mapID := range h.enemies {
+		if !seen[mapID] {
+			seen[mapID] = true
+			mapIDs = append(mapIDs, mapID)
+		}
+	}
+	for _, mapID := range mapIDs {
 		players := playersByMap[mapID]
 		// spawn only while at least one player is around to see it
 		h.spawnT[mapID] -= dt
-		if len(players) > 0 && len(h.enemies[mapID]) < maxEnemies && h.spawnT[mapID] <= 0 {
+		if isNaturalSpawnMap(mapID) && len(players) > 0 && len(h.enemies[mapID]) < maxEnemies && h.spawnT[mapID] <= 0 {
 			h.spawnEnemy(mapID, players)
 			h.spawnT[mapID] = 2
 		}
@@ -149,6 +162,15 @@ func (h *Hub) updateEnemies(playersByMap map[string][]*Player, dt float64) {
 		}
 		h.enemies[mapID] = kept
 	}
+}
+
+func isNaturalSpawnMap(mapID string) bool {
+	for _, m := range spawnMaps {
+		if m == mapID {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *Hub) stepEnemy(mapID string, en *enemy, players []*Player, dt float64) {
@@ -220,7 +242,7 @@ func (h *Hub) stepEnemy(mapID string, en *enemy, players []*Player, dt float64) 
 			}
 			break
 		}
-		if !isGrass(mapID, nx, ny) || blocked(mapID, nx, ny) ||
+		if !enemyCanStep(mapID, en, nx, ny) || blocked(mapID, nx, ny) ||
 			enemyAt(h.enemies[mapID], nx, ny, en) || h.playerAt(mapID, nx, ny, nil) {
 			continue // grass only; don't stack on walls, other monsters, or players
 		}
@@ -229,6 +251,13 @@ func (h *Hub) stepEnemy(mapID string, en *enemy, players []*Player, dt float64) 
 		en.moving = true
 		break
 	}
+}
+
+func enemyCanStep(mapID string, en *enemy, x, y int) bool {
+	if en != nil && en.summoned {
+		return maps[mapID] != nil && x >= 0 && x < MW && y >= 0 && y < MH
+	}
+	return isGrass(mapID, x, y)
 }
 
 func randDir() string {

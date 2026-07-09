@@ -203,3 +203,21 @@ Improvements
   every strike. Can you investigate and come up with a solution for it?
 
   - In the Quests window, I would like to see only the name of the quest first, and then, if I click on details of that quest, it should show me more info. This way I can have a list of many quests there. Both quests active and completed should have the same UI concept. Maybe making each row of the quests a collapsable grid and the list of quests also scrollable.
+
+  - Public announcements sent by the admin should be displayed to all characters and in yellow in the chat
+
+- I would like to have an admin account where I have a menu admin with the following features:
+    - Ban account
+    - Ban only a specific character from an accout
+    - Teleport
+    - Create all items I want and how many of them I want
+    - Be able to change my level, class, stats, skills, attributes at will
+    - Summon any monsters anywhere
+
+
+- Some more bug fixes. All the windows and sub windows that belong to the main menu should be on a layer above all the other windows in the game. Also, the windows of the admin have the button "Apply". But I would like for the announcements for example to have a button "Send". This button should be "Disabled" by default and enabled once there is text in the input. Once the text is sent, then it goes back to disabled. The other buttons from the other admin windows should also have labels that make sense in that context.
+
+- The admin should be able to use cheats like "invulnerable", "infinite weight capacity", "maxed out stats", "all skills available", "super speed". You can add a window to the admin menu with these cheats as a toggle and add commands that I can activate my typing in the chat using a command like /cheat for example.
+
+- Add the command to unban a character for the admin
+- Add a cheat to have infinite health and mp

@@ -52,3 +52,65 @@ func TestFileStoreLoginRegisterSaveReload(t *testing.T) {
 		t.Fatalf("new user should register fresh (chars=%v err=%v)", chars, err)
 	}
 }
+
+func TestFileStoreAccountAndCharacterBansPersist(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "db.json")
+	s, err := newFileStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetAccountBan("blocked", true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Login("blocked", "pw"); err != errAccountBanned {
+		t.Fatalf("banned account should be rejected, got %v", err)
+	}
+	if err := s.SetAccountBan("blocked", false); err != nil {
+		t.Fatal(err)
+	}
+	if chars, err := s.Login("blocked", "pw"); err != nil || chars != nil {
+		t.Fatalf("unbanned reserved account should register fresh, chars=%v err=%v", chars, err)
+	}
+
+	if _, err := s.Login("owner", "pw"); err != nil {
+		t.Fatal(err)
+	}
+	ch := &charState{Name: "HeroOne", Class: "Knight", MapID: "city", Tx: 19, Ty: 16}
+	if err := s.Save("owner", ch); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetCharacterBan("owner", "HeroOne", true); err != nil {
+		t.Fatal(err)
+	}
+
+	s2, err := newFileStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if banned, err := s2.CharacterBanned("owner", "heroone"); err != nil || !banned {
+		t.Fatalf("character ban should persist case-insensitively, banned=%v err=%v", banned, err)
+	}
+	if err := s2.SetCharacterBan("owner", "HeroOne", false); err != nil {
+		t.Fatal(err)
+	}
+	if banned, err := s2.CharacterBanned("owner", "HeroOne"); err != nil || banned {
+		t.Fatalf("character unban should persist, banned=%v err=%v", banned, err)
+	}
+
+	if err := s2.SetAccountBan("second", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := s2.SetCharacterBan("owner", "HeroTwo", true); err != nil {
+		t.Fatal(err)
+	}
+	lists, err := s2.ListBans()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lists.Accounts) != 1 || lists.Accounts[0] != "second" {
+		t.Fatalf("account ban list mismatch: %#v", lists.Accounts)
+	}
+	if len(lists.Characters) != 1 || lists.Characters[0].Account != "owner" || lists.Characters[0].Name != "HeroTwo" {
+		t.Fatalf("character ban list mismatch: %#v", lists.Characters)
+	}
+}

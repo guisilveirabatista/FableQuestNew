@@ -18,11 +18,12 @@ import (
 // enterMsg: gateway -> zone. Brings an authenticated player (with full character
 // state) into this zone. Sent as the first frame on a fresh link.
 type enterMsg struct {
-	T    string     `json:"t"`
-	ID   string     `json:"id"`
-	Char *charState `json:"char"`
-	Vw   int        `json:"vw"`
-	Vh   int        `json:"vh"`
+	T     string     `json:"t"`
+	ID    string     `json:"id"`
+	Admin bool       `json:"admin,omitempty"`
+	Char  *charState `json:"char"`
+	Vw    int        `json:"vw"`
+	Vh    int        `json:"vh"`
 }
 
 // handoffMsg: zone -> gateway. The player stepped onto an exit to a map this
@@ -114,6 +115,7 @@ func (h *Hub) addFromEnter(link *framedConn, em enterMsg) *Player {
 	if p := h.players[em.ID]; p != nil && (p.conn == nil || p.logoutPending) {
 		old := p.conn
 		p.conn = link
+		p.admin = em.Admin && isAdminUser(em.ID)
 		p.logoutPending = false
 		p.moveDir = ""
 		p.logMsg("Reconnected.")
@@ -131,7 +133,18 @@ func (h *Hub) addFromEnter(link *framedConn, em enterMsg) *Player {
 		return p
 	}
 	defer h.mu.Unlock()
-	p := &Player{id: em.ID, username: em.ID, conn: link, dir: "down", aoiW: 22, aoiH: 16, friends: map[string]bool{}}
+	p := &Player{id: em.ID, username: em.ID, admin: em.Admin && isAdminUser(em.ID), conn: link, dir: "down", aoiW: 22, aoiH: 16, friends: map[string]bool{}}
+	if p.admin {
+		p.cheats = adminCheats{
+			Invulnerable:   true,
+			InfiniteWeight: true,
+			InfiniteVitals: true,
+			MaxAttributes:  true,
+			MaxStats:       true,
+			AllSkills:      true,
+			SuperSpeed:     true,
+		}
+	}
 	applyCharState(p, em.Char)
 	if em.Vw > 0 {
 		p.aoiW = clampInt(em.Vw, 8, 60)

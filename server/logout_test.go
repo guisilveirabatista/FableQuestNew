@@ -27,6 +27,13 @@ func connectedHero(id, mapID string, tx, ty int, conn netConn) *Player {
 	return p
 }
 
+func makeLogoutAdmin(t *testing.T, p *Player) {
+	oldAdmins := adminUsers
+	configureAdmins(p.username)
+	p.admin = true
+	t.Cleanup(func() { adminUsers = oldAdmins })
+}
+
 func TestDamageMarksCombatLogoutTimer(t *testing.T) {
 	h := newHub()
 	p := connectedHero("hero", "field", 15, 10, &testConn{})
@@ -36,6 +43,24 @@ func TestDamageMarksCombatLogoutTimer(t *testing.T) {
 	h.attackHero(en, p)
 	if p.combatLogoutT != combatLogoutSeconds {
 		t.Fatalf("taking damage in the field should start combat logout timer, got %v", p.combatLogoutT)
+	}
+}
+
+func TestAdminDamageDoesNotMarkCombatLogoutTimer(t *testing.T) {
+	h := newHub()
+	p := connectedHero("adminhero", "field", 15, 10, &testConn{})
+	makeLogoutAdmin(t, p)
+	en := slimeAt(1, 16, 10)
+	p.attr.Agi, p.attr.Luck = 0, 0
+	recalcMax(p)
+
+	h.attackHero(en, p)
+
+	if p.combatLogoutT != 0 {
+		t.Fatalf("admin damage should not start combat logout timer, got %v", p.combatLogoutT)
+	}
+	if got := p.view().CombatLog; got != 0 {
+		t.Fatalf("admin snapshot should hide combat logout timer, got %v", got)
 	}
 }
 
@@ -58,6 +83,40 @@ func TestPlayerViewIncludesCombatLogoutTimer(t *testing.T) {
 	p.combatLogoutT = 42
 	if got := p.view().CombatLog; got != 42 {
 		t.Fatalf("snapshot should expose combat logout timer, got %v", got)
+	}
+}
+
+func TestAdminCanLeaveCharacterDuringCombatLogout(t *testing.T) {
+	h := newHub()
+	c := &testConn{}
+	p := connectedHero("adminhero", "field", 15, 10, c)
+	makeLogoutAdmin(t, p)
+	p.combatLogoutT = combatLogoutSeconds
+	h.players[p.id] = p
+
+	ch, errMsg, ok := h.leaveCharacter(p, c)
+	if !ok || errMsg != "" || ch == nil {
+		t.Fatalf("admin should bypass combat logout on character leave, ok=%v err=%q ch=%#v", ok, errMsg, ch)
+	}
+	if got := h.players[p.id]; got != nil {
+		t.Fatalf("admin should leave the world immediately, got %#v", got)
+	}
+}
+
+func TestAdminDisconnectDoesNotLingerDuringCombatLogout(t *testing.T) {
+	h := newHub()
+	c := &testConn{}
+	p := connectedHero("adminhero", "field", 15, 10, c)
+	makeLogoutAdmin(t, p)
+	p.combatLogoutT = combatLogoutSeconds
+	h.players[p.id] = p
+
+	h.disconnect(p, c)
+	if !c.closed {
+		t.Fatal("admin disconnect should close the socket")
+	}
+	if got := h.players[p.id]; got != nil {
+		t.Fatalf("admin disconnect should not linger in combat logout, got %#v", got)
 	}
 }
 
@@ -119,6 +178,25 @@ func TestZoneLeaveLingersDuringCombatLogout(t *testing.T) {
 	}
 	if !c.closed || p.conn != c2 || p.logoutPending {
 		t.Fatalf("reattach should close old final-save link and resume the player, oldClosed=%v conn=%v pending=%v", c.closed, p.conn, p.logoutPending)
+	}
+}
+
+func TestAdminZoneLeaveDoesNotLingerDuringCombatLogout(t *testing.T) {
+	h := newHub()
+	c := &testConn{}
+	p := connectedHero("adminhero", "field", 15, 10, c)
+	makeLogoutAdmin(t, p)
+	p.combatLogoutT = combatLogoutSeconds
+	h.players[p.id] = p
+
+	if h.beginZoneLeave(p, c) {
+		t.Fatal("admin zone leave should not wait for the logout timer")
+	}
+	if !c.closed || c.writes != 1 {
+		t.Fatalf("admin zone leave should send final state and close immediately, closed=%v writes=%d", c.closed, c.writes)
+	}
+	if got := h.players[p.id]; got != nil {
+		t.Fatalf("admin zone leave should remove the player immediately, got %#v", got)
 	}
 }
 
