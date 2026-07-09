@@ -197,6 +197,9 @@ type corpseView struct {
 	Tx      int            `json:"tx"`
 	Ty      int            `json:"ty"`
 	Name    string         `json:"name,omitempty"`
+	Class   string         `json:"class,omitempty"`
+	Hair    string         `json:"hair,omitempty"`
+	Cloth   string         `json:"cloth,omitempty"`
 	Items   map[string]int `json:"items"`
 	Decayed bool           `json:"decayed"`
 }
@@ -821,7 +824,10 @@ func (h *Hub) run() {
 		cViews := map[string][]corpseView{}
 		for mapID, list := range h.corpses {
 			for _, c := range list {
-				cViews[mapID] = append(cViews[mapID], corpseView{c.tx, c.ty, c.name, c.items, c.decayed})
+				cViews[mapID] = append(cViews[mapID], corpseView{
+					Tx: c.tx, Ty: c.ty, Name: c.name, Class: c.class,
+					Hair: c.hair, Cloth: c.cloth, Items: c.items, Decayed: c.decayed,
+				})
 			}
 		}
 		// 4) snapshot each player — only the entities inside its area of interest

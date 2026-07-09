@@ -13,11 +13,12 @@ type floorItem struct {
 }
 
 type corpse struct {
-	tx, ty  int
-	name    string
-	items   map[string]int
-	age     float64
-	decayed bool
+	tx, ty             int
+	name               string
+	class, hair, cloth string
+	items              map[string]int
+	age                float64
+	decayed            bool
 }
 
 const (
@@ -42,6 +43,18 @@ func near(p *Player, tx, ty int) bool {
 
 func lootDropTileAllowed(mapID string, tx, ty int) bool {
 	return !blocked(mapID, tx, ty)
+}
+
+func waterTile(mapID string, tx, ty int) bool {
+	if tx < 0 || ty < 0 || tx >= MW || ty >= MH {
+		return false
+	}
+	m := maps[mapID]
+	return m != nil && m.ground[ty][tx] == 'W'
+}
+
+func corpseDropTileAllowed(mapID string, tx, ty int) bool {
+	return !blocked(mapID, tx, ty) || waterTile(mapID, tx, ty)
 }
 
 func inPlayerView(p *Player, tx, ty int) bool {
@@ -106,22 +119,42 @@ func (h *Hub) moveFloorItem(p *Player, fromTx, fromTy, toTx, toTy int, want stri
 
 // dropCorpse turns a dead player's whole bag into a corpse at the fall site.
 // Even an empty pack leaves a body, so players can still open it until decay.
-func (h *Hub) dropCorpse(mapID string, tx, ty int, name string, bag map[string]int) {
+func (h *Hub) dropCorpse(mapID string, tx, ty int, owner *Player, bag map[string]int) {
 	items := map[string]int{}
 	for id, n := range bag {
 		if n > 0 {
 			items[id] = n
 		}
 	}
-	h.corpses[mapID] = append(h.corpses[mapID], &corpse{tx: tx, ty: ty, name: name, items: items})
+	name, class, hair, cloth := "Hero", "Knight", defaultHair, defaultCloth
+	if owner != nil {
+		name = owner.displayName()
+		if owner.class != "" {
+			class = owner.class
+		}
+		if owner.hair != "" {
+			hair = owner.hair
+		}
+		if owner.cloth != "" {
+			cloth = owner.cloth
+		}
+	}
+	h.corpses[mapID] = append(h.corpses[mapID], &corpse{
+		tx: tx, ty: ty, name: name, class: class, hair: hair, cloth: cloth, items: items,
+	})
 }
 
 func (h *Hub) moveCorpse(p *Player, fromTx, fromTy, toTx, toTy int) bool {
-	if !near(p, fromTx, fromTy) || !lootDropTileAllowed(p.mapID, toTx, toTy) || !inPlayerView(p, toTx, toTy) {
+	if !near(p, fromTx, fromTy) || !corpseDropTileAllowed(p.mapID, toTx, toTy) || !inPlayerView(p, toTx, toTy) {
 		return false
 	}
-	for _, c := range h.corpses[p.mapID] {
+	list := h.corpses[p.mapID]
+	for i, c := range list {
 		if c.tx == fromTx && c.ty == fromTy {
+			if waterTile(p.mapID, toTx, toTy) {
+				h.corpses[p.mapID] = append(list[:i], list[i+1:]...)
+				return true
+			}
 			c.tx = toTx
 			c.ty = toTy
 			return true

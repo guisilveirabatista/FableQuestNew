@@ -436,7 +436,7 @@ func (h *Hub) playerDie(p *Player, cause string) {
 	fellMap, fellTx, fellTy := p.mapID, p.tx, p.ty
 	p.logMsg(fmt.Sprintf("You died at %s on %s (%d,%d). Killed by %s.",
 		time.Now().Format("15:04:05"), fellMap, fellTx, fellTy, cause))
-	h.dropCorpse(fellMap, fellTx, fellTy, p.displayName(), p.bag)
+	h.dropCorpse(fellMap, fellTx, fellTy, p, p.bag)
 	p.bag = map[string]int{}
 	p.moving = false
 	p.hp = 0

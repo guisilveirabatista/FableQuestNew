@@ -104,6 +104,10 @@ func TestMoveFloorItemNeedsReachAndView(t *testing.T) {
 func TestDeathDropsCorpseAndWaitsForRespawn(t *testing.T) {
 	h := newHub()
 	p := heroAt("field", 15, 10)
+	p.name = "Gwen"
+	p.class = "Wizard"
+	p.hair = "#112233"
+	p.cloth = "#445566"
 	p.bag = map[string]int{"potion": 3, "bread": 2}
 	h.playerDie(p, "Slime")
 	cs := h.corpses["field"]
@@ -115,6 +119,9 @@ func TestDeathDropsCorpseAndWaitsForRespawn(t *testing.T) {
 	}
 	if cs[0].name != p.displayName() {
 		t.Fatalf("corpse should remember the fallen player's name, got %q", cs[0].name)
+	}
+	if cs[0].class != p.class || cs[0].hair != p.hair || cs[0].cloth != p.cloth {
+		t.Fatalf("corpse should remember the fallen player's sprite, got class=%q hair=%q cloth=%q", cs[0].class, cs[0].hair, cs[0].cloth)
 	}
 	if len(p.bag) != 0 {
 		t.Fatalf("your bag should be empty after death, got %+v", p.bag)
@@ -153,6 +160,19 @@ func TestMoveCorpseFromReachToView(t *testing.T) {
 	c := h.corpses["field"][0]
 	if c.tx != 24 || c.ty != 10 || c.name != "Hero" || c.items["potion"] != 3 {
 		t.Fatalf("corpse should move intact to the destination, got %+v", c)
+	}
+}
+
+func TestMoveCorpseDisposesInWater(t *testing.T) {
+	h := newHub()
+	p := heroAt("field", 27, 7)
+	p.aoiW, p.aoiH = 8, 8
+	h.corpses["field"] = []*corpse{{tx: 27, ty: 6, name: "Hero", items: map[string]int{"potion": 3}}}
+	if !h.moveCorpse(p, 27, 6, 28, 6) {
+		t.Fatal("should be able to dump a corpse into pond water")
+	}
+	if len(h.corpses["field"]) != 0 {
+		t.Fatalf("water drop should dispose of the corpse completely, got %+v", h.corpses["field"])
 	}
 }
 
