@@ -196,3 +196,8 @@ Improvements
 - I think the Quests menu needs more work. Once the quest is completed, it should go to an archive and it should stop counting whatever it was counting, like how many monsters I needed to kill for that quest. Maybe making the window of the Quests have sub windows, one with active quests and other with completed ones. The quests should also have rewards. When a quest is given to me by an NPC, I will probably have to go back to the NPC to collect the reward. The quest should also have steps I guess, each step with a checkbox, and the last step could be "Go talk to NPC X and collect the reward".
 
 - There should be a way to monitor my PING with the server
+
+- > Hey, sometimes in this game, when the player attacks an enemy with a melee attack, and the first strike is strong enough to kill the enemy in
+  one shot, the animation of "slash" in case of a sword being equipped, or whatever it could be the weapon or hands, the animation is not even
+  playing. I don't know the details of how the combat animations are being displayed, but I would like to see the animation being displayed for
+  every strike. Can you investigate and come up with a solution for it?

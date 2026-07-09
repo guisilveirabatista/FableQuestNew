@@ -463,9 +463,9 @@ function onSnapshot(m) {
     else if (v.hp < p.hp - 0.01) {
       p.hurtT = 0;
       addPop('-' + Math.max(1, Math.round(p.hp - v.hp)), v.px + 8, v.py - 12, '#f76');
-      if (game.pvpTarget === p && game.atkCool <= 0) {
+      if (game.pvpTarget === p && game.atkCool <= 0.15) {
         const dir = faceToward(p);
-        if (slashReaches(dir, p)) {
+        if (Math.hypot(v.tx - you.tx, v.ty - you.ty) <= 2) {
           game.atkCool = 1.0 / stats().aspd;
           beginMeleeFx(dir);
         }
@@ -491,9 +491,9 @@ function onSnapshot(m) {
     else if (v.hp < e.hp) { // took damage since last snapshot
       e.flash = 0.3; e.hurtT = 0;
       addPop('' + (e.hp - v.hp), v.px + 8, v.py - 10, '#ffe080');
-      if (game.lock === e && game.atkCool <= 0) {
+      if (game.lock === e && game.atkCool <= 0.15) {
         const dir = faceToward(e);
-        if (slashReaches(dir, e)) {
+        if (Math.hypot(v.tx - you.tx, v.ty - you.ty) <= 2) {
           game.atkCool = 1.0 / stats().aspd;
           beginMeleeFx(dir);
         }
