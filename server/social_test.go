@@ -51,12 +51,12 @@ func TestDirectMessageRoutesOnlyToTargetAndSender(t *testing.T) {
 	b := mkPlayer(h, "b", "city", 6, 5)
 	c := mkPlayer(h, "c", "city", 7, 5)
 
-	h.chat(a, "tell", "secret", "b")
+	h.chat(a, "dm", "secret", "b")
 
-	if got := b.drainChat(); len(got) != 1 || got[0].Scope != "tell" || got[0].Text != "secret" {
+	if got := b.drainChat(); len(got) != 1 || got[0].Scope != "dm" || got[0].Text != "secret" {
 		t.Fatalf("target should receive the direct message, got %#v", got)
 	}
-	if got := a.drainChat(); len(got) != 1 || got[0].Scope != "tell" {
+	if got := a.drainChat(); len(got) != 1 || got[0].Scope != "dm" {
 		t.Fatalf("sender should receive a direct-message echo, got %#v", got)
 	}
 	if got := c.drainChat(); len(got) != 0 {

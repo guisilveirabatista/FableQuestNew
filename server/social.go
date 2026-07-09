@@ -17,7 +17,7 @@ import (
 
 type chatLine struct {
 	From  string `json:"from"`
-	Scope string `json:"scope"` // "say" (same map) | "party" | "world" | "tell"
+	Scope string `json:"scope"` // "say" (same map) | "party" | "world" | "dm"
 	Text  string `json:"text"`
 }
 
@@ -67,7 +67,7 @@ func (h *Hub) chat(p *Player, scope, text, target string) {
 	p.chatCool = 0.5
 	line := chatLine{From: p.displayName(), Scope: scope, Text: text}
 	switch scope {
-	case "tell":
+	case "dm":
 		o := h.findPlayerByName(target)
 		if o == nil {
 			p.pushChat(chatLine{Scope: "system", Text: "Player not found."})
@@ -75,7 +75,7 @@ func (h *Hub) chat(p *Player, scope, text, target string) {
 		}
 		o.pushChat(line)
 		if o != p {
-			p.pushChat(chatLine{From: "To " + o.displayName(), Scope: "tell", Text: text})
+			p.pushChat(chatLine{From: "To " + o.displayName(), Scope: "dm", Text: text})
 		}
 	case "party":
 		if p.partyID == 0 {

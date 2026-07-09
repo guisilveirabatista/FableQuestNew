@@ -7,7 +7,7 @@
 
 const CHAT_COLORS = {
   say: '#e8eef4', world: '#9cf', party: '#8f8',
-  tell: '#f6a6ff', system: '#fc6', reward: '#bcd', pvp: '#f88',
+  dm: '#f6a6ff', system: '#fc6', reward: '#bcd', pvp: '#f88',
 };
 
 // ---- chat feed + input ------------------------------------------------------
@@ -47,9 +47,9 @@ function handleSlash(t) {
   const rest = sp < 0 ? '' : t.slice(sp + 1).trim();
   switch (cmd) {
     case '/w': case '/world': if (rest) netSend(net, { t: 'chat', scope: 'world', text: rest }); break;
-    case '/tell': case '/msg': {
+    case '/dm': case '/msg': {
       const cut = rest.indexOf(' ');
-      if (cut > 0) netSend(net, { t: 'chat', scope: 'tell', id: rest.slice(0, cut), text: rest.slice(cut + 1).trim() });
+      if (cut > 0) netSend(net, { t: 'chat', scope: 'dm', id: rest.slice(0, cut), text: rest.slice(cut + 1).trim() });
       break;
     }
     case '/p': case '/party': if (rest) netSend(net, { t: 'chat', scope: 'party', text: rest }); break;
@@ -65,7 +65,7 @@ function handleSlash(t) {
     case '/friends': netSend(net, { t: 'friendList' }); break;
     case '/pvp': netSend(net, { t: 'setPvp', v: !game.youPvp }); break;
     case '/help':
-      pushChatLine({ scope: 'system', text: 'chat: /w world, /p party, /tell name text, /invite name' });
+      pushChatLine({ scope: 'system', text: 'chat: /w world, /p party, /dm name text, /invite name' });
       pushChatLine({ scope: 'system', text: '/trade name, /friend name, /friends, /pvp; right-click players in combat zones' });
       break;
     default: pushChatLine({ scope: 'system', text: 'Unknown command — try /help' });
@@ -102,8 +102,8 @@ function drawChatPanel() {
   lines.forEach((c, i) => {
     const y = b.y + 15 + i * b.lh;
     let s = c.text, col = CHAT_COLORS[c.scope] || '#fff';
-    if (c.scope === 'say' || c.scope === 'world' || c.scope === 'party' || c.scope === 'tell') {
-      const tag = c.scope === 'world' ? '[W] ' : c.scope === 'party' ? '[P] ' : c.scope === 'tell' ? '[T] ' : '';
+    if (c.scope === 'say' || c.scope === 'world' || c.scope === 'party' || c.scope === 'dm') {
+      const tag = c.scope === 'world' ? '[W] ' : c.scope === 'party' ? '[P] ' : c.scope === 'dm' ? '[DM] ' : '';
       s = tag + (c.from ? c.from + ': ' : '') + c.text;
     }
     text(s.length > 58 ? s.slice(0, 58) : s, b.x + 8, y, col);

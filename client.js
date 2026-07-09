@@ -1697,7 +1697,7 @@ function playerMenuAction(id) {
   const m = game.playerMenu;
   if (!m) return;
   if (id === 'trade' && game.net) netSend(game.net, { t: 'tradeRequest', id: m.id });
-  else if (id === 'message' && typeof openChat === 'function') openChat(`/tell ${m.name} `);
+  else if (id === 'message' && typeof openChat === 'function') openChat(`/dm ${m.name} `);
   else if (id === 'follow' && game.net) {
     netSend(game.net, { t: 'followAt', x: m.wx, y: m.wy });
     const p = (game.players || []).find(o => o.id === m.id);
