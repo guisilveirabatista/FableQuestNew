@@ -386,6 +386,8 @@ function onSnapshot(m) {
   h.lv = you.lv; h.exp = you.exp; h.gold = you.gold; h.kills = you.kills;
   h.name = you.name || h.name || net.id;
   h.class = you.class || h.class || '';
+  h.hair = you.hair || h.hair;
+  h.cloth = you.cloth || h.cloth;
   h.skillPoints = you.skillPts || 0;
   h.skillLevels = you.skillLv || h.skillLevels || {};
   h.combatLogoutT = Math.max(0, you.combatLog || 0);
@@ -434,6 +436,7 @@ function onSnapshot(m) {
     if (v.tx !== undefined) p.tx = v.tx;
     if (v.ty !== undefined) p.ty = v.ty;
     p.hp = v.hp; p.maxhp = v.maxhp; p.name = v.name || v.id; p.class = v.class || '';
+    p.hair = v.hair || p.hair; p.cloth = v.cloth || p.cloth;
     p.dead = !!v.dead; p.pvp = !!v.pvp;
   }
   for (const id in net.byId) if (!seen[id]) delete net.byId[id];
@@ -477,8 +480,10 @@ function onSnapshot(m) {
     ty: Number(v.ty ?? v.Ty),
   })).filter(v => itemId(v.id) && Number.isFinite(v.tx) && Number.isFinite(v.ty));
   const openCorpse = game.corpseOpen;
-  game.corpses = (m.corpses || []).map(v => ({
-    map: game.mapId, tx: v.tx, ty: v.ty, name: v.name || '', items: v.items || {}, decayed: !!v.decayed,
+  game.corpses = (m.corpses || []).map(v => normalizeCorpse({
+    map: game.mapId, tx: v.tx, ty: v.ty, name: v.name || '',
+    class: v.class || v.Class || '', hair: v.hair || v.Hair || '', cloth: v.cloth || v.Cloth || '',
+    items: v.items || {}, decayed: !!v.decayed,
   }));
   if (openCorpse) {
     const fresh = game.corpses.find(c => c.tx === openCorpse.tx && c.ty === openCorpse.ty && !c.decayed);
@@ -516,6 +521,8 @@ function netFrame(frameDt) {
     uiCaptured = true;
   } else if (game.dropPrompt) {
     updateDropPrompt();
+    uiCaptured = true;
+  } else if (handleHudToggleClicks()) {
     uiCaptured = true;
   } else if (typeof toggleChatWindow === 'function' && keyTapped(CHAT_TOGGLE_KEYS)) {
     toggleChatWindow();

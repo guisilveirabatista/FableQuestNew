@@ -151,6 +151,7 @@ function resetGame() {
   game.talkingNpc = null;
   game.mapOpen = false;
   game.minimapOpen = false;
+  game.hudCompact = false;
   game.death = null;
   game.log = [];
   game.logOpen = true;
@@ -522,7 +523,11 @@ function die(cause) {
   for (const [id, n] of Object.entries(h.bag)) if (n > 0) items[id] = n;
   h.bag = {}; // your loot stays with the body — go get it back
   logMsg(`You died at ${new Date().toLocaleTimeString()} on ${game.mapId} (${h.tx},${h.ty}). Killed by ${cause || 'unknown forces'}.`);
-  game.corpses.push({ map: game.mapId, tx: h.tx, ty: h.ty, name: h.name || 'Hero', items, age: 0, decayed: false });
+  game.corpses.push({
+    map: game.mapId, tx: h.tx, ty: h.ty, name: h.name || 'Hero',
+    class: h.class || 'Knight', hair: h.hair, cloth: h.cloth,
+    items, age: 0, decayed: false,
+  });
   sfx('Damege2');
   h.hp = 0;
   h.moving = false;
@@ -978,13 +983,24 @@ function corpseAt(tx, ty) {
 }
 function moveCorpse(fromTx, fromTy, toTx, toTy) {
   if (![fromTx, fromTy, toTx, toTy].every(Number.isFinite)) return false;
-  if (!nearHero(fromTx, fromTy) || isBlocked(toTx, toTy)) return false;
-  const c = corpseAt(fromTx, fromTy);
-  if (!c) return false;
+  if (!nearHero(fromTx, fromTy) || !corpseDropTileAllowed(toTx, toTy)) return false;
+  const i = game.corpses.findIndex(c => c.map === game.mapId && c.tx === fromTx && c.ty === fromTy);
+  if (i < 0) return false;
+  const c = game.corpses[i];
+  if (cur().ground[toTy][toTx] === 'W') {
+    if (game.corpseOpen === c) game.corpseOpen = null;
+    game.corpses.splice(i, 1);
+    sfx('Cancel1');
+    return true;
+  }
   c.tx = toTx;
   c.ty = toTy;
   sfx('Cancel1');
   return true;
+}
+function corpseDropTileAllowed(tx, ty) {
+  if (tx < 0 || ty < 0 || tx >= MW || ty >= MH) return false;
+  return !isBlocked(tx, ty) || cur().ground[ty][tx] === 'W';
 }
 function takeFromCorpse(c, id) {
   if (c.decayed || !c.items[id]) return false;

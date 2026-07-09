@@ -281,7 +281,7 @@ function saveGame() {
     hero: game.hero, won: game.won, steps: game.steps,
     mapId: game.mapId, floor: game.floor, autoloot: game.autoloot,
     corpses: game.corpses, invOpen: game.invOpen, logOpen: game.logOpen,
-    minimapOpen: game.minimapOpen,
+    minimapOpen: game.minimapOpen, hudCompact: game.hudCompact,
   }));
 }
 function loadGame() {
@@ -294,7 +294,7 @@ function loadGame() {
   game.mapId = d.mapId || 'field';
   game.floor = d.floor || [];
   game.corpses = d.corpses || [];
-  game.corpses.forEach(c => { if (!c.items) c.items = {}; }); // pre-loot saves
+  game.corpses.forEach(normalizeCorpse); // pre-loot/pre-sprite saves
   game.corpseOpen = null;
   game.autoloot = d.autoloot !== false;
   game.invOpen = d.invOpen !== false;
@@ -302,6 +302,7 @@ function loadGame() {
   game.logOpen = d.logOpen !== false;
   game.mapOpen = false;
   game.minimapOpen = d.minimapOpen === true;
+  game.hudCompact = d.hudCompact === true;
   game.shop = null;
   const h = game.hero;
   if (!h.name) h.name = 'Hero';
@@ -398,12 +399,53 @@ function corpseLabel(c) {
   if (owner) return c.decayed ? `${owner}'s decayed body` : `${owner}'s body`;
   return c.decayed ? 'Decayed body' : 'Dead body';
 }
+function normalizeCorpse(c) {
+  if (!c) return c;
+  if (!c.items) c.items = {};
+  c.class = c.class || c.Class || (c.sprite && c.sprite.class) || 'Knight';
+  c.hair = c.hair || c.Hair || (c.sprite && c.sprite.hair) || '#6b3f22';
+  c.cloth = c.cloth || c.Cloth || (c.sprite && c.sprite.cloth) || '#2f7fd1';
+  return c;
+}
+function corpseActor(c) {
+  return normalizeCorpse(c) || { class: 'Knight' };
+}
 function mapName(id) { return MAP_NAME[id] || id; }
 function expToNextLevel(v = game.hero) {
   const lv = typeof v === 'number' ? v : ((v && v.lv) || 1);
   return Math.max(1, lv) * 14;
 }
-function hudHeight() { return overloaded() ? 102 : 91; }
+function hudHeight() { return game.hudCompact ? 52 : (overloaded() ? 102 : 91); }
+function hudLayout() {
+  return game.hudCompact ? { x: 4, y: 4, w: 120, h: hudHeight(), compact: true }
+    : { x: 4, y: 4, w: 136, h: hudHeight(), compact: false };
+}
+function hudToggleButton() {
+  const l = hudLayout();
+  return { x: l.x + l.w - 20, y: l.y + 6, w: 14, h: 14 };
+}
+function clippedText(str, maxW) {
+  const raw = String(str || '');
+  let out = raw;
+  while (out.length > 2 && textWidth(out) > maxW) out = out.slice(0, -2);
+  if (out.length >= raw.length) return out;
+  while (out.length > 0 && textWidth(out + '..') > maxW) out = out.slice(0, -1);
+  return out + '..';
+}
+function handleHudToggleClicks() {
+  const b = hudToggleButton();
+  let consumed = false;
+  clicks = clicks.filter(c => {
+    if (c.b === 0 && hit(c, b.x, b.y, b.w, b.h)) {
+      game.hudCompact = !game.hudCompact;
+      sfx('Cursor1');
+      consumed = true;
+      return false;
+    }
+    return true;
+  });
+  return consumed;
+}
 function drawMapDot(mx, my, cell, tx, ty, color, r) {
   const x = mx + (tx + 0.5) * cell, y = my + (ty + 0.5) * cell;
   ctx.fillStyle = '#09131f';
@@ -458,8 +500,8 @@ function drawMapRaster(mapId, mx, my, cell, opts = {}) {
     for (const f of game.floor) if (f.map === mapId) drawMapDot(mx, my, cell, f.tx, f.ty, '#ffd75f', dot);
     for (const n of npcs) if (n.map === mapId) drawMapDot(mx, my, cell, n.tx, n.ty, '#7fd7ff', dot);
     for (const en of game.enemies) if (!en.dead && en.dying <= 0) drawMapDot(mx, my, cell, en.tx, en.ty, '#f76', dot);
-    if (game.players) for (const p of game.players) drawMapDot(mx, my, cell, p.px / TS, p.py / TS, p.dead ? '#778899' : '#9cf', dot);
-    drawHeroMapDot(mx, my, cell);
+    if (game.players) for (const p of game.players) if (!p.dead) drawMapDot(mx, my, cell, p.px / TS, p.py / TS, '#9cf', dot);
+    if (!game.hero.dead) drawHeroMapDot(mx, my, cell);
   }
 }
 function mapWindowLayout() {
@@ -652,7 +694,10 @@ function startWorldDragAt(p) {
     setCorpseWalkTarget(null);
     setFloorLootTarget(null, null);
     game.path = null;
-    game.worldDrag = { kind: 'corpse', tx: co.tx, ty: co.ty, name: corpseLabel(co), decayed: !!co.decayed };
+    game.worldDrag = {
+      kind: 'corpse', tx: co.tx, ty: co.ty, name: corpseLabel(co), decayed: !!co.decayed,
+      class: co.class, hair: co.hair, cloth: co.cloth,
+    };
     sfx('Cursor1');
     return true;
   }
@@ -665,6 +710,8 @@ function finishWorldDrag(sendFn, p) {
   if ((game.invOpen && inPanel(p)) || (game.corpseOpen && inCorpseWin(p))) return true;
   const t = worldTileAtPoint(p);
   if (!t) return true;
+  if (d.kind === 'floor' && isBlocked(t.tx, t.ty)) { sfx('Buzzer1'); return true; }
+  if (d.kind === 'corpse' && !corpseDropTileAllowed(t.tx, t.ty)) { sfx('Buzzer1'); return true; }
   if (d.kind === 'floor') sendFn({ t: 'moveFloorItem', tx: d.tx, ty: d.ty, toTx: t.tx, toTy: t.ty, id: d.id });
   else if (d.kind === 'corpse') sendFn({ t: 'moveCorpse', tx: d.tx, ty: d.ty, toTx: t.tx, toTy: t.ty });
   sfx('Decision1');
@@ -1573,10 +1620,10 @@ function hoverTarget() {
       });
   }
   if (game.players) for (const p of game.players) {
-    if (spriteHit(wx, wy, p.px, p.py))
+    if (!p.dead && spriteHit(wx, wy, p.px, p.py))
       add(p.py + TS, 5, {
-        name: p.name || p.id || 'Player', hp: p.dead ? 0 : p.hp, maxhp: p.maxhp || 1,
-        hpColor: p.dead ? '#7b8791' : hpColor(p.hp, p.maxhp || 1),
+        name: p.name || p.id || 'Player', hp: p.hp, maxhp: p.maxhp || 1,
+        hpColor: hpColor(p.hp, p.maxhp || 1),
         x: p.px + 8 - cam.x, y: p.py - 18 - cam.y, color: '#d6e8ff',
       });
   }
@@ -1622,7 +1669,7 @@ function drawWorldDrag() {
     ctx.rotate(Math.PI / 2);
     ctx.drawImage(img.skeleton, -16, -10, 32, 20);
   } else {
-    drawDeadHero(mouse.x - 8, mouse.y - 8, 0.82, game.hero);
+    drawDeadHero(mouse.x - 8, mouse.y - 8, 0.82, corpseActor(d));
   }
   ctx.restore();
 }
@@ -2230,6 +2277,31 @@ function drawActor(a, px = a.px, py = a.py, alpha = 1) {
   if (alpha !== 1) ctx.globalAlpha = 1;
 }
 
+function drawHud() {
+  const h = game.hero, l = hudLayout(), b = hudToggleButton();
+  drawWindow(l.x, l.y, l.w, l.h);
+  drawWindow(b.x, b.y, b.w, b.h);
+  text(game.hudCompact ? '+' : '-', b.x + 5, b.y + 3, '#ffe080');
+  if (game.hudCompact) {
+    text(clippedText(`${heroDisplayName()} Lv.${h.lv}`, 82), l.x + 8, l.y + 8, '#ffe080');
+    drawMeter(l.x + 8, l.y + 24, 62, 5, h.hp, h.maxhp, hpColor(h.hp, h.maxhp));
+    text(`${Math.floor(h.hp)}/${h.maxhp}`, l.x + 74, l.y + 21);
+    drawMeter(l.x + 8, l.y + 40, 62, 5, h.mp, h.maxmp, '#4bacff');
+    text(`${Math.floor(h.mp)}/${h.maxmp}`, l.x + 74, l.y + 37, '#bcd');
+    return;
+  }
+  text(`${heroDisplayName()}  Lv.${h.lv}`, l.x + 8, l.y + 6, '#ffe080');
+  drawMeter(l.x + 8, l.y + 19, 112, 5, h.hp, h.maxhp, hpColor(h.hp, h.maxhp));
+  text(`HP ${Math.floor(h.hp)}/${h.maxhp}`, l.x + 8, l.y + 27);
+  drawMeter(l.x + 8, l.y + 39, 112, 5, h.mp, h.maxmp, '#4bacff');
+  text(`MP ${Math.floor(h.mp)}/${h.maxmp}`, l.x + 8, l.y + 47, '#bcd');
+  const nextExp = expToNextLevel(h);
+  drawMeter(l.x + 8, l.y + 59, 112, 5, h.exp, nextExp, '#ffe080');
+  text(`EXP ${Math.floor(h.exp)}/${nextExp}`, l.x + 8, l.y + 67, '#f6d98b');
+  text(`Gold ${h.gold}`, l.x + 8, l.y + 78, '#ffe080');
+  if (overloaded()) text('OVERWEIGHT', l.x + 8, l.y + 89, '#f76');
+}
+
 function drawMap() {
   const h = game.hero, m = cur();
   const cam = camPos();
@@ -2271,7 +2343,7 @@ function drawMap() {
           ctx.globalAlpha = 1;
           ctx.restore();
         } else {
-          drawDeadHero(c.tx * TS, c.ty * TS, 0.85, h);
+          drawDeadHero(c.tx * TS, c.ty * TS, 0.85, corpseActor(c));
         }
       },
     });
@@ -2303,17 +2375,14 @@ function drawMap() {
     base: en.py + TS,
     draw: () => drawEnemy(en),
   });
-  if (game.players) for (const pl of game.players) drawables.push({ // netplay: other players
+  if (game.players) for (const pl of game.players) if (!pl.dead) drawables.push({ // netplay: other players
     base: pl.py + TS,
-    draw: () => pl.dead ? drawDeadHero(pl.px, pl.py, 0.85, pl) : drawActor(pl),
+    draw: () => drawActor(pl),
   });
   drawables.push({
     base: h.py + TS,
     draw: () => {
-      if (h.dead) {
-        if (!corpseAt(h.tx, h.ty)) drawDeadHero(h.px, h.py, 0.95, h);
-        return;
-      }
+      if (h.dead) return;
       const frame = [0, 1, 2, 1][Math.floor(h.anim) % 4];
       drawActor(h);
       if (game.iframes > 0 && Math.floor(game.iframes * 12) % 2) // hurt: flash red
@@ -2338,18 +2407,7 @@ function drawMap() {
   drawPops();
   ctx.restore(); // end of the scrolled world; UI is screen-fixed below
 
-  // HUD
-  drawWindow(4, 4, 136, hudHeight());
-  text(`${heroDisplayName()}  Lv.${h.lv}`, 12, 10, '#ffe080');
-  drawMeter(12, 23, 112, 5, h.hp, h.maxhp, hpColor(h.hp, h.maxhp));
-  text(`HP ${Math.floor(h.hp)}/${h.maxhp}`, 12, 31);
-  drawMeter(12, 43, 112, 5, h.mp, h.maxmp, '#4bacff');
-  text(`MP ${Math.floor(h.mp)}/${h.maxmp}`, 12, 51, '#bcd');
-  const nextExp = expToNextLevel(h);
-  drawMeter(12, 63, 112, 5, h.exp, nextExp, '#ffe080');
-  text(`EXP ${Math.floor(h.exp)}/${nextExp}`, 12, 71, '#f6d98b');
-  text(`Gold ${h.gold}`, 12, 82, '#ffe080');
-  if (overloaded()) text('OVERWEIGHT', 12, 93, '#f76');
+  drawHud();
   if (!game.dialogue) { // skill hotbar
     h.slots.forEach((id, i) => {
       const x = 4 + i * 21, y = H - 24;
@@ -2429,6 +2487,10 @@ function processInput(dt) {
   if (game.dropPrompt) {
     pushIntent({ t: 'moveDir', dir: null });
     updateDropPrompt();
+    return;
+  }
+  if (handleHudToggleClicks()) {
+    pushIntent({ t: 'moveDir', dir: null });
     return;
   }
   if (handleWindowShortcuts()) {

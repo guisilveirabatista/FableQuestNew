@@ -184,3 +184,11 @@ Improvements
 - Can you remove the row hover/keyboard selection behavior from the shops buying/selling windows as well
 
 - Can you implement an area based magic attack? This one does not need a lock on to be in use, it will affect all the squares around the player. as I level up this area attack, it can take up more squares, up to 4x4.
+
+- Bodies should keep the original sprites from the characters they belonged to
+
+- If I dump the body in the water, the body disappears from sight and from the server.
+
+- Can you make a minimized version of the HP, MP HUD? There should be a toggle small button to minimize and to go back to normal size
+
+- The feature of dumping the body is not working properly. If I dump the body now, the body gets duplicate with one staying where it was, and the other floating over the water. I would like for the body to not duplicate and when I dump it in the water, the body disappears completely. Can you make this fix?

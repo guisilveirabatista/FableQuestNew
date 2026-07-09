@@ -27,7 +27,8 @@ Improvements
     - 
 - Improve logging
     - The logging for admins should be more comprehensive
-- Improve Admin
+- Admin
+    - There should be a way to monitor the average player PING to the server.
     - There should be user level admin
     - an admin should have control over everything
 - Content
