@@ -1,0 +1,1 @@
+- I would like to see the sprite of the character in the selection screen as well, not only in the creation screen like it is now.

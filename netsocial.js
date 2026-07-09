@@ -141,9 +141,111 @@ function tradeItemLabel(id) {
   return (typeof ITEMS !== 'undefined' && ITEMS[id] && ITEMS[id].name) || id;
 }
 
+function hitRect(p, rect) {
+  return p.x >= rect.x && p.x < rect.x + rect.w && p.y >= rect.y && p.y < rect.y + rect.h;
+}
+
+function getTradeBackpackBag() {
+  const bag = {};
+  for (const [id, qty] of Object.entries(game.hero.bag || {})) {
+    bag[id] = qty;
+  }
+  if (game.trade && game.trade.you && game.trade.you.items) {
+    for (const [id, offeredQty] of Object.entries(game.trade.you.items)) {
+      if (bag[id] !== undefined) {
+        bag[id] = Math.max(0, bag[id] - offeredQty);
+      }
+    }
+  }
+  return bag;
+}
+
 function tradeBox() {
-  const w = 372, h = 208, x = Math.floor((W - w) / 2), y = Math.floor((H - h) / 2);
+  const w = 380, h = 260;
+  const x = Math.floor((W - w) / 2), y = Math.floor((H - h) / 2);
   return { x, y, w, h };
+}
+
+function tradeBoxes(b) {
+  return {
+    youOffer: { x: b.x + 10, y: b.y + 22, w: 174, h: 90 },
+    theirOffer: { x: b.x + 196, y: b.y + 22, w: 174, h: 90 },
+    backpack: { x: b.x + 10, y: b.y + 118, w: 196, h: 86 },
+    gold: { x: b.x + 214, y: b.y + 118, w: 156, h: 86 }
+  };
+}
+
+function goldInputLayout(b) {
+  const boxes = tradeBoxes(b);
+  const gb = boxes.gold;
+  return {
+    minus: { x: gb.x + 6, y: gb.y + 20, w: 16, h: 18 },
+    input: { x: gb.x + 24, y: gb.y + 20, w: 50, h: 18 },
+    plus: { x: gb.x + 76, y: gb.y + 20, w: 16, h: 18 },
+    max: { x: gb.x + 94, y: gb.y + 20, w: 26, h: 18 }
+  };
+}
+
+function drawScrollableItemsGrid(ids, scrollStateName, itemsCounts, gx, gy, cols, rows, dragSource) {
+  const S = 24, G = 2;
+  const maxScroll = Math.max(0, Math.ceil(ids.length / cols) - rows);
+  game[scrollStateName] = Math.max(0, Math.min(game[scrollStateName] || 0, maxScroll));
+  const first = (game[scrollStateName] || 0) * cols;
+  const visible = ids.slice(first, first + cols * rows);
+
+  if (!game._tradeGridHit) game._tradeGridHit = [];
+
+  visible.forEach((id, off) => {
+    const col = off % cols;
+    const row = Math.floor(off / cols);
+    const cx = gx + col * (S + G);
+    const cy = gy + row * (S + G);
+
+    ctx.fillStyle = 'rgba(10,20,30,.5)';
+    ctx.fillRect(cx, cy, S, S);
+    ctx.strokeStyle = '#56718a';
+    ctx.strokeRect(cx + 0.5, cy + 0.5, S - 1, S - 1);
+
+    if (ITEMS[id] && ITEMS[id].img) {
+      ctx.drawImage(img[ITEMS[id].img], cx + 3, cy + 3, 18, 18);
+      const count = itemsCounts[id];
+      if (count >= 1) {
+        text(String(count), cx + 12, cy + 14, '#ffe080');
+      }
+    }
+
+    game._tradeGridHit.push({
+      id,
+      x: cx,
+      y: cy,
+      w: S,
+      h: S,
+      source: dragSource
+    });
+  });
+
+  for (let off = visible.length; off < cols * rows; off++) {
+    const col = off % cols;
+    const row = Math.floor(off / cols);
+    const cx = gx + col * (S + G);
+    const cy = gy + row * (S + G);
+    ctx.fillStyle = 'rgba(10,20,30,.2)';
+    ctx.fillRect(cx, cy, S, S);
+    ctx.strokeStyle = '#324250';
+    ctx.strokeRect(cx + 0.5, cy + 0.5, S - 1, S - 1);
+  }
+
+  if (maxScroll > 0) {
+    const trackX = gx + cols * (S + G) - G + 4;
+    const trackY = gy;
+    const trackH = rows * S + (rows - 1) * G;
+    ctx.fillStyle = 'rgba(10,20,30,.55)';
+    ctx.fillRect(trackX, trackY, 4, trackH);
+    const thumbH = Math.max(8, Math.floor(trackH * rows / Math.ceil(ids.length / cols)));
+    const thumbY = trackY + Math.round((trackH - thumbH) * (game[scrollStateName] || 0) / maxScroll);
+    ctx.fillStyle = '#9fb4c8';
+    ctx.fillRect(trackX, thumbY, 4, thumbH);
+  }
 }
 
 function drawTradeWindow() {
@@ -154,25 +256,63 @@ function drawTradeWindow() {
   ctx.fillStyle = 'rgba(0,0,0,.28)';
   ctx.fillRect(0, 0, W, H);
   ctx.restore();
+  
   drawWindow(b.x, b.y, b.w, b.h);
   text('TRADE with ' + tr.with.name, b.x + 12, b.y + 8, '#ffe080');
-  const colW = (b.w - 24) / 2;
-  drawTradeSide(tr.you, b.x + 12, b.y + 26, colW, 'You');
-  drawTradeSide(tr.with, b.x + 12 + colW, b.y + 26, colW, tr.with.name);
 
-  // your backpack (click an item to add it to your offer)
-  const by = b.y + 96;
-  text('Your bag (click to offer):', b.x + 12, by, '#bcd');
-  const bag = Object.keys(game.hero.bag || {}).filter(id => game.hero.bag[id] > 0);
-  game._tradeBagHit = [];
-  bag.slice(0, 8).forEach((id, i) => {
-    const rx = b.x + 12 + (i % 2) * (colW), ry = by + 12 + Math.floor(i / 2) * 11;
-    const label = tradeItemLabel(id) + ' x' + game.hero.bag[id];
-    text(label.length > 20 ? label.slice(0, 20) : label, rx, ry, '#cfe');
-    game._tradeBagHit.push({ id, x: rx, y: ry, w: colW - 4, h: 10 });
-  });
+  const boxes = tradeBoxes(b);
+  game._tradeGridHit = [];
 
-  // buttons row
+  // Draw Left Column: You
+  drawWindow(boxes.youOffer.x, boxes.youOffer.y, boxes.youOffer.w, boxes.youOffer.h);
+  drawTradeSide(tr.you, boxes.youOffer.x, boxes.youOffer.y, boxes.youOffer.w, 'You');
+  const youOfferIds = Object.keys(tr.you.items || {}).filter(id => tr.you.items[id] > 0);
+  drawScrollableItemsGrid(youOfferIds, 'tradeOfferScroll', tr.you.items, boxes.youOffer.x + 6, boxes.youOffer.y + 28, 6, 2, 'offer');
+
+  // Draw Right Column: Them
+  drawWindow(boxes.theirOffer.x, boxes.theirOffer.y, boxes.theirOffer.w, boxes.theirOffer.h);
+  drawTradeSide(tr.with, boxes.theirOffer.x, boxes.theirOffer.y, boxes.theirOffer.w, tr.with.name);
+  const theirOfferIds = Object.keys(tr.with.items || {}).filter(id => tr.with.items[id] > 0);
+  drawScrollableItemsGrid(theirOfferIds, 'tradeTheirOfferScroll', tr.with.items, boxes.theirOffer.x + 6, boxes.theirOffer.y + 28, 6, 2, 'theirOffer');
+
+  // Draw Backpack
+  drawWindow(boxes.backpack.x, boxes.backpack.y, boxes.backpack.w, boxes.backpack.h);
+  text('Your Bag:', boxes.backpack.x + 6, boxes.backpack.y + 7, '#bcd');
+  const bag = getTradeBackpackBag();
+  const bagIds = Object.keys(bag).filter(id => bag[id] > 0);
+  drawScrollableItemsGrid(bagIds, 'tradeBagScroll', bag, boxes.backpack.x + 6, boxes.backpack.y + 20, 7, 2, 'bag');
+
+  // Draw Gold Offer Input
+  drawWindow(boxes.gold.x, boxes.gold.y, boxes.gold.w, boxes.gold.h);
+  text('Offer Gold:', boxes.gold.x + 6, boxes.gold.y + 7, '#bcd');
+  const lay = goldInputLayout(b);
+
+  // Minus button
+  drawWindow(lay.minus.x, lay.minus.y, lay.minus.w, lay.minus.h);
+  text('-', lay.minus.x + 5, lay.minus.y + 5, '#bcd');
+
+  // Input Box
+  drawWindow(lay.input.x, lay.input.y, lay.input.w, lay.input.h);
+  if (game.tradeGoldFocused) {
+    ctx.strokeStyle = '#ffe080';
+    ctx.strokeRect(lay.input.x + 0.5, lay.input.y + 0.5, lay.input.w - 1, lay.input.h - 1);
+  }
+  const caret = game.tradeGoldFocused && (Math.floor(performance.now() / 330) % 2) ? '_' : '';
+  const valStr = game.tradeGoldInputText + caret;
+  text(valStr, lay.input.x + 4, lay.input.y + 5, '#fe8');
+
+  // Plus button
+  drawWindow(lay.plus.x, lay.plus.y, lay.plus.w, lay.plus.h);
+  text('+', lay.plus.x + 4, lay.plus.y + 5, '#bcd');
+
+  // Max button
+  drawWindow(lay.max.x, lay.max.y, lay.max.w, lay.max.h);
+  text('Max', lay.max.x + 3, lay.max.y + 5, '#ffe080');
+
+  // Available Gold text
+  text(`(Have: ${game.hero.gold || 0}G)`, boxes.gold.x + 6, boxes.gold.y + 46, '#bcd');
+
+  // Draw buttons row
   const btns = tradeButtons(b);
   for (const k in btns) {
     const t = btns[k];
@@ -183,26 +323,40 @@ function drawTradeWindow() {
     if (k === 'confirm') lbl = tr.you.ok ? 'Waiting…' : 'Confirm';
     text(lbl, t.x + Math.max(4, Math.floor((t.w - textWidth(lbl)) / 2)), t.y + 5, on ? '#fff' : '#889');
   }
-}
 
-function drawTradeSide(side, x, y, w, title) {
-  text(title, x, y, side === game.trade.you ? '#ffe080' : '#9cf');
-  const status = side.ok ? '✓ OK' : side.lock ? 'locked' : '';
-  if (status) text(status, x + w - textWidth(status) - 6, y, side.ok ? '#8f8' : '#fc6');
-  let ry = y + 11;
-  text('gold: ' + (side.gold || 0), x, ry, '#fe8'); ry += 10;
-  const items = side.items || {};
-  for (const id of Object.keys(items)) {
-    text('· ' + tradeItemLabel(id) + ' x' + items[id], x, ry, '#cfe'); ry += 10;
-    if (ry > y + 62) break;
+  // Hover item tip
+  const hoverItem = tradeHoverItem();
+  if (hoverItem) drawItemNameTip(hoverItem);
+
+  // Drag ghost icon
+  if (game.tradeDrag && ITEMS[game.tradeDrag.id]) {
+    ctx.globalAlpha = 0.85;
+    ctx.drawImage(img[ITEMS[game.tradeDrag.id].img], mouse.x - 9, mouse.y - 9, 18, 18);
+    ctx.globalAlpha = 1;
   }
 }
 
+function drawTradeSide(side, x, y, w, title) {
+  text(title, x + 6, y + 8, side === game.trade.you ? '#ffe080' : '#9cf');
+  const status = side.ok ? '✓ OK' : side.lock ? 'locked' : '';
+  if (status) text(status, x + w - textWidth(status) - 6, y + 8, side.ok ? '#8f8' : '#fc6');
+  text('gold: ' + (side.gold || 0), x + 6, y + 20, '#fe8');
+}
+
+function tradeHoverItem() {
+  if (game.tradeDrag) return null;
+  if (!game._tradeGridHit) return null;
+  const hitArea = game._tradeGridHit.find(h => hit(mouse, h.x, h.y, h.w, h.h));
+  return hitArea ? hitArea.id : null;
+}
+
 function tradeButtons(b) {
-  const y = b.y + b.h - 24, g = 4;
+  const y = b.y + b.h - 26, g = 6;
   const specs = [
-    ['gold10', '+10g', 42], ['gold100', '+100g', 50], ['clear', 'Clear', 46],
-    ['lock', 'Lock', 58], ['confirm', 'Confirm', 64], ['cancel', 'Cancel', 56],
+    ['clear', 'Clear Offer', 74],
+    ['lock', 'Lock', 58],
+    ['confirm', 'Confirm', 64],
+    ['cancel', 'Cancel', 56],
   ];
   const totalW = specs.reduce((sum, spec) => sum + spec[2], 0) + g * (specs.length - 1);
   let x = b.x + Math.floor((b.w - totalW) / 2);
@@ -216,19 +370,188 @@ function tradeButtons(b) {
 
 function updateTradeWindow() {
   const tr = game.trade, net = game.net;
+  if (!tr) return;
+  if (updateTradePrompt()) return;
   const b = tradeBox();
+  const boxes = tradeBoxes(b);
+  const lay = goldInputLayout(b);
   const btns = tradeButtons(b);
-  clicks = clicks.filter(c => {
-    if (!hit(c, b.x, b.y, b.w, b.h)) return false;
-    if (c.b !== 0) return false;
-    // offer an item from the bag
-    for (const bh of (game._tradeBagHit || [])) {
-      if (hit(c, bh.x, bh.y, bh.w, bh.h)) { netSend(net, { t: 'tradeOffer', id: bh.id, n: 1 }); sfx('Cursor1'); return false; }
+
+  // Wheel scrolling
+  if (wheelY) {
+    if (hitRect(mouse, boxes.backpack)) {
+      const bag = getTradeBackpackBag();
+      const bagIds = Object.keys(bag).filter(id => bag[id] > 0);
+      const maxScroll = Math.max(0, Math.ceil(bagIds.length / 7) - 2);
+      const old = game.tradeBagScroll || 0;
+      game.tradeBagScroll = Math.max(0, Math.min(old + (wheelY > 0 ? 1 : -1), maxScroll));
+      if (game.tradeBagScroll !== old) sfx('Cursor1');
+      wheelY = 0;
+    } else if (hitRect(mouse, boxes.youOffer)) {
+      const youOfferIds = Object.keys(tr.you.items || {}).filter(id => tr.you.items[id] > 0);
+      const maxScroll = Math.max(0, Math.ceil(youOfferIds.length / 6) - 2);
+      const old = game.tradeOfferScroll || 0;
+      game.tradeOfferScroll = Math.max(0, Math.min(old + (wheelY > 0 ? 1 : -1), maxScroll));
+      if (game.tradeOfferScroll !== old) sfx('Cursor1');
+      wheelY = 0;
+    } else if (hitRect(mouse, boxes.theirOffer)) {
+      const theirOfferIds = Object.keys(tr.with.items || {}).filter(id => tr.with.items[id] > 0);
+      const maxScroll = Math.max(0, Math.ceil(theirOfferIds.length / 6) - 2);
+      const old = game.tradeTheirOfferScroll || 0;
+      game.tradeTheirOfferScroll = Math.max(0, Math.min(old + (wheelY > 0 ? 1 : -1), maxScroll));
+      if (game.tradeTheirOfferScroll !== old) sfx('Cursor1');
+      wheelY = 0;
     }
-    // buttons and empty panel space are modal: handle known controls, eat the rest.
-    if (hit(c, btns.gold10.x, btns.gold10.y, btns.gold10.w, btns.gold10.h)) { netSend(net, { t: 'tradeGold', n: (tr.you.gold || 0) + 10 }); return false; }
-    if (hit(c, btns.gold100.x, btns.gold100.y, btns.gold100.w, btns.gold100.h)) { netSend(net, { t: 'tradeGold', n: (tr.you.gold || 0) + 100 }); return false; }
-    if (hit(c, btns.clear.x, btns.clear.y, btns.clear.w, btns.clear.h)) { clearMyOffer(); return false; }
+  }
+
+  // Keyboard typing when gold input is focused
+  if (game.tradeGoldFocused) {
+    for (const k of queue) {
+      if (k === 'Enter') {
+        game.tradeGoldFocused = false;
+        sfx('Decision1');
+        break;
+      } else if (k === 'Escape') {
+        game.tradeGoldFocused = false;
+        sfx('Cancel1');
+        break;
+      } else if (k === 'Backspace') {
+        game.tradeGoldInputText = game.tradeGoldInputText.slice(0, -1);
+        const val = parseInt(game.tradeGoldInputText) || 0;
+        netSend(net, { t: 'tradeGold', n: val });
+        sfx('Cursor1');
+      } else if (k.length === 1 && k >= '0' && k <= '9') {
+        if (game.tradeGoldInputText === '0') game.tradeGoldInputText = '';
+        if (game.tradeGoldInputText.length < 9) {
+          game.tradeGoldInputText += k;
+          let val = parseInt(game.tradeGoldInputText) || 0;
+          if (val > game.hero.gold) {
+            val = game.hero.gold;
+            game.tradeGoldInputText = String(val);
+          }
+          netSend(net, { t: 'tradeGold', n: val });
+          sfx('Cursor1');
+        }
+      }
+    }
+    queue = [];
+  }
+
+  // Drag Release handling
+  for (const r of releases) {
+    if (r.b !== 0 || !game.tradeDrag) continue;
+    const d = game.tradeDrag;
+    const dx = Math.abs(r.x - d.startX);
+    const dy = Math.abs(r.y - d.startY);
+    const wasDrag = dx > 4 || dy > 4;
+
+    if (wasDrag) {
+      if (d.from === 'bag') {
+        if (hitRect(r, boxes.youOffer)) {
+          const max = game.hero.bag[d.id] || 0;
+          if (max > 1) {
+            const currentOffer = tr.you.items[d.id] || 0;
+            game.tradePrompt = { id: d.id, n: Math.min(max, currentOffer + 1), max };
+            sfx('Cursor1');
+          } else {
+            netSend(net, { t: 'tradeOffer', id: d.id, n: 1 });
+            sfx('Cursor1');
+          }
+        }
+      } else if (d.from === 'offer') {
+        if (!hitRect(r, boxes.youOffer)) {
+          netSend(net, { t: 'tradeOffer', id: d.id, n: -1 });
+          sfx('Cursor1');
+        }
+      }
+    } else {
+      // Click-to-add / click-to-remove
+      if (d.from === 'bag') {
+        const max = game.hero.bag[d.id] || 0;
+        if (max > 1) {
+          const currentOffer = tr.you.items[d.id] || 0;
+          game.tradePrompt = { id: d.id, n: Math.min(max, currentOffer + 1), max };
+          sfx('Cursor1');
+        } else {
+          netSend(net, { t: 'tradeOffer', id: d.id, n: 1 });
+          sfx('Cursor1');
+        }
+      } else if (d.from === 'offer') {
+        netSend(net, { t: 'tradeOffer', id: d.id, n: -1 });
+        sfx('Cursor1');
+      }
+    }
+    game.tradeDrag = null;
+  }
+  if (game.tradeDrag && !mouse.down) game.tradeDrag = null;
+
+  clicks = clicks.filter(c => {
+    // Check if clicked/dragged grid item
+    if (game._tradeGridHit) {
+      const hitArea = game._tradeGridHit.find(h => hit(c, h.x, h.y, h.w, h.h));
+      if (hitArea) {
+        if (hitArea.source === 'bag') {
+          game.tradeDrag = { id: hitArea.id, from: 'bag', startX: c.x, startY: c.y };
+          return false;
+        } else if (hitArea.source === 'offer') {
+          game.tradeDrag = { id: hitArea.id, from: 'offer', startX: c.x, startY: c.y };
+          return false;
+        }
+      }
+    }
+
+    if (!hit(c, b.x, b.y, b.w, b.h)) {
+      if (!hit(c, lay.input.x, lay.input.y, lay.input.w, lay.input.h)) {
+        game.tradeGoldFocused = false;
+      }
+      return true;
+    }
+    if (c.b !== 0) return false;
+
+    // gold input focus
+    if (hit(c, lay.input.x, lay.input.y, lay.input.w, lay.input.h)) {
+      game.tradeGoldFocused = true;
+      sfx('Cursor1');
+      return false;
+    } else {
+      game.tradeGoldFocused = false;
+    }
+
+    // minus
+    if (hit(c, lay.minus.x, lay.minus.y, lay.minus.w, lay.minus.h)) {
+      let val = (tr.you.gold || 0) - 10;
+      if (val < 0) val = 0;
+      game.tradeGoldInputText = String(val);
+      netSend(net, { t: 'tradeGold', n: val });
+      sfx('Cursor1');
+      return false;
+    }
+
+    // plus
+    if (hit(c, lay.plus.x, lay.plus.y, lay.plus.w, lay.plus.h)) {
+      let val = (tr.you.gold || 0) + 10;
+      if (val > game.hero.gold) val = game.hero.gold;
+      game.tradeGoldInputText = String(val);
+      netSend(net, { t: 'tradeGold', n: val });
+      sfx('Cursor1');
+      return false;
+    }
+
+    // max
+    if (hit(c, lay.max.x, lay.max.y, lay.max.w, lay.max.h)) {
+      let val = game.hero.gold || 0;
+      game.tradeGoldInputText = String(val);
+      netSend(net, { t: 'tradeGold', n: val });
+      sfx('Decision1');
+      return false;
+    }
+
+    // buttons
+    if (hit(c, btns.clear.x, btns.clear.y, btns.clear.w, btns.clear.h)) {
+      clearMyOffer();
+      game.tradeGoldInputText = "0";
+      return false;
+    }
     if (hit(c, btns.lock.x, btns.lock.y, btns.lock.w, btns.lock.h)) { netSend(net, { t: 'tradeLock', v: !tr.you.lock }); sfx('Decision1'); return false; }
     if (hit(c, btns.confirm.x, btns.confirm.y, btns.confirm.w, btns.confirm.h)) {
       if (tr.you.lock && tr.with.lock) { netSend(net, { t: 'tradeConfirm' }); sfx('Decision1'); } return false;
@@ -236,6 +559,7 @@ function updateTradeWindow() {
     if (hit(c, btns.cancel.x, btns.cancel.y, btns.cancel.w, btns.cancel.h)) { netSend(net, { t: 'tradeCancel' }); sfx('Cancel1'); return false; }
     return false;
   });
+
   for (const k of queue) if (k === 'Escape') netSend(net, { t: 'tradeCancel' });
   queue = [];
 }
@@ -297,5 +621,103 @@ function drawNetSocial() {
   drawNameTags();
   if (game.youPvp) text('PvP ON', W - 60, 6, '#f88');
   if (game.trade) drawTradeWindow();
+  if (game.tradePrompt) drawTradePrompt();
   drawSocialPrompt();
+}
+
+// ---- trade quantity prompt --------------------------------------------------
+
+function tradePromptLayout() {
+  const w = 168, h = 76, x = Math.floor((W - w) / 2), y = Math.floor((H - h) / 2);
+  return {
+    x, y, w, h,
+    minus: { x: x + 12, y: y + 35, w: 24, h: 18 },
+    plus: { x: x + 42, y: y + 35, w: 24, h: 18 },
+    all: { x: x + 72, y: y + 35, w: 34, h: 18 },
+    ok: { x: x + 112, y: y + 35, w: 44, h: 18 },
+    cancel: { x: x + 112, y: y + 56, w: 44, h: 14 }
+  };
+}
+
+function clampTradePrompt() {
+  const p = game.tradePrompt;
+  if (!p) return;
+  p.n = Math.max(1, Math.min(p.max, Math.floor(p.n || 1)));
+}
+
+function confirmTradePrompt() {
+  const p = game.tradePrompt, tr = game.trade;
+  if (!p || !tr) return;
+  clampTradePrompt();
+  const currentOffer = tr.you.items[p.id] || 0;
+  const delta = p.n - currentOffer;
+  netSend(game.net, { t: 'tradeOffer', id: p.id, n: delta });
+  game.tradePrompt = null;
+  sfx('Decision1');
+}
+
+function updateTradePrompt() {
+  const p = game.tradePrompt;
+  if (!p) return false;
+  clampTradePrompt();
+  const l = tradePromptLayout();
+  
+  for (const k of queue) {
+    if (k === 'Enter') {
+      confirmTradePrompt();
+      break;
+    } else if (k === 'Escape') {
+      game.tradePrompt = null;
+      sfx('Cancel1');
+      break;
+    }
+  }
+  queue = [];
+
+  clicks = clicks.filter(c => {
+    if (c.b !== 0) return false;
+    if (hit(c, l.minus.x, l.minus.y, l.minus.w, l.minus.h)) { p.n--; clampTradePrompt(); sfx('Cursor1'); return false; }
+    if (hit(c, l.plus.x, l.plus.y, l.plus.w, l.plus.h)) { p.n++; clampTradePrompt(); sfx('Cursor1'); return false; }
+    if (hit(c, l.all.x, l.all.y, l.all.w, l.all.h)) { p.n = p.max; sfx('Cursor1'); return false; }
+    if (hit(c, l.ok.x, l.ok.y, l.ok.w, l.ok.h)) { confirmTradePrompt(); return false; }
+    if (hit(c, l.cancel.x, l.cancel.y, l.cancel.w, l.cancel.h) || !hit(c, l.x, l.y, l.w, l.h)) {
+      game.tradePrompt = null; sfx('Cancel1'); return false;
+    }
+    return false;
+  });
+
+  if (pressed(['ArrowLeft', 'a'])) { p.n--; clampTradePrompt(); sfx('Cursor1'); }
+  if (pressed(['ArrowRight', 'd'])) { p.n++; clampTradePrompt(); sfx('Cursor1'); }
+  if (pressed(CONFIRM)) { confirmTradePrompt(); }
+  if (pressed(CANCEL)) { game.tradePrompt = null; sfx('Cancel1'); }
+  
+  return true;
+}
+
+function drawTradePrompt() {
+  const p = game.tradePrompt;
+  if (!p) return;
+  clampTradePrompt();
+  if (!game.tradePrompt) return;
+  const l = tradePromptLayout(), it = ITEMS[p.id];
+  
+  // draw semi-dark overlay on top of trade window
+  ctx.save();
+  ctx.fillStyle = 'rgba(0,0,0,.35)';
+  ctx.fillRect(l.x - 10, l.y - 10, l.w + 20, l.h + 20);
+  ctx.restore();
+
+  drawWindow(l.x, l.y, l.w, l.h);
+  text('Offer Quantity', l.x + 12, l.y + 8, '#ffe080');
+  if (it) {
+    ctx.drawImage(img[it.img], l.x + 12, l.y + 17, 14, 14);
+    text(it.name.length > 10 ? it.name.slice(0, 10) + '…' : it.name, l.x + 32, l.y + 19, '#fff');
+  }
+  text(`${p.n}/${p.max}`, l.x + 116, l.y + 19, '#bcd');
+  
+  drawWindow(l.minus.x, l.minus.y, l.minus.w, l.minus.h); text('-', l.minus.x + 9, l.minus.y + 6);
+  drawWindow(l.plus.x, l.plus.y, l.plus.w, l.plus.h); text('+', l.plus.x + 8, l.plus.y + 6);
+  drawWindow(l.all.x, l.all.y, l.all.w, l.all.h); text('All', l.all.x + 8, l.all.y + 6);
+  drawWindow(l.ok.x, l.ok.y, l.ok.w, l.ok.h); text('OK', l.ok.x + 14, l.ok.y + 6, '#9f9');
+  drawWindow(l.cancel.x, l.cancel.y, l.cancel.w, l.cancel.h); text('Cancel', l.cancel.x + 4, l.cancel.y + 3, '#bcd');
 }

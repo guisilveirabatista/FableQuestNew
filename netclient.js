@@ -22,6 +22,7 @@ function netStart(url) {
   game.enemies = [];
   game.invOpen = false; // hidden by default; press I to open (bag comes from the server)
   game.logOpen = false;
+  if (game.netOverlayOpen === undefined) game.netOverlayOpen = true;
   game.menu = null;
   game.scene = 'map';
   game.login = { user: '', pass: '', field: 'user', error: '', busy: false }; // login screen until welcome
@@ -417,7 +418,25 @@ function onSnapshot(m) {
   if (m.chat) for (const c of m.chat) { pushChatLine(c); if (c.scope !== 'reward' && c.scope !== 'system') sfx('Cursor1'); }
   // party / trade windows come straight from the server
   game.party = m.party || null;
+  const oldTrade = game.trade;
   game.trade = m.trade || null;
+  if (game.trade && !oldTrade) {
+    game.tradeGoldInputText = String(game.trade.you.gold || 0);
+    game.tradeGoldFocused = false;
+    game.tradeBagScroll = 0;
+    game.tradeOfferScroll = 0;
+    game.tradeTheirOfferScroll = 0;
+    game.tradeDrag = null;
+    game.tradePrompt = null;
+  } else if (!game.trade && oldTrade) {
+    game.tradeGoldFocused = false;
+    game.tradeDrag = null;
+    game.tradePrompt = null;
+  } else if (game.trade) {
+    if (!game.tradeGoldFocused) {
+      game.tradeGoldInputText = String(game.trade.you.gold || 0);
+    }
+  }
   if (m.trade) game.socialPrompt = null;          // trade window supersedes the prompt
   else if (m.tradeReq) game.socialPrompt = { kind: 'trade', from: m.tradeReq };
   else if (m.invite) game.socialPrompt = { kind: 'party' };
@@ -540,6 +559,9 @@ function netFrame(frameDt) {
     uiCaptured = true;
   } else if (keyTapped(MAP_KEYS)) {
     toggleMapWindow();
+    uiCaptured = true;
+  } else if (keyTapped(NET_OVERLAY_TOGGLE_KEYS)) {
+    toggleNetOverlayWindow();
     uiCaptured = true;
   } else if (game.mapOpen) {
     updateMapWindow();
@@ -824,6 +846,7 @@ function netInteract() {
 
 // tiny connection/roster banner so the demo is legible
 function drawNetOverlay() {
+  if (!game.netOverlayOpen) return;
   const net = game.net;
   const online = 1 + game.players.length;
   const ping = net.ping == null ? '...' : `${net.ping}ms`;

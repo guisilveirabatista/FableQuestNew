@@ -169,6 +169,7 @@ function resetGame() {
   game.death = null;
   game.log = [];
   game.logOpen = true;
+  game.netOverlayOpen = true;
   game.hero.combatLogoutT = 0;
 }
 // combat/reward log — shown in the toggleable bottom-left window
