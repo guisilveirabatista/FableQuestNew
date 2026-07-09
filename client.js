@@ -2065,19 +2065,81 @@ function elderQuestLines(q = elderQuest(game.hero)) {
     questStepLine(q.completed, `Return to ${def.giver} for reward`),
   ];
 }
+function getTabQuests(tab, h = game.hero) {
+  const list = [];
+  const q = elderQuest(h);
+  const def = QUESTS[ELDER_QUEST_ID];
+  if (tab === 'completed') {
+    if (q.completed) list.push({ id: ELDER_QUEST_ID, def, q });
+  } else {
+    if (q.active || q.ready || !q.completed) list.push({ id: ELDER_QUEST_ID, def, q });
+  }
+  return list;
+}
 function updateQuestMenu(m, mc) {
   const l = questLayout(), tabs = questTabs(m);
+  const h = game.hero;
+  if (m.questCursor === undefined) m.questCursor = 0;
+  if (m.questScroll === undefined) m.questScroll = 0;
+  if (!m.questExpanded) m.questExpanded = {};
+
+  const entries = getTabQuests(m.questTab || 'active', h);
+
   for (const c of mc) {
     if (!hit(c, l.x, l.y, l.w, l.h)) { m.mode = 'root'; sfx('Cancel1'); return; }
     tabs.forEach((tab, i) => {
       const bx = l.x + 12 + i * 72;
-      if (hit(c, bx, l.tabY, 66, 16)) { m.questTab = tab.id; sfx('Cursor1'); }
+      if (hit(c, bx, l.tabY, 66, 16)) {
+        if (m.questTab !== tab.id) {
+          m.questTab = tab.id;
+          m.questCursor = 0;
+          m.questScroll = 0;
+          sfx('Cursor1');
+        }
+      }
     });
+    if (game._questRowHits) {
+      const hitRow = game._questRowHits.find(r => hit(c, r.x, r.y, r.w, r.h));
+      if (hitRow) {
+        m.questCursor = hitRow.index;
+        m.questExpanded[hitRow.id] = !m.questExpanded[hitRow.id];
+        sfx('Decision1');
+      }
+    }
   }
+
   if (pressed(CANCEL)) { m.mode = 'root'; sfx('Cancel1'); return; }
   if (pressed(['ArrowLeft', 'a', 'ArrowRight', 'd'])) {
     m.questTab = m.questTab === 'active' ? 'completed' : 'active';
+    m.questCursor = 0;
+    m.questScroll = 0;
     sfx('Cursor1');
+    return;
+  }
+  if (pressed(['ArrowUp', 'w'])) {
+    if (entries.length > 0) {
+      m.questCursor = (m.questCursor - 1 + entries.length) % entries.length;
+      sfx('Cursor1');
+    }
+  }
+  if (pressed(['ArrowDown', 's'])) {
+    if (entries.length > 0) {
+      m.questCursor = (m.questCursor + 1) % entries.length;
+      sfx('Cursor1');
+    }
+  }
+  if (pressed(['Enter', ' '])) {
+    const entry = entries[m.questCursor];
+    if (entry) {
+      m.questExpanded[entry.id] = !m.questExpanded[entry.id];
+      sfx('Decision1');
+    }
+  }
+  if (mouse.wheel !== 0) {
+    if (entries.length > 0) {
+      m.questScroll = Math.max(0, Math.min(entries.length - 1, m.questScroll + (mouse.wheel > 0 ? 1 : -1)));
+    }
+    mouse.wheel = 0;
   }
 }
 
@@ -2278,7 +2340,7 @@ function drawMenu() {
     ];
     lines.forEach((line, i) => text(line, x + 12, 18 + i * 15));
   } else if (m.mode === 'quest') {
-    const l = questLayout(), tabs = questTabs(m), q = elderQuest(h), def = QUESTS[ELDER_QUEST_ID];
+    const l = questLayout(), tabs = questTabs(m);
     drawWindow(l.x, l.y, l.w, l.h);
     text('Quests', l.x + 12, l.y + 8, '#ffe080');
     tabs.forEach((tab, i) => {
@@ -2286,24 +2348,95 @@ function drawMenu() {
       if ((m.questTab || 'active') === tab.id) drawCursor(bx - 2, l.tabY - 1, 68, 16);
       text(tab.label, bx + 8, l.tabY + 3);
     });
-    if ((m.questTab || 'active') === 'completed') {
-      text('Archive', l.x + 12, l.bodyY, '#bcd');
-      if (!q.completed) {
-        text('No completed quests.', l.x + 18, l.bodyY + 18, '#9aa7b3');
-      } else {
-        text(def.title, l.x + 18, l.bodyY + 18, '#ffe080');
-        elderQuestLines(q).forEach((line, i) => text(line, l.x + 22, l.bodyY + 34 + i * 14, '#cde'));
-        text(`Reward claimed: ${def.rewardGold}G ${def.rewardExp}EXP`, l.x + 18, l.bodyY + 82, '#9f9');
-      }
+
+    if (m.questCursor === undefined) m.questCursor = 0;
+    if (m.questScroll === undefined) m.questScroll = 0;
+    if (!m.questExpanded) m.questExpanded = {};
+
+    const entries = getTabQuests(m.questTab || 'active', h);
+
+    if (m.questCursor >= entries.length) m.questCursor = Math.max(0, entries.length - 1);
+    if (m.questCursor < m.questScroll) m.questScroll = m.questCursor;
+
+    game._questRowHits = [];
+
+    if (entries.length === 0) {
+      text(m.questTab === 'completed' ? 'No completed quests.' : 'No active quests.', l.x + 18, l.bodyY + 6, '#9aa7b3');
     } else {
-      if (q.completed) {
-        text('No active quests.', l.x + 18, l.bodyY + 18, '#9aa7b3');
-      } else {
-        text(def.title, l.x + 12, l.bodyY, '#ffe080');
-        text(`Given by ${def.giver}`, l.x + 18, l.bodyY + 16, '#bcd');
-        elderQuestLines(q).forEach((line, i) => text(line, l.x + 22, l.bodyY + 34 + i * 14, i === 2 && q.ready ? '#ffe080' : '#cde'));
-        text(`Reward: ${def.rewardGold}G ${def.rewardExp}EXP Potion x2`, l.x + 18, l.bodyY + 82, '#9f9');
-        text(q.ready ? 'Ready to turn in' : 'In progress', l.x + 18, l.bodyY + 98, q.ready ? '#ffe080' : '#bcd');
+      let curY = l.bodyY;
+      const viewMaxY = l.y + l.h - 10;
+
+      for (let index = m.questScroll; index < entries.length; index++) {
+        const entry = entries[index];
+        const isSelected = m.questCursor === index;
+        const isExpanded = !!m.questExpanded[entry.id];
+
+        game._questRowHits.push({
+          id: entry.id,
+          index: index,
+          x: l.x + 6,
+          y: curY,
+          w: l.w - 28,
+          h: 16
+        });
+
+        if (isSelected) {
+          drawCursor(l.x + 6, curY - 1, l.w - 28, 16);
+        }
+
+        const arrow = isExpanded ? '▼ ' : '► ';
+        text(arrow + entry.def.title, l.x + 12, curY + 3, isSelected ? '#ffe080' : '#fff');
+        curY += 16;
+
+        if (isExpanded) {
+          const detailsX = l.x + 20;
+          text(`Given by ${entry.def.giver}`, detailsX, curY + 2, '#bcd');
+          curY += 14;
+
+          const stepLines = elderQuestLines(entry.q);
+          stepLines.forEach((line, i) => {
+            let color = '#cde';
+            if (m.questTab === 'active' && i === 2 && entry.q.ready) color = '#ffe080';
+            text(line, detailsX, curY + 2, color);
+            curY += 14;
+          });
+
+          text(`Reward: ${entry.def.rewardGold}G ${entry.def.rewardExp}EXP`, detailsX, curY + 2, '#9f9');
+          curY += 14;
+
+          let statusText = 'In progress';
+          let statusColor = '#bcd';
+          if (m.questTab === 'completed') {
+            statusText = 'Completed';
+            statusColor = '#9f9';
+          } else if (entry.q.ready) {
+            statusText = 'Ready to turn in';
+            statusColor = '#ffe080';
+          }
+          text(statusText, detailsX, curY + 2, statusColor);
+          curY += 14;
+
+          curY += 6;
+        }
+
+        if (curY > viewMaxY && index < entries.length - 1) {
+          if (isSelected) {
+            m.questScroll = Math.min(entries.length - 1, m.questScroll + 1);
+          }
+          break;
+        }
+      }
+
+      if (entries.length > 1) {
+        const sbX = l.x + l.w - 12;
+        const sbY = l.bodyY;
+        const sbH = l.h - (l.bodyY - l.y) - 8;
+        drawWindow(sbX, sbY, 6, sbH);
+
+        const thumbH = Math.max(10, Math.floor(sbH / entries.length));
+        const thumbY = sbY + Math.floor((sbH - thumbH) * (m.questScroll / (entries.length - 1)));
+        ctx.fillStyle = '#ffe080';
+        ctx.fillRect(sbX + 1, thumbY + 1, 4, thumbH - 2);
       }
     }
   } else if (m.mode === 'options') {

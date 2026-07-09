@@ -1,1 +1,1 @@
-- I would like to see the sprite of the character in the selection screen as well, not only in the creation screen like it is now.
+- In the Quests window, I would like to see only the name of the quest first, and then, if I click on details of that quest, it should show me more info. This way I can have a list of many quests there. Both quests active and completed should have the same UI concept. Maybe making each row of the quests a collapsable grid and the list of quests also scrollable.
