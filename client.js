@@ -308,6 +308,7 @@ function loadGame() {
   if (!h.name) h.name = 'Hero';
   if (!h.class) h.class = 'Knight';
   normalizeSkillProgress(h);
+  ensureQuests(h);
   // pre-64x40 saves may sit out of bounds on the new maps
   if (h.tx >= MW || h.ty >= MH || cur().blocked.has(h.tx + ',' + h.ty)) {
     game.mapId = SPAWN.map; h.tx = SPAWN.tx; h.ty = SPAWN.ty;
@@ -1886,7 +1887,8 @@ function rootMenuSelect(sel) {
   else if (sel === 'Map') openMapWindow();
   else if (sel === 'Skills') { m.mode = 'skills'; m.skillDrag = null; beginSkillDraft(m); sfx('Decision1'); }
   else if (sel === 'Attributes') { m.mode = 'attributes'; m.cursor2 = 0; beginAttrDraft(m); sfx('Decision1'); }
-  else if (sel === 'Status' || sel === 'Quest') { m.mode = sel.toLowerCase(); sfx('Decision1'); }
+  else if (sel === 'Status') { m.mode = 'status'; sfx('Decision1'); }
+  else if (sel === 'Quest') { m.mode = 'quest'; m.questTab = 'active'; sfx('Decision1'); }
   else if (sel === 'Options') { m.mode = 'options'; m.cursor2 = 0; sfx('Decision1'); }
   else if (sel === 'Log Out') logOut();
 }
@@ -2042,6 +2044,41 @@ function drawHotbarEntry(id, x, y, selected = false, h = game.hero) {
 }
 function attrLayout() { const w = 224, h = 174; return { x: subX(w), y: 8, w, h }; }
 function optionsLayout() { const w = 132; return { x: subX(w), y: 8, w, h: OPTIONS_MENU.length * 16 + 16 }; }
+function questLayout() { const w = 236, h = 154; return { x: subX(w), y: 8, w, h, tabY: 28, bodyY: 50 }; }
+function questTabs(m) {
+  if (!m.questTab) m.questTab = 'active';
+  return [
+    { id: 'active', label: 'Active' },
+    { id: 'completed', label: 'Completed' },
+  ];
+}
+function questStepLine(done, label) {
+  return `${done ? '[x]' : '[ ]'} ${label}`;
+}
+function elderQuestLines(q = elderQuest(game.hero)) {
+  const def = QUESTS[ELDER_QUEST_ID];
+  const progress = Math.min(def.target, q.progress || 0);
+  return [
+    questStepLine(q.active || q.ready || q.completed, `Talk to ${def.giver}`),
+    questStepLine(progress >= def.target, `Defeat monsters ${progress}/${def.target}`),
+    questStepLine(q.completed, `Return to ${def.giver} for reward`),
+  ];
+}
+function updateQuestMenu(m, mc) {
+  const l = questLayout(), tabs = questTabs(m);
+  for (const c of mc) {
+    if (!hit(c, l.x, l.y, l.w, l.h)) { m.mode = 'root'; sfx('Cancel1'); return; }
+    tabs.forEach((tab, i) => {
+      const bx = l.x + 12 + i * 72;
+      if (hit(c, bx, l.tabY, 66, 16)) { m.questTab = tab.id; sfx('Cursor1'); }
+    });
+  }
+  if (pressed(CANCEL)) { m.mode = 'root'; sfx('Cancel1'); return; }
+  if (pressed(['ArrowLeft', 'a', 'ArrowRight', 'd'])) {
+    m.questTab = m.questTab === 'active' ? 'completed' : 'active';
+    sfx('Cursor1');
+  }
+}
 
 function updateMenu(dt) {
   const m = game.menu, h = game.hero;
@@ -2133,6 +2170,8 @@ function updateMenu(dt) {
     }
     if (pressed(CANCEL)) { m.mode = 'root'; sfx('Cancel1'); return; }
     if (pressed(CONFIRM) && attrHasPending(m)) confirmAttrDraft(m);
+  } else if (m.mode === 'quest') {
+    updateQuestMenu(m, mc);
   } else if (m.mode === 'options') {
     const l = optionsLayout();
     const hov = hoverRow(l.x + 6, l.y + 8, l.w - 12, 16, OPTIONS_MENU.length);
@@ -2146,7 +2185,7 @@ function updateMenu(dt) {
     if (pressed(['ArrowUp', 'w'])) { m.cursor2 = (m.cursor2 + OPTIONS_MENU.length - 1) % OPTIONS_MENU.length; sfx('Cursor1'); }
     if (pressed(['ArrowDown', 's'])) { m.cursor2 = (m.cursor2 + 1) % OPTIONS_MENU.length; sfx('Cursor1'); }
     if (pressed(CONFIRM)) toggleOption(OPTIONS_MENU[m.cursor2]);
-  } else { // status / quest
+  } else { // status
     if (pressed(CONFIRM) || pressed(CANCEL) || clicked(0)) { m.mode = 'root'; sfx('Cancel1'); }
   }
 }
@@ -2238,14 +2277,34 @@ function drawMenu() {
     ];
     lines.forEach((line, i) => text(line, x + 12, 18 + i * 15));
   } else if (m.mode === 'quest') {
-    const w = 188, x = subX(w);
-    const l = { x, y: 8, w, h: 76 };
+    const l = questLayout(), tabs = questTabs(m), q = elderQuest(h), def = QUESTS[ELDER_QUEST_ID];
     drawWindow(l.x, l.y, l.w, l.h);
-    text('QUEST', x + 12, 16, '#ffe080');
-    wrapText(
-      game.won ? 'Complete! You are the hero of the valley.'
-        : `The Elder asked you to slay 5 monsters in the grass. (${h.kills}/5)`,
-      x + 12, 32, 164);
+    text('Quests', l.x + 12, l.y + 8, '#ffe080');
+    tabs.forEach((tab, i) => {
+      const bx = l.x + 12 + i * 72;
+      if ((m.questTab || 'active') === tab.id) drawCursor(bx - 2, l.tabY - 1, 68, 16);
+      text(tab.label, bx + 8, l.tabY + 3);
+    });
+    if ((m.questTab || 'active') === 'completed') {
+      text('Archive', l.x + 12, l.bodyY, '#bcd');
+      if (!q.completed) {
+        text('No completed quests.', l.x + 18, l.bodyY + 18, '#9aa7b3');
+      } else {
+        text(def.title, l.x + 18, l.bodyY + 18, '#ffe080');
+        elderQuestLines(q).forEach((line, i) => text(line, l.x + 22, l.bodyY + 34 + i * 14, '#cde'));
+        text(`Reward claimed: ${def.rewardGold}G ${def.rewardExp}EXP`, l.x + 18, l.bodyY + 82, '#9f9');
+      }
+    } else {
+      if (q.completed) {
+        text('No active quests.', l.x + 18, l.bodyY + 18, '#9aa7b3');
+      } else {
+        text(def.title, l.x + 12, l.bodyY, '#ffe080');
+        text(`Given by ${def.giver}`, l.x + 18, l.bodyY + 16, '#bcd');
+        elderQuestLines(q).forEach((line, i) => text(line, l.x + 22, l.bodyY + 34 + i * 14, i === 2 && q.ready ? '#ffe080' : '#cde'));
+        text(`Reward: ${def.rewardGold}G ${def.rewardExp}EXP Potion x2`, l.x + 18, l.bodyY + 82, '#9f9');
+        text(q.ready ? 'Ready to turn in' : 'In progress', l.x + 18, l.bodyY + 98, q.ready ? '#ffe080' : '#bcd');
+      }
+    }
   } else if (m.mode === 'options') {
     const l = optionsLayout();
     drawWindow(l.x, l.y, l.w, l.h);
@@ -2446,6 +2505,27 @@ function drawMap() {
   if (game.playerMenu) drawPlayerMenu();
   if (game.death) drawDeathPopup();
 }
+
+function updateDialogue(dt) {
+  const d = game.dialogue;
+  if (!d) return false;
+  if (pressed(CANCEL)) {
+    game.dialogue = null;
+    sfx('Cancel1');
+    return true;
+  }
+  d.chars += dt * 40;
+  const full = d.pages[d.page] || '';
+  const tapped = pressed(CONFIRM) ||
+    clicks.some(c => c.b === 0 && !(game.invOpen && inPanel(c)));
+  if (tapped) {
+    if (d.chars < full.length) d.chars = full.length;
+    else if (++d.page >= d.pages.length) game.dialogue = null;
+    else d.chars = 0;
+    sfx('Cursor1');
+  }
+  return true;
+}
 // toggleable combat/reward log, docked above the skill hotbar (bottom-left)
 function drawLog() {
   const rows = 5, lh = 10, lw = 250, lhgt = rows * lh + 16;
@@ -2537,16 +2617,7 @@ function processInput(dt) {
   if (game.shop) { updateShop(); return; }
   if (game.menu) { updateMenu(dt); return; }
   if (game.dialogue) {
-    const d = game.dialogue;
-    d.chars += dt * 40;
-    const tapped = pressed(CONFIRM) ||
-      clicks.some(c => c.b === 0 && !(game.invOpen && inPanel(c)));
-    if (tapped) {
-      if (d.chars < d.pages[d.page].length) d.chars = 999;
-      else if (++d.page >= d.pages.length) game.dialogue = null;
-      else d.chars = 0;
-      sfx('Cursor1');
-    }
+    updateDialogue(dt);
     return;
   }
 

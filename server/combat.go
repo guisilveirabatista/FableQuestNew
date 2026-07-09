@@ -235,12 +235,14 @@ func initHero(p *Player) {
 	p.slots = defaultSlotsForClass("") // skill/item hotbar (keys 1-5)
 	p.skillLevels = map[string]int{"fire": 1, "heal": 1, "spin": 1, "bolt": 1, "nova": 1}
 	p.skillPoints = 0
+	p.quests = map[string]QuestState{}
 	p.bag = map[string]int{"potion": 3}
 	p.equip = map[string]string{}
 	p.autoloot = true
 	recalcMax(p)
 	p.hp = float64(p.maxhp)
 	p.mp = float64(p.maxmp)
+	normalizeQuests(p)
 }
 
 func validClass(class string) bool {
@@ -360,6 +362,7 @@ func (h *Hub) killEnemy(p *Player, en *enemy) {
 	en.dying = 0.45
 	k := enemyKinds[en.kind]
 	p.kills++
+	h.advanceElderQuestKill(p)
 	p.gold += k.gold
 	p.logMsg(fmt.Sprintf("Defeated %s: +%d EXP, +%d gold", k.name, k.exp, k.gold))
 	if rand.Float64() < 0.25 { // loot: autoloot pockets it, else it falls where it died

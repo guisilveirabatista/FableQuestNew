@@ -15,7 +15,7 @@ function netStart(url) {
   const net = {
     ws: null, url, id: null, seq: 0, ack: 0, lastDir: '',
     acc: 0, byId: {}, eById: {}, connected: false, status: 'connecting…',
-    characters: [],
+    characters: [], ping: null, pingPending: false, pingNext: 0, pingSentAt: 0,
   };
   game.net = net;
   game.players = [];
@@ -60,6 +60,9 @@ function netStart(url) {
     } else if (m.t === 'snap') {
       net.ack = m.ack;
       onSnapshot(m);
+    } else if (m.t === 'pong') {
+      net.ping = Math.max(0, Math.round(performance.now() - (m.ts || performance.now())));
+      net.pingPending = false;
     }
   };
 }
@@ -390,6 +393,8 @@ function onSnapshot(m) {
   h.cloth = you.cloth || h.cloth;
   h.skillPoints = you.skillPts || 0;
   h.skillLevels = you.skillLv || h.skillLevels || {};
+  h.quests = you.quests || h.quests || {};
+  ensureQuests(h);
   h.combatLogoutT = Math.max(0, you.combatLog || 0);
   h.dead = !!you.dead;
   if (h.dead) {
@@ -495,6 +500,7 @@ function onSnapshot(m) {
 // single-player processInput/stepWorld path).
 function netFrame(frameDt) {
   const net = game.net, h = game.hero;
+  updateNetPing(net);
   if (game.login) { updateLoginScreen(); drawLoginScreen(); return; } // not in the world yet
   if (game.charSelect) {
     updateCharacterScreen();
@@ -502,7 +508,7 @@ function netFrame(frameDt) {
     return;
   }
   let uiCaptured = false;
-  const hadBlockingUi = !!(game.death || game.mapOpen || game.menu || game.shop || game.invFocus || game.itemPopup ||
+  const hadBlockingUi = !!(game.death || game.dialogue || game.mapOpen || game.menu || game.shop || game.invFocus || game.itemPopup ||
     game.dropPrompt || game.chatInput || game.trade || game.playerMenu);
 
   // 1) input -> intents. The menu and inventory panels reuse the single-player
@@ -521,6 +527,9 @@ function netFrame(frameDt) {
     uiCaptured = true;
   } else if (game.dropPrompt) {
     updateDropPrompt();
+    uiCaptured = true;
+  } else if (game.dialogue) {
+    updateDialogue(frameDt);
     uiCaptured = true;
   } else if (handleHudToggleClicks()) {
     uiCaptured = true;
@@ -567,7 +576,7 @@ function netFrame(frameDt) {
       uiCaptured = true;
     } else if (game.invOpen && !game.itemPopup) updateInvPanel(); // mouse drag/click -> item intents
   }
-  if (game.death || game.mapOpen || game.menu || game.shop || game.dropPrompt || game.chatInput || game.trade || game.playerMenu) {
+  if (game.death || game.dialogue || game.mapOpen || game.menu || game.shop || game.dropPrompt || game.chatInput || game.trade || game.playerMenu) {
     game.worldDrag = null;
   } else {
     if (finishWorldDragFromReleases(obj => netSend(net, obj))) uiCaptured = true;
@@ -575,7 +584,7 @@ function netFrame(frameDt) {
   }
 
   // movement is blocked while a panel owns the keyboard
-  const captured = uiCaptured || hadBlockingUi || game.death || game.mapOpen || game.menu || game.shop ||
+  const captured = uiCaptured || hadBlockingUi || game.death || game.dialogue || game.mapOpen || game.menu || game.shop ||
     game.invFocus || game.itemPopup || game.dropPrompt || game.chatInput || game.trade || game.playerMenu || game.worldDrag;
   const dir = captured ? '' : (dirHeld() || '');
   if (dir !== net.lastDir) {
@@ -757,6 +766,7 @@ function netFrame(frameDt) {
   drawMap();
   clearInterp();
   drawNetSocial(); // chat feed, party frames, name tags, trade window, prompts
+  drawNetOverlay();
 }
 
 function predictNetMeleeFx() {
@@ -781,6 +791,20 @@ function netSend(net, obj) {
   if (net.ws && net.ws.readyState === 1) net.ws.send(JSON.stringify(obj));
 }
 
+function updateNetPing(net) {
+  if (!net || !net.connected) return;
+  const now = performance.now();
+  if (net.pingPending && now - net.pingSentAt > 5000) {
+    net.pingPending = false;
+    net.ping = null;
+  }
+  if (net.pingPending || now < (net.pingNext || 0)) return;
+  net.pingPending = true;
+  net.pingSentAt = now;
+  net.pingNext = now + 2000;
+  netSend(net, { t: 'ping', ts: now });
+}
+
 // Facing a shopkeeper opens their shop locally (the shop UI is cosmetic; the
 // server validates each purchase). Returns true if it handled the interaction.
 function netInteract() {
@@ -788,6 +812,13 @@ function netInteract() {
   const fx = h.tx + d[0], fy = h.ty + d[1];
   const npc = npcs.find(n => n.map === game.mapId && n.tx === fx && n.ty === fy);
   if (shopForNpc(npc)) { openShopChoice(shopForNpc(npc)); return true; }
+  if (npc && npc.id === 'elder') {
+    const pages = elderQuestPages(h);
+    netSend(game.net, { t: 'talkNpc', id: 'elder' });
+    say(pages);
+    sfx('Decision1');
+    return true;
+  }
   return false;
 }
 
@@ -795,6 +826,8 @@ function netInteract() {
 function drawNetOverlay() {
   const net = game.net;
   const online = 1 + game.players.length;
-  drawWindow(W / 2 - 70, 4, 140, 24);
+  const ping = net.ping == null ? '...' : `${net.ping}ms`;
+  drawWindow(W / 2 - 70, 4, 140, 34);
   text(`ONLINE  ${net.id || '?'}  (${online} here)`, W / 2 - 60, 12, net.connected ? '#9f9' : '#f76');
+  text(`PING  ${ping}`, W / 2 - 60, 24, net.ping != null && net.ping < 180 ? '#bcd' : '#ffe080');
 }

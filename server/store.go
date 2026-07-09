@@ -48,29 +48,30 @@ func cloneSkillLevels(src map[string]int) map[string]int {
 // charState is the persistent slice of a character — everything that must
 // survive a restart. Transient combat state (lock, iframes, path) is not saved.
 type charState struct {
-	Name        string            `json:"name,omitempty"`
-	Class       string            `json:"class,omitempty"`
-	Hair        string            `json:"hair,omitempty"`
-	Cloth       string            `json:"cloth,omitempty"`
-	MapID       string            `json:"map"`
-	Tx          int               `json:"tx"`
-	Ty          int               `json:"ty"`
-	Dir         string            `json:"dir"`
-	HP          float64           `json:"hp"`
-	MP          float64           `json:"mp"`
-	Lv          int               `json:"lv"`
-	Exp         int               `json:"exp"`
-	Gold        int               `json:"gold"`
-	Kills       int               `json:"kills"`
-	Points      int               `json:"points"`
-	SkillPoints int               `json:"skillPoints,omitempty"`
-	SkillLevels map[string]int    `json:"skillLevels,omitempty"`
-	Attr        AttrSet           `json:"attr"`
-	Slots       []string          `json:"slots"`
-	Bag         map[string]int    `json:"bag"`
-	Equip       map[string]string `json:"equip"`
-	Autoloot    bool              `json:"autoloot"`
-	Friends     []string          `json:"friends,omitempty"`
+	Name        string                `json:"name,omitempty"`
+	Class       string                `json:"class,omitempty"`
+	Hair        string                `json:"hair,omitempty"`
+	Cloth       string                `json:"cloth,omitempty"`
+	MapID       string                `json:"map"`
+	Tx          int                   `json:"tx"`
+	Ty          int                   `json:"ty"`
+	Dir         string                `json:"dir"`
+	HP          float64               `json:"hp"`
+	MP          float64               `json:"mp"`
+	Lv          int                   `json:"lv"`
+	Exp         int                   `json:"exp"`
+	Gold        int                   `json:"gold"`
+	Kills       int                   `json:"kills"`
+	Points      int                   `json:"points"`
+	SkillPoints int                   `json:"skillPoints,omitempty"`
+	SkillLevels map[string]int        `json:"skillLevels,omitempty"`
+	Quests      map[string]QuestState `json:"quests,omitempty"`
+	Attr        AttrSet               `json:"attr"`
+	Slots       []string              `json:"slots"`
+	Bag         map[string]int        `json:"bag"`
+	Equip       map[string]string     `json:"equip"`
+	Autoloot    bool                  `json:"autoloot"`
+	Friends     []string              `json:"friends,omitempty"`
 }
 
 // Store is the persistence backend. Login authenticates a user, auto-registering
@@ -281,7 +282,7 @@ func charStateOf(p *Player) *charState {
 		Name: p.name, Class: p.class, Hair: p.hair, Cloth: p.cloth,
 		MapID: mapID, Tx: tx, Ty: ty, Dir: p.dir,
 		HP: p.hp, MP: p.mp, Lv: p.lv, Exp: p.exp, Gold: p.gold, Kills: p.kills, Points: p.points,
-		SkillPoints: p.skillPoints, SkillLevels: cloneSkillLevels(p.skillLevels),
+		SkillPoints: p.skillPoints, SkillLevels: cloneSkillLevels(p.skillLevels), Quests: cloneQuestStates(p.quests),
 		Attr: p.attr, Slots: append([]string(nil), p.slots...), Bag: bag, Equip: equip, Autoloot: p.autoloot,
 		Friends: friends,
 	}
@@ -297,6 +298,7 @@ func applyCharState(p *Player, ch *charState) {
 	p.mapID, p.tx, p.ty, p.dir = ch.MapID, ch.Tx, ch.Ty, ch.Dir
 	p.lv, p.exp, p.gold, p.kills, p.points = ch.Lv, ch.Exp, ch.Gold, ch.Kills, ch.Points
 	p.skillPoints, p.skillLevels = ch.SkillPoints, cloneSkillLevels(ch.SkillLevels)
+	p.quests = cloneQuestStates(ch.Quests)
 	p.attr = ch.Attr
 	p.slots, p.bag, p.equip, p.autoloot = ch.Slots, ch.Bag, ch.Equip, ch.Autoloot
 	if p.bag == nil {
@@ -319,6 +321,7 @@ func applyCharState(p *Player, ch *charState) {
 		p.dir = "down"
 	}
 	normalizeSkillProgress(p)
+	normalizeQuests(p)
 	if maps[p.mapID] == nil || blocked(p.mapID, p.tx, p.ty) { // stale/invalid save
 		p.mapID, p.tx, p.ty = spawn.mapID, spawn.tx, spawn.ty
 	}

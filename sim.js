@@ -13,6 +13,18 @@
 const TS = 16, MW = 40, MH = 25;
 const CORPSE_DECAY = 10 * 60;
 const DIRV = { up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0] };
+const ELDER_QUEST_ID = 'elder_fields';
+const QUESTS = {
+  elder_fields: {
+    id: ELDER_QUEST_ID,
+    title: 'Fields of Trouble',
+    giver: 'Elder',
+    target: 5,
+    rewardGold: 50,
+    rewardExp: 20,
+    rewardItems: { potion: 2 },
+  },
+};
 // ---------------------------------------------------------------- game state
 const game = {};
 // ---- attributes: 7 primaries the player raises on level-up; everything the
@@ -108,6 +120,7 @@ function resetGame() {
     slots: defaultSlotsForClass('Knight'), // skill/item hotbar, keys 1-5
     skillPoints: 0,
     skillLevels: { fire: 1, heal: 1, spin: 1, bolt: 1, nova: 1 },
+    quests: {},
     attr: { ...BASE_ATTR },
     points: 0, // attribute points to spend (3 per level-up)
     bag: { potion: 3 },
@@ -119,6 +132,7 @@ function resetGame() {
   game.menu = null;
   game.titleCursor = 0;
   game.won = false;
+  ensureQuests(game.hero);
   game.enemies = [];
   game.projectiles = [];
   game.bolts = [];
@@ -161,6 +175,76 @@ function resetGame() {
 function logMsg(str) {
   game.log.push(str);
   if (game.log.length > 40) game.log.shift();
+}
+
+function ensureQuests(h = game.hero) {
+  if (!h.quests || typeof h.quests !== 'object') h.quests = {};
+  const def = QUESTS[ELDER_QUEST_ID];
+  let q = h.quests[ELDER_QUEST_ID];
+  if (!q) {
+    const completed = game.won === true;
+    q = {
+      active: !completed,
+      progress: completed ? def.target : Math.min(def.target, h.kills || 0),
+      ready: !completed && (h.kills || 0) >= def.target,
+      completed,
+      rewarded: completed,
+    };
+  }
+  q.progress = Math.max(0, Math.min(def.target, q.progress || 0));
+  q.completed = q.completed === true;
+  q.rewarded = q.rewarded === true;
+  q.active = !q.completed && q.active !== false;
+  q.ready = !q.completed && (q.ready === true || q.progress >= def.target);
+  if (q.completed) {
+    q.active = false;
+    q.ready = false;
+    q.rewarded = true;
+    q.progress = def.target;
+  }
+  h.quests[ELDER_QUEST_ID] = q;
+  return h.quests;
+}
+function elderQuest(h = game.hero) {
+  ensureQuests(h);
+  return h.quests[ELDER_QUEST_ID];
+}
+function advanceElderQuestKill(h = game.hero) {
+  const def = QUESTS[ELDER_QUEST_ID], q = elderQuest(h);
+  if (!q.active || q.completed || q.ready) return false;
+  q.progress = Math.min(def.target, q.progress + 1);
+  if (q.progress >= def.target) {
+    q.ready = true;
+    logMsg('Quest updated: Return to Elder for your reward.');
+  }
+  return true;
+}
+function collectElderQuestReward(h = game.hero) {
+  const def = QUESTS[ELDER_QUEST_ID], q = elderQuest(h);
+  if (!q.ready || q.completed) return false;
+  q.progress = def.target;
+  q.active = false;
+  q.ready = false;
+  q.completed = true;
+  q.rewarded = true;
+  game.won = true;
+  h.gold += def.rewardGold;
+  grantExp(h, def.rewardExp);
+  for (const [id, n] of Object.entries(def.rewardItems)) addItem(id, n);
+  logMsg(`Quest complete: ${def.title}: +${def.rewardExp} EXP, +${def.rewardGold} gold`);
+  return true;
+}
+function elderQuestPages(h = game.hero) {
+  const def = QUESTS[ELDER_QUEST_ID], q = elderQuest(h);
+  if (q.completed) return ['Elder: Rest well, hero.', '* Fully recovered! *'];
+  if (q.ready) return [
+    'Elder: The fields are quieter already.',
+    `Elder: Take this reward: ${def.rewardGold} gold, ${def.rewardExp} EXP, and potions.`,
+  ];
+  return [
+    `Elder: Monsters plague our fields! Defeat ${def.target} of them. (${q.progress}/${def.target} so far)`,
+    '* The Elder healed you and refilled a potion! *',
+  ];
 }
 
 const SOLID_GROUND = 'WXRUO';
@@ -298,14 +382,10 @@ function interact() { // returns true if something was there to talk to / read
     game.talkingNpc = npc; // they politely stand still for the chat
     sfx('Decision1');
     if (npc.id === 'elder') {
-      if (h.kills >= 5 && !game.won) {
-        game.won = true;
-        say(['Elder: Five monsters slain...', 'Elder: You truly are the hero of this valley! THE END... but feel free to keep exploring.']);
-      } else if (game.won) {
-        say(['Elder: Rest well, hero.', '* Fully recovered! *']);
-      } else {
-        say([`Elder: Monsters plague our fields! Defeat 5 of them. (${h.kills}/5 so far)`, '* The Elder healed you and refilled a potion! *']);
-      }
+      const q = elderQuest(h);
+      const pages = elderQuestPages(h);
+      if (q.ready && !q.completed) collectElderQuestReward(h);
+      say(pages);
       h.hp = h.maxhp; h.mp = h.maxmp;
       if ((h.bag.potion || 0) < 3) addItem('potion', 1);
       sfx('Recovery1');
@@ -579,7 +659,10 @@ function killEnemy(en) {
   const h = game.hero, e = ENEMIES[en.kind];
   en.dying = 0.45;
   sfx('Monster1');
-  h.kills++; h.exp += e.exp; h.gold += e.gold;
+  h.kills++;
+  advanceElderQuestKill(h);
+  h.gold += e.gold;
+  grantExp(h, e.exp);
   logMsg(`Defeated ${e.name}: +${e.exp} EXP, +${e.gold} gold`);
   if (Math.random() < 0.25) { // loot: autoloot pockets it, otherwise it falls
     const id = Math.random() < 0.7 ? 'bread' : 'potion';
@@ -592,6 +675,9 @@ function killEnemy(en) {
       dropFloor(id, 1, en.tx, en.ty);
     }
   }
+}
+function grantExp(h, exp) {
+  h.exp += exp;
   if (h.exp >= expToNextLevel(h.lv)) {
     h.exp -= expToNextLevel(h.lv);
     h.lv++;

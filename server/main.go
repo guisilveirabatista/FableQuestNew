@@ -64,6 +64,7 @@ type inMsg struct {
 	Class string  `json:"class"` // character class
 	Text  string  `json:"text"`  // chat message
 	Scope string  `json:"scope"` // chat scope: say | party | world
+	Ts    float64 `json:"ts"`    // client timestamp echoed by ping/pong
 }
 
 type loginErrMsg struct {
@@ -71,39 +72,45 @@ type loginErrMsg struct {
 	Msg string `json:"msg"`
 }
 
+type pongMsg struct {
+	T  string  `json:"t"`
+	Ts float64 `json:"ts"`
+}
+
 // server -> client
 type playerView struct {
-	ID           string         `json:"id"`
-	Name         string         `json:"name"`
-	Class        string         `json:"class"`
-	Tx           int            `json:"tx"`
-	Ty           int            `json:"ty"`
-	Px           float64        `json:"px"`
-	Py           float64        `json:"py"`
-	Dir          string         `json:"dir"`
-	Moving       bool           `json:"moving"`
-	Anim         float64        `json:"anim"`
-	HP           float64        `json:"hp"`
-	MaxHP        int            `json:"maxhp"`
-	MP           float64        `json:"mp"`
-	MaxMP        int            `json:"maxmp"`
-	Lv           int            `json:"lv"`
-	Exp          int            `json:"exp"`
-	Gold         int            `json:"gold"`
-	Kills        int            `json:"kills"`
-	Lock         int            `json:"lock"`
-	Slots        []string       `json:"slots"`
-	Follow       bool           `json:"follow"`
-	FollowTarget string         `json:"followTarget,omitempty"`
-	Dead         bool           `json:"dead"`
-	DeathCause   string         `json:"deathCause"`
-	Pvp          bool           `json:"pvp"`
-	PvpTarget    string         `json:"pvpTarget"`
-	CombatLog    float64        `json:"combatLog"`
-	Hair         string         `json:"hair"`
-	Cloth        string         `json:"cloth"`
-	SkillPts     int            `json:"skillPts"`
-	SkillLv      map[string]int `json:"skillLv,omitempty"`
+	ID           string                `json:"id"`
+	Name         string                `json:"name"`
+	Class        string                `json:"class"`
+	Tx           int                   `json:"tx"`
+	Ty           int                   `json:"ty"`
+	Px           float64               `json:"px"`
+	Py           float64               `json:"py"`
+	Dir          string                `json:"dir"`
+	Moving       bool                  `json:"moving"`
+	Anim         float64               `json:"anim"`
+	HP           float64               `json:"hp"`
+	MaxHP        int                   `json:"maxhp"`
+	MP           float64               `json:"mp"`
+	MaxMP        int                   `json:"maxmp"`
+	Lv           int                   `json:"lv"`
+	Exp          int                   `json:"exp"`
+	Gold         int                   `json:"gold"`
+	Kills        int                   `json:"kills"`
+	Lock         int                   `json:"lock"`
+	Slots        []string              `json:"slots"`
+	Follow       bool                  `json:"follow"`
+	FollowTarget string                `json:"followTarget,omitempty"`
+	Dead         bool                  `json:"dead"`
+	DeathCause   string                `json:"deathCause"`
+	Pvp          bool                  `json:"pvp"`
+	PvpTarget    string                `json:"pvpTarget"`
+	CombatLog    float64               `json:"combatLog"`
+	Hair         string                `json:"hair"`
+	Cloth        string                `json:"cloth"`
+	SkillPts     int                   `json:"skillPts"`
+	SkillLv      map[string]int        `json:"skillLv,omitempty"`
+	Quests       map[string]QuestState `json:"quests,omitempty"`
 }
 type projView struct {
 	X    float64 `json:"x"`
@@ -247,6 +254,7 @@ type Player struct {
 	bag              map[string]int
 	equip            map[string]string
 	autoloot         bool
+	quests           map[string]QuestState
 	atkCool, iframes float64
 	lockID           int
 	pvpTarget        string
@@ -274,6 +282,7 @@ type Player struct {
 
 func (p *Player) view() playerView {
 	normalizeSkillProgress(p)
+	normalizeQuests(p)
 	skillLv := map[string]int{}
 	for k, v := range p.skillLevels {
 		skillLv[k] = v
@@ -285,6 +294,7 @@ func (p *Player) view() playerView {
 		Lock: p.lockID, Slots: p.slots, Follow: p.follow, FollowTarget: p.followTarget, Dead: p.dead, DeathCause: p.deathCause,
 		Pvp: p.pvp, PvpTarget: p.pvpTarget, CombatLog: p.combatLogoutT,
 		Hair: p.hair, Cloth: p.cloth, SkillPts: p.skillPoints, SkillLv: skillLv,
+		Quests: cloneQuestStates(p.quests),
 	}
 }
 
@@ -971,7 +981,7 @@ func (h *Hub) run() {
 // applyIntent dispatches one validated player action (the server's sole entry
 // point for player-driven world changes — mirrors sim.js applyIntent).
 func (h *Hub) applyIntent(p *Player, m inMsg) {
-	if p.dead && m.T != "respawn" && m.T != "chat" && m.T != "view" && m.T != "partyLeave" {
+	if p.dead && m.T != "respawn" && m.T != "chat" && m.T != "view" && m.T != "partyLeave" && m.T != "ping" {
 		if m.T == "move" {
 			p.moveDir = ""
 			p.ackSeq = m.Seq
@@ -981,6 +991,10 @@ func (h *Hub) applyIntent(p *Player, m inMsg) {
 	switch m.T {
 	case "respawn":
 		h.respawnPlayer(p)
+	case "ping":
+		if p.conn != nil {
+			writeJSON(p.conn, pongMsg{T: "pong", Ts: m.Ts})
+		}
 	case "move":
 		p.moveDir = m.Dir
 		p.ackSeq = m.Seq
@@ -1075,6 +1089,10 @@ func (h *Hub) applyIntent(p *Player, m inMsg) {
 		h.moveCorpse(p, m.Tx, m.Ty, m.ToTx, m.ToTy)
 	case "takeCorpse":
 		h.takeCorpse(p, m.Tx, m.Ty, m.Id)
+	case "talkNpc":
+		if m.Id == "elder" && npcFacing(p) == "elder" {
+			h.talkElder(p)
+		}
 	case "spendAttr":
 		spendAttr(p, m.Key)
 	case "assignSkill":
