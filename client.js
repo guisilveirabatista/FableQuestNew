@@ -69,6 +69,7 @@ var MENU_KEYS = ['x'];
 var MAP_KEYS = ['m'];
 var CHAT_TOGGLE_KEYS = ['c'];
 var LOG_TOGGLE_KEYS = ['l'];
+var NET_OVERLAY_TOGGLE_KEYS = ['o'];
 var WINDOW_SHORTCUTS = [
   { keys: ['p'], menu: 'Status' },
   { keys: ['y'], menu: 'Quest' },
@@ -76,7 +77,7 @@ var WINDOW_SHORTCUTS = [
 const KEY_DIR = { ArrowUp: 'up', w: 'up', ArrowDown: 'down', s: 'down',
   ArrowLeft: 'left', a: 'left', ArrowRight: 'right', d: 'right' };
 const CAPTURE_KEYS = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' ', 'Tab',
-  ...MENU_KEYS, ...MAP_KEYS, ...CHAT_TOGGLE_KEYS, ...LOG_TOGGLE_KEYS, ...WINDOW_SHORTCUTS.flatMap(sc => sc.keys)];
+  ...MENU_KEYS, ...MAP_KEYS, ...CHAT_TOGGLE_KEYS, ...LOG_TOGGLE_KEYS, ...NET_OVERLAY_TOGGLE_KEYS, ...WINDOW_SHORTCUTS.flatMap(sc => sc.keys)];
 let dirOrder = []; // held direction keys, most-recently-pressed last
 function normKey(k) { return k && k.length === 1 ? k.toLowerCase() : k; }
 function eventInputIds(e) {

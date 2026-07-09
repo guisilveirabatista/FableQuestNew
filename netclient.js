@@ -854,3 +854,8 @@ function drawNetOverlay() {
   text(`ONLINE  ${net.id || '?'}  (${online} here)`, W / 2 - 60, 12, net.connected ? '#9f9' : '#f76');
   text(`PING  ${ping}`, W / 2 - 60, 24, net.ping != null && net.ping < 180 ? '#bcd' : '#ffe080');
 }
+
+function toggleNetOverlayWindow() {
+  game.netOverlayOpen = !game.netOverlayOpen;
+  sfx(game.netOverlayOpen ? 'Decision1' : 'Cancel1');
+}
