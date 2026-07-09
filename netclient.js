@@ -35,8 +35,16 @@ function netStart(url) {
   const ws = new WebSocket(url);
   net.ws = ws;
   ws.onopen = () => { net.connected = true; net.status = 'connected'; };
-  ws.onclose = () => { net.connected = false; net.status = 'disconnected'; if (game.login) { game.login.error = 'disconnected'; game.login.busy = false; } };
-  ws.onerror = () => { net.status = 'connection error'; if (game.login) { game.login.error = 'connection error'; game.login.busy = false; } };
+  ws.onclose = () => { 
+    net.connected = false; net.status = 'disconnected'; 
+    if (game.login) { game.login.error = 'disconnected'; game.login.busy = false; }
+    if (game.charSelect) { game.charSelect.error = 'disconnected'; }
+  };
+  ws.onerror = () => { 
+    net.status = 'connection error'; 
+    if (game.login) { game.login.error = 'connection error'; game.login.busy = false; }
+    if (game.charSelect) { game.charSelect.error = 'connection error'; }
+  };
   ws.onmessage = e => {
     const m = JSON.parse(e.data);
     if (m.t === 'welcome') {
@@ -455,6 +463,13 @@ function onSnapshot(m) {
     else if (v.hp < p.hp - 0.01) {
       p.hurtT = 0;
       addPop('-' + Math.max(1, Math.round(p.hp - v.hp)), v.px + 8, v.py - 12, '#f76');
+      if (game.pvpTarget === p && game.atkCool <= 0) {
+        const dir = faceToward(p);
+        if (slashReaches(dir, p)) {
+          game.atkCool = 1.0 / stats().aspd;
+          beginMeleeFx(dir);
+        }
+      }
     }
     p.tpx = v.px; p.tpy = v.py; p.dir = v.dir; p.moving = v.moving; p.anim = v.anim;
     if (v.tx !== undefined) p.tx = v.tx;
@@ -476,6 +491,13 @@ function onSnapshot(m) {
     else if (v.hp < e.hp) { // took damage since last snapshot
       e.flash = 0.3; e.hurtT = 0;
       addPop('' + (e.hp - v.hp), v.px + 8, v.py - 10, '#ffe080');
+      if (game.lock === e && game.atkCool <= 0) {
+        const dir = faceToward(e);
+        if (slashReaches(dir, e)) {
+          game.atkCool = 1.0 / stats().aspd;
+          beginMeleeFx(dir);
+        }
+      }
     }
     e.kind = v.kind; e.tx = v.tx; e.ty = v.ty; e.tpx = v.px; e.tpy = v.py;
     e.dir = v.dir; e.moving = v.moving; e.anim = v.anim; e.hp = v.hp; e.maxhp = v.maxhp; e.dying = v.dying;
