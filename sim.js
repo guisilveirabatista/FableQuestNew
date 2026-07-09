@@ -1143,7 +1143,11 @@ function shopNpcAt(tx, ty) {
   return npcs.find(n => n.map === game.mapId && n.tx === tx && n.ty === ty && shopForNpc(n));
 }
 function shopNpcAtPoint(wx, wy) {
-  return npcs.find(n => n.map === game.mapId && shopForNpc(n) &&
+  const n = npcAtPoint(wx, wy);
+  return n && shopForNpc(n) ? n : null;
+}
+function npcAtPoint(wx, wy) {
+  return npcs.find(n => n.map === game.mapId &&
     wx >= n.px - 4 && wx < n.px + 20 && wy >= n.py - 16 && wy < n.py + 16);
 }
 function openShopChoice(who, x = null, y = null) {

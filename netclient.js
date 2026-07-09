@@ -355,7 +355,7 @@ function drawCharacterScreen() {
     });
     drawWindow(b.preview.x, b.preview.y, b.preview.w, b.preview.h);
     drawActor({ class: s.class, dir: 'down', moving: false, anim: 1 },
-      b.preview.x + Math.floor(b.preview.w / 2), b.preview.y + 52);
+      b.preview.x + 21, b.preview.y + 39);
     drawWindow(b.create.x, b.create.y, b.create.w, b.create.h);
     text('Create', b.create.x + 20, b.create.y + 6);
     if (s.characters.length) {
@@ -681,11 +681,21 @@ function netFrame(frameDt) {
       const wxp = c.x + cam.x, wyp = c.y + cam.y;
       const wx = Math.floor(wxp / TS), wy = Math.floor(wyp / TS);
       if (c.b === 2) { // right-click: open context/interact targets, not lock-on
-        const shopNpc = shopNpcAtPoint(wxp, wyp);
+        const npc = npcAtPoint(wxp, wyp);
         const co = corpseAt(wx, wy);
         const floor = floorAt(wx, wy);
         const pl = playerAtPoint(wxp, wyp);
-        if (shopNpc) { setCorpseWalkTarget(null); setFloorLootTarget(null, null); openShopChoice(shopForNpc(shopNpc), c.x, c.y); }
+        if (npc) {
+          setCorpseWalkTarget(null); setFloorLootTarget(null, null);
+          if (shopForNpc(npc)) {
+            openShopChoice(shopForNpc(npc), c.x, c.y);
+          } else if (npc.id === 'elder') {
+            const pages = elderQuestPages(game.hero);
+            netSend(game.net, { t: 'talkNpc', id: 'elder' });
+            say(pages);
+            sfx('Decision1');
+          }
+        }
         else if (co && !co.decayed) requestCorpseOpen(co, (tx, ty) => {
           netSend(net, { t: 'moveTo', tx, ty });
           game.follow = false;
