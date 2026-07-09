@@ -69,7 +69,7 @@ var MENU_KEYS = ['x'];
 var MAP_KEYS = ['m'];
 var CHAT_TOGGLE_KEYS = ['c'];
 var LOG_TOGGLE_KEYS = ['l'];
-var NET_OVERLAY_TOGGLE_KEYS = ['o'];
+var NET_OVERLAY_TOGGLE_KEYS = ['n'];
 var WINDOW_SHORTCUTS = [
   { keys: ['p'], menu: 'Status' },
   { keys: ['y'], menu: 'Quest' },
@@ -1791,14 +1791,15 @@ function drawMiniMap() {
 const MENU_W = 120;
 const MRX = W - 124; // right column: same grid as the inventory windows
 const ROOT_MENU = ['Inventory', 'Map', 'Skills', 'Attributes', 'Status', 'Quest', 'Options', 'Log Out'];
-const OPTIONS_MENU = ['Music', 'Autoloot', 'Mini Map', 'Log'];
+const OPTIONS_MENU = ['Music', 'Autoloot', 'Mini Map', 'Log', 'Network'];
 function rootBox() { return { x: MRX, y: 8, w: MENU_W, h: ROOT_MENU.length * 16 + 12 }; }
 function subX(w) { return Math.max(4, MRX - w - 6); }
 function optionLabel(s) {
   return s === 'Music' ? 'Music: ' + (MidiPlayer.isEnabled() ? 'On' : 'Off')
     : s === 'Autoloot' ? 'Autoloot: ' + (game.autoloot ? 'On' : 'Off')
     : s === 'Mini Map' ? 'Mini Map: ' + (game.minimapOpen ? 'On' : 'Off')
-    : s === 'Log' ? 'Log: ' + (game.logOpen ? 'On' : 'Off') : s;
+    : s === 'Log' ? 'Log: ' + (game.logOpen ? 'On' : 'Off')
+    : s === 'Network' ? 'Network: ' + (game.netOverlayOpen ? 'On' : 'Off') : s;
 }
 function toggleLogWindow() {
   game.logOpen = !game.logOpen;
@@ -1812,6 +1813,7 @@ function toggleOption(sel) {
   } else if (sel === 'Autoloot') { pushIntent({ t: 'setAutoloot', v: !game.autoloot }); sfx('Decision1'); }
   else if (sel === 'Mini Map') { game.minimapOpen = !game.minimapOpen; sfx('Decision1'); }
   else if (sel === 'Log') toggleLogWindow();
+  else if (sel === 'Network') toggleNetOverlayWindow();
 }
 function logOut() {
   if (game.net) {
