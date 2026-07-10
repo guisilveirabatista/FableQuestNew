@@ -1,36 +1,17 @@
-Fixed the player collision / "walk over then warp back" bug.
+- Overhaul the HUD and window system by separating in multiple layers. I want some HUDs to be in the same layer as some windows, like to skill/items slot HUD that I would like to be in the same layer as the inventory. Some windows like the trade system should be on top of all the other layers.
 
-Root cause
-• Server (authoritative): occupied() / playerAt() treats other living players as solid (like enemies/walls) in stepPlayer(), findPath(), etc. However, all players are stepped in a single pass over h.players (random map iteration order). Positions are mutated in place, so later-processed players can see updated positions from earlier ones in the same tick. This allows order-dependent "crossing" into what was a pre-tick occupied tile (or contested free tiles).
-• Client prediction (in sim.js stepHero() + findPath() + startPathTo(), used for both offline and net): Only blocked on map isBlocked() + enemyAt(). No playerAt(). Hero could predict/commit a tile step onto another player's last-known position. Server would reject (different view of "occupied players"), causing tile drift. Reconcile (tileDrift > 1 || pixelDrift > TS) would snap/warp you back.
-• Why monsters worked (and players didn't): Enemy positions are fixed during the entire player step phase (updateEnemies() runs after all player steps, using pre-tick player positions for their own checks). Client's last-known enemy tx/ty (from snapshots) matches what the server uses for decisions in that tick. No view mismatch. Players are dynamic (other clients' moves processed in the same pass), so stale snapshot positions in client didn't match server's in-tick view.
-• Result: You could "walk over" (prediction allowed it), server corrected, visual warp 1 step back. (Overlaps were also possible in some orderings, though server tried to prevent landing on pre positions.)
+- Don't show HP bar of NPCs if they don't battle. Maybe not show a little green pop up, but perhaps just the label of their names with a transparent background when hovering the mouse over them.
 
-Fix
-1. Client prediction now blocks players exactly like enemies (in sim.js):
-   • Added playerAt(x, y) (parallels enemyAt(); uses game.players remotes in net mode, safe/no-op offline).
-   • Updated all hero tile commit sites: stepHero() (dir moves, path following, follow chasing) + findPath() + startPathTo().
-   • Added tx/ty population for remote players in netclient.js (from snapshots; previously missing or incomplete, so playerAt would have been ineffective).
+- Show the label miss when we miss a hit during battle, like it was in the offline game mode.
 
-2. Server now makes all player collision decisions against a frozen pre-tick snapshot of player positions (in main.go + world.go):
-   • Before the player step/regen loop: snapshot frozenPlayerPos (pre-tick tx/ty for every living player).
-   • Modified playerAt(): if frozen snapshot is active, use the pre positions for blocker checks (instead of live/mutated o.tx/ty).
-   • All move decisions (stepPlayer() occupied checks for dir/path/follow) now see the exact same pre-tick player positions that the client saw in its last snapshot.
-   • Clear the frozen map after the player step phase (normal live positions used for enemies/loot/etc. afterward).
-   • This eliminates order-dependent crossing during the tick + makes server "allowed move?" decisions match client's pre-tick view exactly. (No more "I thought it was free, server said occupied.")
+- Check if important things to be persitent are in fact persistent, like the equipped items for example.
 
-3. Other consistency:
-   • Server occupied() / walkable() / findPath() etc. continue to treat players + living enemies as solid (no behavior change for monsters/NPCs).
-   • No overlaps from pre-occupied tiles (decisions are now conservative + snapshot-based).
-   • Contested free tiles (rare simultaneous moves to same empty tile) may still resolve by loop order (or end up overlapping); this is pre-existing and low-impact (next tick will separate them). The reported warp/crossing of occupied tiles is gone.
-   • playerAt() / occupied() still correctly exclude self.
-   • Prediction/reconcile, moveDir/path/follow, click-to-move, etc. all updated.
-   • Tests (TestPlayersAreSolid, etc.) still pass (they rely on pre positions).
+- Add a randomized box with prize system just like vampire survivors.
 
-Players are now hard obstacles (like walls) from both client prediction and server decision views. You can't initiate (or succeed) a cross; no warp. Monsters were already correct due to update ordering; now players match.
+- The yellow marker aroun a monster when I have a lock in on them should be the same for when I lock in on other players. Right now, if I lock in on another player, it show a red marker.
 
-Run go test ./server (or the full suite) to verify. If you see any remaining desync in heavy contention, we can add post-step conflict resolution or sort players by ID for determinism.
+- Standardize button names and actions in the UI. Some places have a button "Reset" and others call it "Clear". The mouse 2 button should always perform an action in npcs, items, etc. The mouse 1 button is always for walking, clicking on buttons, or when combination with ctrl or alt, does other actions like lock in and follow. Different layers of pop up windows need to have different shades of background shadow around them to distinguish from the ones on the back.
 
-- Items on the floor are not displaying their names when I hover my mouse over them. They are displaying "Object object" as their name
+- There is a conflict in the action to clear the skill slots. Mouse 2 is supposed to clear the slot and also to show details of the skill. I'm not sure which one should have priority here or if I should change the commands.
 
-- I want to be able to drag and drop an item using mouse 1 when I'm close to them. If I'm close I hold mouse 1 on them, I start dragging. When I release mouse 1 I drop it. I can drop it as far as I want in my field of view. Same works for corpses.
+- Should I split opening backpack and opening body equipments in different commands? They are already separate windows anyways.

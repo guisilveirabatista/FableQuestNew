@@ -223,3 +223,7 @@ Improvements
 - Add a cheat to have infinite health and mp
 
 - I would like the skills to have a description system. If I click with mouse 2 on a skill, it should show a pop up with an explanation of what that skill is. I also want the admin to have a skill called Super Nova, that kills all the monsters in the map, except the players. Can you find a good animation for Super Nova?
+
+- I want to be able to drag and drop an item using mouse 1 when I'm close to them. If I'm close I hold mouse 1 on them, I start dragging. When I release mouse 1 I drop it. I can drop it as far as I want in my field of view. Same works for corpses.
+
+- Items on the floor are not displaying their names when I hover my mouse over them. They are displaying "Object object" as their name
