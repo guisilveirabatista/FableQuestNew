@@ -119,6 +119,37 @@ func (s *pgStore) Save(user string, ch *charState) error {
 	return err
 }
 
+func (s *pgStore) DeleteCharacter(user, name string) error {
+	var charsJSON []byte
+	err := s.pool.QueryRow(context.Background(), `SELECT characters FROM accounts WHERE username=$1`, user).Scan(&charsJSON)
+	if err != nil {
+		return err
+	}
+	var chars []*charState
+	if len(charsJSON) > 0 {
+		if err := json.Unmarshal(charsJSON, &chars); err != nil {
+			return err
+		}
+	}
+	found := false
+	for i, ch := range chars {
+		if ch != nil && strings.EqualFold(ch.Name, name) {
+			chars = append(chars[:i], chars[i+1:]...)
+			found = true
+			break
+		}
+	}
+	if !found {
+		return errors.New("character not found")
+	}
+	data, err := json.Marshal(chars)
+	if err != nil {
+		return err
+	}
+	_, err = s.pool.Exec(context.Background(), `UPDATE accounts SET characters=$2 WHERE username=$1`, user, data)
+	return err
+}
+
 func (s *pgStore) SetAccountBan(user string, banned bool) error {
 	if !validName(user) {
 		return errors.New("invalid account name")

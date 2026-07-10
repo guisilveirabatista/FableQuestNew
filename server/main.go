@@ -154,9 +154,10 @@ type projView struct {
 	Boom float64 `json:"boom"` // -1 = flying, >=0 = impact burst remaining
 }
 type boltView struct {
-	X float64 `json:"x"`
-	Y float64 `json:"y"`
-	T float64 `json:"t"`
+	X    float64 `json:"x"`
+	Y    float64 `json:"y"`
+	T    float64 `json:"t"`
+	Kind string  `json:"kind,omitempty"`
 }
 type welcomeMsg struct {
 	T          string             `json:"t"`
@@ -893,7 +894,7 @@ func (h *Hub) run() {
 		blViews := map[string][]boltView{}
 		for mapID, list := range h.bolts {
 			for _, b := range list {
-				blViews[mapID] = append(blViews[mapID], boltView{b.x, b.y, b.t})
+				blViews[mapID] = append(blViews[mapID], boltView{X: b.x, Y: b.y, T: b.t, Kind: b.kind})
 			}
 		}
 		fViews := map[string][]floorView{}
@@ -1325,6 +1326,24 @@ readloop:
 					}
 					chars = upsertCharacter(chars, ch)
 					writeCharacterList(c, chars, ch.Name, "")
+				case "deleteCharacter":
+					ch := findCharacter(chars, m.Name)
+					if ch == nil {
+						writeCharacterList(c, chars, "", "Character not found.")
+						continue
+					}
+					if err := store.DeleteCharacter(user, m.Name); err != nil {
+						writeCharacterList(c, chars, "", "Could not delete character.")
+						continue
+					}
+					// Remove from chars slice
+					for i, existing := range chars {
+						if existing != nil && strings.EqualFold(existing.Name, m.Name) {
+							chars = append(chars[:i], chars[i+1:]...)
+							break
+						}
+					}
+					writeCharacterList(c, chars, "", "")
 				case "enterCharacter":
 					if h.online(user) {
 						writeCharacterList(c, chars, m.Name, "Already in the world.")

@@ -17,7 +17,7 @@ const ADMIN_SECTIONS = [
 ];
 
 const ADMIN_CLASSES = ['Knight', 'Lancer', 'Wizard', 'Archer', 'Vampire', 'Holy'];
-const ADMIN_SKILLS = ['fire', 'heal', 'spin', 'bolt', 'nova'];
+const ADMIN_SKILLS = ['fire', 'heal', 'spin', 'bolt', 'nova', 'supernova'];
 const ADMIN_CHEATS = [
   { key: 'invulnerable', label: 'Invulnerable' },
   { key: 'infiniteWeight', label: 'Infinite Weight' },

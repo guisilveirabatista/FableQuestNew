@@ -221,3 +221,5 @@ Improvements
 
 - Add the command to unban a character for the admin
 - Add a cheat to have infinite health and mp
+
+- I would like the skills to have a description system. If I click with mouse 2 on a skill, it should show a pop up with an explanation of what that skill is. I also want the admin to have a skill called Super Nova, that kills all the monsters in the map, except the players. Can you find a good animation for Super Nova?

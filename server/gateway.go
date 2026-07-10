@@ -197,6 +197,24 @@ selectCharacter:
 				}
 				chars = upsertCharacter(chars, ch)
 				writeCharacterList(c, chars, ch.Name, "")
+			case "deleteCharacter":
+				ch := findCharacter(chars, m.Name)
+				if ch == nil {
+					writeCharacterList(c, chars, "", "Character not found.")
+					continue
+				}
+				if err := store.DeleteCharacter(user, m.Name); err != nil {
+					writeCharacterList(c, chars, "", "Could not delete character.")
+					continue
+				}
+				// Remove from chars slice
+				for i, existing := range chars {
+					if existing != nil && strings.EqualFold(existing.Name, m.Name) {
+						chars = append(chars[:i], chars[i+1:]...)
+						break
+					}
+				}
+				writeCharacterList(c, chars, "", "")
 			case "enterCharacter":
 				ch := findCharacter(chars, m.Name)
 				if ch == nil {

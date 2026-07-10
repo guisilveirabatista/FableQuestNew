@@ -154,7 +154,7 @@ Fields:
 - `MP`
 - Primary attributes: `Agility`, `Intelligence`, `Vitality`, `Strength`,
   `Dexterity`, `Magic Power`, `Luck`
-- Skill levels: `Fire`, `Heal`, `Spin`, `Bolt`, `Nova`
+- Skill levels: `Fire`, `Heal`, `Spin`, `Bolt`, `Nova`, `Super Nova`
 
 Valid classes:
 
@@ -192,6 +192,10 @@ Available cheats:
 - `All Skills`: allows every class to use every skill.
 - `Super Speed`: doubles movement speed unless another rule explicitly slows
   the character.
+
+Admin-only skill:
+- `Super Nova`: a free hotbar skill for admins that defeats every monster on
+  the current map while leaving players untouched.
 
 Notes:
 - Cheats are per-character runtime state from the current server session.

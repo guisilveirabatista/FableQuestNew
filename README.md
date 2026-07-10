@@ -59,7 +59,8 @@ Auto-melee on a locked target keeps swinging even while you read.
 
 Skills: **Fire** (4 MP fireball, homes in on your lock), **Heal** (6 MP, +15 HP),
 **Spin** (3 MP sword sweep all around you), **Bolt** (6 MP lightning on your lock
-or the nearest foe). HP and MP both regenerate slowly on their own.
+or the nearest foe), and **Nova** (area lightning). Right-click a skill for its
+description. HP and MP both regenerate slowly on their own.
 
 ## The city
 

@@ -10,12 +10,16 @@ import (
 	"math/rand"
 )
 
-var skillMP = map[string]float64{"fire": 4, "heal": 6, "spin": 3, "bolt": 6, "nova": 8}
+var skillMP = map[string]float64{"fire": 4, "heal": 6, "spin": 3, "bolt": 6, "nova": 8, "supernova": 0}
+var adminOnlySkills = map[string]bool{"supernova": true}
 
 func skillCost(p *Player, id string) float64 {
 	base, ok := skillMP[id]
 	if !ok {
 		return 0
+	}
+	if adminOnlySkills[id] {
+		return base
 	}
 	return base + float64(skillLevel(p, id)-1)
 }
@@ -29,7 +33,7 @@ func skillAreaDamage(p *Player, id string, roll int) int {
 }
 
 func skillRequiresTarget(id string) bool {
-	return id != "heal" && id != "nova"
+	return id != "heal" && id != "nova" && id != "supernova"
 }
 
 type projectile struct {
@@ -45,6 +49,7 @@ type projectile struct {
 
 type bolt struct {
 	x, y, t float64
+	kind    string
 }
 
 // castSlot fires the skill in hotbar slot i, spending MP only on success.
@@ -62,9 +67,12 @@ func (h *Hub) castSlot(p *Player, i int) {
 		useItem(p, id)
 		return
 	}
+	if _, ok := skillMP[id]; !ok {
+		return
+	}
 	cost := skillCost(p, id)
 	freeCast := adminCheatEnabled(p, "infiniteVitals")
-	if p.atkCool > 0 || cost <= 0 || !playerSkillAllowed(p, id) || (!freeCast && p.mp < cost) {
+	if p.atkCool > 0 || !playerSkillAllowed(p, id) || (!freeCast && p.mp < cost) {
 		return
 	}
 	if skillRequiresTarget(id) && h.liveEnemyLock(p) == nil && h.livePvpTarget(p) == nil {
@@ -82,6 +90,8 @@ func (h *Hub) castSlot(p *Player, i int) {
 		ok = h.castBolt(p)
 	case "nova":
 		ok = h.castNova(p)
+	case "supernova":
+		ok = h.castSuperNova(p)
 	}
 	if ok && !freeCast {
 		p.mp -= cost
@@ -218,6 +228,31 @@ func (h *Hub) addNovaBolts(p *Player) {
 	}
 }
 
+func (h *Hub) addSuperNovaBolts(p *Player) {
+	for y := 0; y < MH; y += 2 {
+		for x := 0; x < MW; x += 2 {
+			if (x+y)%4 == 0 || rand.Intn(3) == 0 {
+				delay := -rand.Float64() * 0.35
+				h.bolts[p.mapID] = append(h.bolts[p.mapID], &bolt{
+					x:    float64(x*TS) + 8 + rand.Float64()*6 - 3,
+					y:    float64(y*TS) + 8 + rand.Float64()*6 - 3,
+					t:    delay,
+					kind: "supernova",
+				})
+			}
+		}
+	}
+	for _, en := range h.enemies[p.mapID] {
+		if en.dying > 0 || en.dead {
+			continue
+		}
+		h.bolts[p.mapID] = append(h.bolts[p.mapID], &bolt{
+			x: float64(en.tx*TS) + 8, y: float64(en.ty*TS) + 8,
+			t: -rand.Float64() * 0.2, kind: "supernova",
+		})
+	}
+}
+
 func (h *Hub) castNova(p *Player) bool {
 	p.atkCool = 0.8
 	h.addNovaBolts(p)
@@ -240,6 +275,26 @@ func (h *Hub) castNova(p *Player) bool {
 		if inNovaBounds(p, tx, ty) {
 			h.pvpHit(p, o, skillAreaDamage(p, "nova", rand.Intn(5)), false, true)
 		}
+	}
+	return true
+}
+
+func (h *Hub) castSuperNova(p *Player) bool {
+	if p == nil || !p.isAdmin() {
+		return false
+	}
+	p.atkCool = 1.0
+	h.addSuperNovaBolts(p)
+	kills := 0
+	for _, en := range h.enemies[p.mapID] {
+		if en.dying > 0 || en.dead {
+			continue
+		}
+		h.hitEnemy(p, en, en.hp, false)
+		kills++
+	}
+	if kills > 0 {
+		p.logMsg("Super Nova cleared the map.")
 	}
 	return true
 }
@@ -318,7 +373,11 @@ func (h *Hub) updateProjectiles(dt float64) {
 		kept := list[:0]
 		for _, b := range list {
 			b.t += dt
-			if b.t < 0.25 {
+			life := 0.25
+			if b.kind == "supernova" {
+				life = 0.85
+			}
+			if b.t < life {
 				kept = append(kept, b)
 			}
 		}

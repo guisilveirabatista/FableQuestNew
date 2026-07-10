@@ -134,6 +134,74 @@ func TestCastNovaExpandsAtHigherLevel(t *testing.T) {
 	}
 }
 
+func TestSuperNovaIsAdminOnly(t *testing.T) {
+	h := newHub()
+	p := heroAt("field", 15, 10)
+	p.slots[4] = "supernova"
+	en := slimeAt(1, 16, 10)
+	h.enemies["field"] = []*enemy{en}
+	mp0 := p.mp
+
+	h.castSlot(p, 4)
+
+	if en.hp != en.maxhp || en.dying > 0 {
+		t.Fatalf("non-admin super nova should not damage enemies, hp=%d/%d dying=%v", en.hp, en.maxhp, en.dying)
+	}
+	if p.mp != mp0 {
+		t.Fatalf("non-admin super nova should not spend MP, had %v now %v", mp0, p.mp)
+	}
+	if hotbarEntryAllowed(p, "supernova") {
+		t.Fatal("non-admin should not be allowed to equip super nova")
+	}
+}
+
+func TestAdminSuperNovaKillsMapMonstersOnly(t *testing.T) {
+	oldAdmins := adminUsers
+	configureAdmins("admin")
+	defer func() { adminUsers = oldAdmins }()
+
+	h := newHub()
+	admin := mkPlayer(h, "admin", "field", 15, 10)
+	admin.admin = true
+	admin.slots[4] = "supernova"
+	admin.mp = 0
+	near := slimeAt(1, 16, 10)
+	far := slimeAt(2, 30, 12)
+	otherMap := slimeAt(3, 19, 16)
+	h.enemies["field"] = []*enemy{near, far}
+	h.enemies["city"] = []*enemy{otherMap}
+	player := mkPlayer(h, "player", "field", 17, 10)
+	playerHP := player.hp
+
+	h.castSlot(admin, 4)
+
+	if near.dying <= 0 || far.dying <= 0 {
+		t.Fatalf("admin super nova should kill all monsters on the map, near dying=%v far dying=%v", near.dying, far.dying)
+	}
+	if otherMap.dying > 0 || otherMap.hp != otherMap.maxhp {
+		t.Fatalf("admin super nova should not hit other maps, hp=%d/%d dying=%v", otherMap.hp, otherMap.maxhp, otherMap.dying)
+	}
+	if player.hp != playerHP {
+		t.Fatalf("admin super nova should not hit players, hp=%v -> %v", playerHP, player.hp)
+	}
+	if admin.mp != 0 {
+		t.Fatalf("admin super nova should be free, mp=%v", admin.mp)
+	}
+	if len(h.bolts["field"]) == 0 {
+		t.Fatal("admin super nova should spawn map-wide visuals")
+	}
+	seenSuperNova := false
+	for _, b := range h.bolts["field"] {
+		if b.kind == "supernova" {
+			seenSuperNova = true
+			break
+		}
+	}
+	if !seenSuperNova {
+		t.Fatal("super nova visuals should be tagged for the stronger animation")
+	}
+}
+
 func TestCastSpellRequiresCombatTarget(t *testing.T) {
 	h := newHub()
 	p := heroAt("field", 15, 10)

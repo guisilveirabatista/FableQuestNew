@@ -372,7 +372,7 @@ func (h *Hub) adminEditSelf(p *Player, m inMsg) {
 	normalizeSkillProgress(p)
 	for id, lv := range m.SkillLv {
 		if _, ok := skillMP[id]; ok {
-			p.skillLevels[id] = clampInt(lv, 1, maxSkillLevel)
+			p.skillLevels[id] = clampInt(lv, 1, skillMaxLevel(id))
 		}
 	}
 	normalizeSlots(p)

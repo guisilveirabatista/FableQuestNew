@@ -43,10 +43,13 @@ func expToNextLevel(lv int) int {
 }
 
 func skillAllowedForClass(class, id string) bool {
-	return id != "heal" || class == "Holy"
+	return !adminOnlySkills[id] && (id != "heal" || class == "Holy")
 }
 
 func playerSkillAllowed(p *Player, id string) bool {
+	if adminOnlySkills[id] {
+		return p != nil && p.isAdmin()
+	}
 	return adminCheatEnabled(p, "allSkills") || skillAllowedForClass(p.class, id)
 }
 
@@ -170,6 +173,10 @@ func assignSkill(p *Player, id string, i int) {
 	if i < 0 || i >= len(p.slots) {
 		return
 	}
+	if id == "" {
+		p.slots[i] = ""
+		return
+	}
 	if !hotbarEntryAllowed(p, id) {
 		return
 	}
@@ -197,13 +204,20 @@ func normalizeSkillProgress(p *Player) {
 		if p.skillLevels[id] <= 0 {
 			p.skillLevels[id] = 1
 		}
-		if p.skillLevels[id] > maxSkillLevel {
-			p.skillLevels[id] = maxSkillLevel
+		if p.skillLevels[id] > skillMaxLevel(id) {
+			p.skillLevels[id] = skillMaxLevel(id)
 		}
 	}
 	if p.skillPoints < 0 {
 		p.skillPoints = 0
 	}
+}
+
+func skillMaxLevel(id string) int {
+	if adminOnlySkills[id] {
+		return 1
+	}
+	return maxSkillLevel
 }
 
 func skillLevel(p *Player, id string) int {
@@ -213,7 +227,7 @@ func skillLevel(p *Player, id string) int {
 
 func upgradeSkill(p *Player, id string) bool {
 	normalizeSkillProgress(p)
-	if _, ok := skillMP[id]; !ok || !playerSkillAllowed(p, id) || p.skillPoints <= 0 || p.skillLevels[id] >= maxSkillLevel {
+	if _, ok := skillMP[id]; !ok || !playerSkillAllowed(p, id) || p.skillPoints <= 0 || p.skillLevels[id] >= skillMaxLevel(id) {
 		return false
 	}
 	if req := skillTree[id]; req != "" && p.skillLevels[req] < 2 {
@@ -250,7 +264,7 @@ func initHero(p *Player) {
 		p.cloth = defaultCloth
 	}
 	p.slots = defaultSlotsForClass("") // skill/item hotbar (keys 1-5)
-	p.skillLevels = map[string]int{"fire": 1, "heal": 1, "spin": 1, "bolt": 1, "nova": 1}
+	p.skillLevels = map[string]int{"fire": 1, "heal": 1, "spin": 1, "bolt": 1, "nova": 1, "supernova": 1}
 	p.skillPoints = 0
 	p.quests = map[string]QuestState{}
 	p.bag = map[string]int{"potion": 3}

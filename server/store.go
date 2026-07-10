@@ -83,6 +83,7 @@ type charState struct {
 type Store interface {
 	Login(user, pass string) (chars []*charState, err error)
 	Save(user string, ch *charState) error
+	DeleteCharacter(user, name string) error
 	SetAccountBan(user string, banned bool) error
 	AccountBanned(user string) (bool, error)
 	SetCharacterBan(user, name string, banned bool) error
@@ -208,6 +209,27 @@ func (s *fileStore) Save(user string, ch *charState) error {
 	}
 	if !replaced {
 		a.Characters = append(a.Characters, next)
+	}
+	return s.persistLocked()
+}
+
+func (s *fileStore) DeleteCharacter(user, name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	a := s.accounts[user]
+	if a == nil {
+		return errors.New("no such account")
+	}
+	found := false
+	for i, existing := range a.Characters {
+		if existing != nil && strings.EqualFold(existing.Name, name) {
+			a.Characters = append(a.Characters[:i], a.Characters[i+1:]...)
+			found = true
+			break
+		}
+	}
+	if !found {
+		return errors.New("character not found")
 	}
 	return s.persistLocked()
 }

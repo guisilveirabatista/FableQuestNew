@@ -1121,6 +1121,25 @@ function drawItemPopup() {
   text(`Weight ${it.w}kg   Value ${it.price}g`, px + 10, py + ph - 26, '#bcd');
   text('Click or Esc to close', px + 10, py + ph - 14, '#9cf');
 }
+function drawSkillPopup() {
+  const id = game.skillPopup, sk = SKILLS[id];
+  if (!sk) return;
+  const pw = 218, ph = 124;
+  let px = Math.max(4, Math.floor((W - pw) / 2));
+  if (game.menu && game.menu.mode === 'skills') {
+    const skillWin = skillLayout(availableSkillIds(game.hero));
+    if (skillWin.x - pw - 8 >= 4) px = skillWin.x - pw - 8;
+  }
+  const py = Math.max(4, Math.floor((H - ph) / 2));
+  drawWindow(px, py, pw, ph);
+  drawSkillIcon(id, px + 10, py + 10, true);
+  text(sk.name, px + 34, py + 12, '#ffe080');
+  text(skillPopupMeta(id), px + 10, py + 34, '#bcd');
+  wrapText(sk.desc || '', px + 10, py + 50, pw - 20);
+  const req = skillReq(id);
+  if (req) text(`Requires ${SKILLS[req].name} Lv2`, px + 10, py + ph - 28, '#f76');
+  text('Click or Esc to close', px + 10, py + ph - 14, '#9cf');
+}
 function itemInfo(it) {
   if (it.heal) return `Heals ${it.heal} HP`;
   const parts = [];
@@ -1504,6 +1523,10 @@ function drawSlash() {
 
 function drawBolts() {
   for (const b of game.bolts) {
+    if (b.kind === 'supernova') {
+      drawSuperNovaBolt(b);
+      continue;
+    }
     ctx.strokeStyle = Math.floor(b.t * 30) % 2 ? '#ffe080' : '#fff';
     ctx.beginPath();
     ctx.moveTo(b.x + rnd(9) - 4, game.camY || 0);
@@ -1515,6 +1538,35 @@ function drawBolts() {
     ctx.fillRect(b.x - 3, b.y - 3, 6, 6);
     ctx.globalAlpha = 1;
   }
+}
+
+function drawSuperNovaBolt(b) {
+  if (b.t < 0) return;
+  const life = 0.85;
+  const p = Math.max(0, Math.min(1, b.t / life));
+  const a = 1 - p;
+  const skyY = game.camY || 0;
+  ctx.save();
+  ctx.globalAlpha = Math.min(1, a * 1.35);
+  ctx.lineWidth = p < 0.22 ? 2 : 1;
+  ctx.strokeStyle = p < 0.35 ? '#fff' : '#ffe080';
+  ctx.beginPath();
+  ctx.moveTo(b.x + rnd(15) - 7, skyY);
+  for (let y = skyY + 8; y < b.y; y += 7) ctx.lineTo(b.x + rnd(19) - 9, y);
+  ctx.lineTo(b.x, b.y);
+  ctx.stroke();
+  const r = 5 + p * 26;
+  ctx.globalAlpha = Math.max(0, 0.85 - p);
+  ctx.strokeStyle = '#ffe080';
+  ctx.beginPath();
+  ctx.arc(b.x, b.y, r, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.globalAlpha = Math.max(0, 0.55 - p * 0.45);
+  ctx.fillStyle = '#fff';
+  ctx.beginPath();
+  ctx.arc(b.x, b.y, Math.max(2, 9 - p * 6), 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
 }
 
 function drawProjectiles() {
@@ -1620,7 +1672,7 @@ function updateDeathPopup() {
 }
 
 function hoverBlockedByUI() {
-  if (game.worldDrag || game.death || game.mapOpen || game.menu || game.shop || game.itemPopup || game.dropPrompt || game.dialogue ||
+  if (game.worldDrag || game.death || game.mapOpen || game.menu || game.shop || game.itemPopup || game.skillPopup || game.dropPrompt || game.dialogue ||
     game.playerMenu || game.trade) return true;
   if (game.invOpen && inPanel(mouse)) return true;
   if (game.corpseOpen && inCorpseWin(mouse)) return true;
@@ -1809,6 +1861,7 @@ function openMapWindow() {
   game.menu = null;
   game.shop = null;
   game.itemPopup = null;
+  game.skillPopup = null;
   game.dropPrompt = null;
   game.playerMenu = null;
   game.invFocus = null;
@@ -2023,7 +2076,7 @@ function skillReq(id, h = game.hero) {
   return skillReqForLevels(id, null, h);
 }
 function canUpgradeSkill(id, h = game.hero) {
-  return !!(SKILLS[id] && (h.skillPoints || 0) > 0 && skillUiLevel(id, h) < MAX_SKILL_LEVEL && !skillReq(id, h));
+  return !!(SKILLS[id] && (h.skillPoints || 0) > 0 && skillUiLevel(id, h) < skillMaxLevel(id) && !skillReq(id, h));
 }
 function copySkillLevels(h = game.hero) {
   return Object.fromEntries(Object.keys(SKILLS).map(id => [id, skillUiLevel(id, h)]));
@@ -2051,7 +2104,7 @@ function skillHasPending(m) {
 }
 function canUpgradeSkillDraft(m, id, h = game.hero) {
   ensureSkillDraft(m);
-  return !!(SKILLS[id] && m.skillPoints > 0 && skillDraftLevel(m, id, h) < MAX_SKILL_LEVEL &&
+  return !!(SKILLS[id] && m.skillPoints > 0 && skillDraftLevel(m, id, h) < skillMaxLevel(id) &&
     !skillReqForLevels(id, m.skillDraft, h));
 }
 function addSkillDraft(m, id) {
@@ -2082,7 +2135,29 @@ function confirmSkillDraft(m) {
 }
 function skillMpText(id, h = game.hero) {
   const cost = typeof skillCost === 'function' ? skillCost(id, h) : SKILLS[id].mp;
-  return cost + 'MP';
+  return cost > 0 ? cost + 'MP' : 'Free';
+}
+function openSkillPopup(id) {
+  if (!SKILLS[id]) return false;
+  game.skillPopup = id;
+  sfx('Decision1');
+  return true;
+}
+function closeSkillPopup() {
+  game.skillPopup = null;
+  sfx('Cancel1');
+}
+function skillAccessText(id, h = game.hero) {
+  if (SKILLS[id] && SKILLS[id].adminOnly) return 'Admin only';
+  if (id === 'heal') return 'Holy class';
+  if (!skillAllowedForClass(id, h)) return 'Unavailable';
+  return 'Any class';
+}
+function skillPopupMeta(id, h = game.hero) {
+  const maxLv = skillMaxLevel(id);
+  const lv = skillUiLevel(id, h);
+  const level = maxLv > 1 ? `Lv ${lv}/${maxLv}` : 'Unique';
+  return `${level}   Cost ${skillMpText(id, h)}   ${skillAccessText(id, h)}`;
 }
 function skillLayout(ids = Object.keys(SKILLS)) {
   const w = 236, rowH = 18, y = 8, rowY = y + 28;
@@ -2254,9 +2329,18 @@ function updateMenu(dt) {
       const slot = skillSlotAt(l, c.x, c.y);
       if (slot >= 0) {
         const id = h.slots[slot];
-        if (id) { pushIntent({ t: 'assignSkill', id, slot }); m.skillDrag = null; sfx('Cancel1'); }
+        if (id && SKILLS[id]) { openSkillPopup(id); m.skillDrag = null; }
+        else if (id) { pushIntent({ t: 'assignSkill', id, slot }); m.skillDrag = null; sfx('Cancel1'); }
         else sfx('Buzzer1');
         return;
+      }
+      for (let i = 0; i < ids.length; i++) {
+        const ry = l.rowY + i * l.rowH;
+        if (hit(c, l.x + 8, ry, l.w - 16, 16)) {
+          openSkillPopup(ids[i]);
+          m.skillDrag = null;
+          return;
+        }
       }
     }
     for (const c of mc) {
@@ -2722,6 +2806,7 @@ function drawMap(drawMenuLayer = true) {
   if (game.playerMenu) drawPlayerMenu();
   if (game.death) drawDeathPopup();
   if (drawMenuLayer && game.menu) drawMenu();
+  if (drawMenuLayer && game.skillPopup) drawSkillPopup();
 }
 
 function updateDialogue(dt) {
@@ -2824,6 +2909,10 @@ function processInput(dt) {
     if (pressed(CANCEL) || pressed(CONFIRM) || clicked(0)) { game.itemPopup = null; sfx('Cancel1'); }
     return;
   }
+  if (game.skillPopup) {
+    if (pressed(CANCEL) || pressed(CONFIRM) || clicked(0) || clicked(2)) closeSkillPopup();
+    return;
+  }
   if (game.corpseOpen) { // corpse window: take loot; walking stays live
     updateCorpseWinControls((c, id) => pushIntent({ t: 'takeCorpse', tx: c.tx, ty: c.ty, id }));
   }
@@ -2837,6 +2926,12 @@ function processInput(dt) {
   if (game.dialogue) {
     updateDialogue(dt);
     return;
+  }
+  for (const c of clicks) {
+    if (c.b !== 2) continue;
+    const hs = hotbarSlotAt(c.x, c.y);
+    const id = hs >= 0 && h.slots ? h.slots[hs] : '';
+    if (id && SKILLS[id] && openSkillPopup(id)) return;
   }
 
   // inventory panel: I toggles it, E cycles keyboard focus into it

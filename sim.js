@@ -40,7 +40,11 @@ function expToNextLevel(lv) { return Math.max(1, lv || 1) * 14; }
 function cheatEnabled(id, h = game.hero) {
   return !!(h && h.cheats && h.cheats[id]);
 }
+function isAdminHero(h = game.hero) {
+  return !!(game.isAdmin || (h && h.admin));
+}
 function skillAllowedForClass(id, h = game.hero) {
+  if (SKILLS[id] && SKILLS[id].adminOnly) return isAdminHero(h);
   return cheatEnabled('allSkills', h) || id !== 'heal' || (h && h.class === 'Holy');
 }
 function availableSkillIds(h = game.hero) {
@@ -75,14 +79,15 @@ function normalizeHeroSlots(h = game.hero) {
 }
 function normalizeSkillProgress(h = game.hero) {
   if (!h.skillLevels) h.skillLevels = {};
-  ['fire', 'heal', 'spin', 'bolt', 'nova'].forEach(id => {
-    h.skillLevels[id] = Math.max(1, Math.min(MAX_SKILL_LEVEL, h.skillLevels[id] || 1));
+  Object.keys(SKILLS).forEach(id => {
+    h.skillLevels[id] = Math.max(1, Math.min(skillMaxLevel(id), h.skillLevels[id] || 1));
   });
   h.skillPoints = Math.max(0, h.skillPoints || 0);
 }
 function skillLevel(id, h = game.hero) { normalizeSkillProgress(h); return h.skillLevels[id] || 1; }
+function skillMaxLevel(id) { return SKILLS[id] && SKILLS[id].maxLevel ? SKILLS[id].maxLevel : MAX_SKILL_LEVEL; }
 function skillCost(id, h = game.hero) {
-  return SKILLS[id] ? SKILLS[id].mp + skillLevel(id, h) - 1 : 0;
+  return SKILLS[id] ? SKILLS[id].mp + (skillMaxLevel(id) > 1 ? skillLevel(id, h) - 1 : 0) : 0;
 }
 function skillMpAvailable(id, h = game.hero) {
   return cheatEnabled('infiniteVitals', h) || h.mp >= skillCost(id, h);
@@ -136,7 +141,7 @@ function resetGame() {
     kills: 0,
     slots: defaultSlotsForClass('Knight'), // skill/item hotbar, keys 1-5
     skillPoints: 0,
-    skillLevels: { fire: 1, heal: 1, spin: 1, bolt: 1, nova: 1 },
+    skillLevels: { fire: 1, heal: 1, spin: 1, bolt: 1, nova: 1, supernova: 1 },
     cheats: {},
     quests: {},
     attr: { ...BASE_ATTR },
@@ -766,13 +771,21 @@ function faceToward(en) {
 // ---- skills: equipped into 5 hotbar slots (keys 1-5) via the Skills menu.
 // cast() returns false when the skill can't fire; MP is only spent on success.
 const SKILLS = {
-  fire: { name: 'Fire', mp: 4, desc: 'Hurl a fireball. Homes in on your lock.', cast: castFire },
-  heal: { name: 'Heal', mp: 6, desc: 'Mend your wounds for 15 HP.', cast: castHeal },
-  spin: { name: 'Spin', mp: 3, desc: 'Sword sweep hitting all around you.', cast: castSpin },
-  bolt: { name: 'Bolt', mp: 6, desc: 'Lightning strikes your lock or the nearest foe.', cast: castBolt },
-  nova: { name: 'Nova', mp: 8, desc: 'Area magic around you. No lock required.', cast: castNova },
+  fire: { name: 'Fire', mp: 4, desc: 'Hurls a homing fireball at your locked target. Damage scales with Magic Power and skill level.', cast: castFire },
+  heal: { name: 'Heal', mp: 6, desc: 'Restores HP to yourself. Higher levels mend more wounds. Only Holy characters can use it.', cast: castHeal },
+  spin: { name: 'Spin', mp: 3, desc: 'Performs a quick weapon sweep around you, striking nearby enemies and hostile PvP targets.', cast: castSpin },
+  bolt: { name: 'Bolt', mp: 6, desc: 'Calls lightning onto your locked target from any range. Damage scales strongly with Magic Power.', cast: castBolt },
+  nova: { name: 'Nova', mp: 8, desc: 'Explodes lightning around your position. It does not need a lock and grows wider at level 3.', cast: castNova },
+  supernova: {
+    name: 'Super Nova',
+    mp: 0,
+    desc: 'Admin-only starfall that wipes out every monster on the current map. Players are untouched.',
+    adminOnly: true,
+    maxLevel: 1,
+    cast: castSuperNova,
+  },
 };
-function skillRequiresTarget(id) { return id !== 'heal' && id !== 'nova'; }
+function skillRequiresTarget(id) { return id !== 'heal' && id !== 'nova' && id !== 'supernova'; }
 function castSlot(i) {
   const h = game.hero, id = h.slots[i];
   if (game.atkCool > 0) return;
@@ -867,6 +880,24 @@ function addNovaBolts(h = game.hero) {
     }
   }
 }
+function addSuperNovaBolts(h = game.hero) {
+  for (let y = 0; y < MH; y += 2) {
+    for (let x = 0; x < MW; x += 2) {
+      if ((x + y) % 4 === 0 || Math.random() < 0.34) {
+        game.bolts.push({
+          x: x * TS + 8 + Math.random() * 6 - 3,
+          y: y * TS + 8 + Math.random() * 6 - 3,
+          t: -Math.random() * 0.35,
+          kind: 'supernova',
+        });
+      }
+    }
+  }
+  for (const en of game.enemies) {
+    if (en.dying > 0 || en.dead) continue;
+    game.bolts.push({ x: en.tx * TS + 8, y: en.ty * TS + 8, t: -Math.random() * 0.2, kind: 'supernova' });
+  }
+}
 function novaDamage(h = game.hero) {
   return stats().matk + rnd(5) + (skillLevel('nova', h) - 1) * 3;
 }
@@ -880,6 +911,21 @@ function castNova() {
     const tx = Math.floor((en.px + 8) / TS), ty = Math.floor((en.py + 8) / TS);
     if (inNovaBounds(tx, ty, h)) hitEnemy(en, novaDamage(h));
   }
+  return true;
+}
+function castSuperNova() {
+  const h = game.hero;
+  if (!isAdminHero(h)) return false;
+  game.atkCool = 1.0;
+  addSuperNovaBolts(h);
+  sfx('Thunder4');
+  let kills = 0;
+  for (const en of game.enemies) {
+    if (en.dying > 0 || en.dead) continue;
+    hitEnemy(en, en.hp);
+    kills++;
+  }
+  if (kills > 0) logMsg('Super Nova cleared the map.');
   return true;
 }
 function updateProjectiles(dt) {
@@ -1200,7 +1246,7 @@ function assignSkillSlot(id, i) {
 function upgradeSkill(id) {
   const h = game.hero;
   normalizeSkillProgress(h);
-  if (!SKILLS[id] || !skillAllowedForClass(id, h) || h.skillPoints <= 0 || h.skillLevels[id] >= MAX_SKILL_LEVEL) { sfx('Buzzer1'); return; }
+  if (!SKILLS[id] || !skillAllowedForClass(id, h) || h.skillPoints <= 0 || h.skillLevels[id] >= skillMaxLevel(id)) { sfx('Buzzer1'); return; }
   const req = SKILL_TREE[id];
   if (req && h.skillLevels[req] < 2) { sfx('Buzzer1'); return; }
   h.skillLevels[id]++;
@@ -1356,7 +1402,7 @@ function advanceWorld(dt) {
   if (game.scene !== 'map') return;
   updateProjectiles(dt);
   game.bolts.forEach(b => b.t += dt);
-  game.bolts = game.bolts.filter(b => b.t < 0.25);
+  game.bolts = game.bolts.filter(b => b.t < (b.kind === 'supernova' ? 0.85 : 0.25));
   if (game.lock && (game.lock.dead || game.lock.dying > 0)) { game.lock = null; game.follow = false; game.followEngaged = false; }
   faceFollowTargetIfInReach();
   // locked on and in reach: the sword strikes by itself, menus or not

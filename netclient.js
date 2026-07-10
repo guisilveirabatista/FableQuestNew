@@ -204,7 +204,10 @@ function charBox() {
     preview: { x: detailX + detailW - previewW, y: y + 90, w: previewW, h: previewH },
     enter: { x: detailX, y: y + h - 32, w: 108, h: 20 },
     create: { x: detailX, y: y + h - 32, w: 82, h: 20 },
-    newBtn: { x: x + 14, y: y + h - 32, w: 52, h: 20 },
+    newBtn: { x: x + 14, y: y + h - 32, w: 48, h: 20 },
+    delBtn: { x: x + 66, y: y + h - 32, w: 56, h: 20 },
+    confirmBtn: { x: detailX, y: y + h - 32, w: 82, h: 20 },
+    cancelBtn: { x: detailX + 88, y: y + h - 32, w: 64, h: 20 },
     back: { x: detailX + 88, y: y + h - 32, w: 52, h: 20 },
     login: { x: x + w - 68, y: y + 10, w: 54, h: 18 },
   };
@@ -240,6 +243,17 @@ function enterCharacter() {
   sfx('Decision1');
 }
 
+function deleteCharacter() {
+  const ch = selectedCharacter();
+  if (!ch) {
+    game.charSelect.mode = 'select';
+    return;
+  }
+  netSend(game.net, { t: 'deleteCharacter', name: ch.name });
+  game.charSelect.error = 'Deleting...';
+  sfx('Decision1');
+}
+
 function returnToLoginScreen() {
   const url = game.net && game.net.url;
   const ws = game.net && game.net.ws;
@@ -272,6 +286,14 @@ function updateCharacterScreen() {
       if (hit(c, b.newBtn.x, b.newBtn.y, b.newBtn.w, b.newBtn.h)) {
         s.mode = 'create'; s.field = 'name'; s.name = ''; s.error = ''; sfx('Decision1');
       }
+      if (hit(c, b.delBtn.x, b.delBtn.y, b.delBtn.w, b.delBtn.h) && s.characters.length) {
+        s.mode = 'delete'; s.error = ''; sfx('Decision1');
+      }
+    } else if (s.mode === 'delete') {
+      if (hit(c, b.confirmBtn.x, b.confirmBtn.y, b.confirmBtn.w, b.confirmBtn.h)) deleteCharacter();
+      if (hit(c, b.cancelBtn.x, b.cancelBtn.y, b.cancelBtn.w, b.cancelBtn.h)) {
+        s.mode = 'select'; s.error = ''; sfx('Cancel1');
+      }
     } else {
       if (hit(c, b.name.x, b.name.y, b.name.w, b.name.h)) { s.field = 'name'; sfx('Cursor1'); continue; }
       for (let i = 0; i < s.classes.length; i++) {
@@ -296,6 +318,10 @@ function updateCharacterScreen() {
         s.selected = Math.min(s.characters.length - 1, s.selected + 1);
         s.scroll = Math.max(s.scroll, s.selected - b.visible + 1); sfx('Cursor1');
       }
+      else if ((k === 'Delete' || k === 'Backspace') && s.characters.length) { s.mode = 'delete'; s.error = ''; sfx('Decision1'); }
+    } else if (s.mode === 'delete') {
+      if (k === 'Escape' || k === 'n' || k === 'N') { s.mode = 'select'; s.error = ''; sfx('Cancel1'); }
+      else if (k === 'y' || k === 'Y' || k === 'Enter') deleteCharacter();
     } else {
       if (k === 'Escape' && s.characters.length) { s.mode = 'select'; s.field = 'list'; s.error = ''; sfx('Cancel1'); }
       else if (k === 'Tab') { s.field = s.field === 'name' ? 'class' : 'name'; sfx('Cursor1'); }
@@ -338,11 +364,26 @@ function drawCharacterScreen() {
       text(`Lv ${ch.lv || 1}`, b.detail.x, b.detail.y + 34, '#fff');
       text(ch.map ? `Map ${ch.map}` : 'Map city', b.detail.x, b.detail.y + 50, '#9cf');
       text(`${ch.gold || 0} gold`, b.detail.x, b.detail.y + 66, '#ffd27a');
+      drawWindow(b.preview.x, b.preview.y, b.preview.w, b.preview.h);
+      drawActor({ class: ch.class || 'Knight', dir: 'down', moving: false, anim: 1 }, b.preview.x + 21, b.preview.y + 39);
     }
     drawWindow(b.enter.x, b.enter.y, b.enter.w, b.enter.h);
     text('Enter World', b.enter.x + 12, b.enter.y + 6);
     drawWindow(b.newBtn.x, b.newBtn.y, b.newBtn.w, b.newBtn.h);
-    text('New', b.newBtn.x + 16, b.newBtn.y + 6);
+    text('New', b.newBtn.x + 14, b.newBtn.y + 6);
+    drawWindow(b.delBtn.x, b.delBtn.y, b.delBtn.w, b.delBtn.h);
+    text('Delete', b.delBtn.x + 10, b.delBtn.y + 6);
+  } else if (s.mode === 'delete') {
+    const ch = selectedCharacter();
+    text('Delete Character', b.detail.x, b.detail.y, '#f88');
+    text('Are you sure you', b.detail.x, b.detail.y + 24, '#fff');
+    text('want to delete', b.detail.x, b.detail.y + 40, '#fff');
+    text(ch ? ch.name : 'this character', b.detail.x, b.detail.y + 56, '#ffe080');
+    
+    drawWindow(b.confirmBtn.x, b.confirmBtn.y, b.confirmBtn.w, b.confirmBtn.h);
+    text('Confirm', b.confirmBtn.x + 16, b.confirmBtn.y + 6, '#f88');
+    drawWindow(b.cancelBtn.x, b.cancelBtn.y, b.cancelBtn.w, b.cancelBtn.h);
+    text('Cancel', b.cancelBtn.x + 14, b.cancelBtn.y + 6);
   } else {
     text('New Character', b.detail.x, b.detail.y, '#ffe080');
     text('Name', b.name.x, b.name.y - 11, '#bcd');
@@ -520,7 +561,7 @@ function onSnapshot(m) {
   // the server (boom < 0 means still flying, >= 0 means the impact burst)
   game.projectiles = (m.projectiles || []).map(v =>
     v.boom >= 0 ? { x: v.x, y: v.y, t: v.t, boom: v.boom } : { x: v.x, y: v.y, t: v.t });
-  game.bolts = (m.bolts || []).map(v => ({ x: v.x, y: v.y, t: v.t }));
+  game.bolts = (m.bolts || []).map(v => ({ x: v.x, y: v.y, t: v.t, kind: v.kind || '' }));
 
   // floor loot and corpses are shared world entities on the current map; tag them
   // with the map id so the existing renderer/queries (drawMap, floorAt, corpseAt) work
@@ -555,7 +596,7 @@ function netFrame(frameDt) {
     return;
   }
   let uiCaptured = false;
-  const hadBlockingUi = !!(game.death || game.dialogue || game.mapOpen || game.menu || game.shop || game.invFocus || game.itemPopup ||
+  const hadBlockingUi = !!(game.death || game.dialogue || game.mapOpen || game.menu || game.shop || game.invFocus || game.itemPopup || game.skillPopup ||
     game.dropPrompt || game.chatInput || game.trade || game.playerMenu);
 
   // 1) input -> intents. The menu and inventory panels reuse the single-player
@@ -577,6 +618,9 @@ function netFrame(frameDt) {
     uiCaptured = true;
   } else if (game.dialogue) {
     updateDialogue(frameDt);
+    uiCaptured = true;
+  } else if (game.skillPopup) {
+    if (pressed(CANCEL) || pressed(CONFIRM) || clicked(0) || clicked(2)) closeSkillPopup();
     uiCaptured = true;
   } else if (handleHudToggleClicks()) {
     uiCaptured = true;
@@ -625,8 +669,17 @@ function netFrame(frameDt) {
       closeInventory();
       uiCaptured = true;
     } else if (game.invOpen && !game.itemPopup) updateInvPanel(); // mouse drag/click -> item intents
+    for (const c of clicks) {
+      if (c.b !== 2) continue;
+      const hs = hotbarSlotAt(c.x, c.y);
+      const id = hs >= 0 && h.slots ? h.slots[hs] : '';
+      if (id && SKILLS[id] && openSkillPopup(id)) {
+        uiCaptured = true;
+        break;
+      }
+    }
   }
-  if (game.death || game.dialogue || game.mapOpen || game.menu || game.shop || game.dropPrompt || game.chatInput || game.trade || game.playerMenu) {
+  if (game.death || game.dialogue || game.skillPopup || game.mapOpen || game.menu || game.shop || game.dropPrompt || game.chatInput || game.trade || game.playerMenu) {
     game.worldDrag = null;
   } else {
     if (finishWorldDragFromReleases(obj => netSend(net, obj))) uiCaptured = true;
@@ -635,7 +688,7 @@ function netFrame(frameDt) {
 
   // movement is blocked while a panel owns the keyboard
   const captured = uiCaptured || hadBlockingUi || game.death || game.dialogue || game.mapOpen || game.menu || game.shop ||
-    game.invFocus || game.itemPopup || game.dropPrompt || game.chatInput || game.trade || game.playerMenu || game.worldDrag;
+    game.invFocus || game.itemPopup || game.skillPopup || game.dropPrompt || game.chatInput || game.trade || game.playerMenu || game.worldDrag;
   const dir = captured ? '' : (dirHeld() || '');
   if (dir !== net.lastDir) {
     net.lastDir = dir;
@@ -672,12 +725,19 @@ function netFrame(frameDt) {
       else if (sk === 'fire') { game.atkCool = 0.4; sfx('Flame1'); }
       else if (sk === 'bolt') { game.atkCool = 0.5; sfx('Thunder4'); }
       else if (sk === 'nova') { game.atkCool = 0.8; addNovaBolts(h); sfx('Thunder4'); }
+      else if (sk === 'supernova') { game.atkCool = 1.0; addSuperNovaBolts(h); sfx('Thunder4'); }
     }
     const cam = camPos();
     for (const c of clicks) {
       if (game.invOpen && inPanel(c)) continue; // the panel owns its own clicks
       if (game.corpseOpen && inCorpseWin(c)) continue;
       if (game.worldDrag) continue;
+      const hs = hotbarSlotAt(c.x, c.y);
+      if (c.b === 2 && hs >= 0) {
+        netSend(net, { t: 'assignSkill', slot: hs, id: '' });
+        sfx('Cancel1');
+        continue;
+      }
       const wxp = c.x + cam.x, wyp = c.y + cam.y;
       const wx = Math.floor(wxp / TS), wy = Math.floor(wyp / TS);
       if (c.b === 2) { // right-click: open context/interact targets, not lock-on
@@ -828,6 +888,7 @@ function netFrame(frameDt) {
   drawNetSocial(); // chat feed, party frames, name tags, trade window, prompts
   drawNetOverlay();
   if (game.menu) drawMenu();
+  if (game.skillPopup) drawSkillPopup();
 }
 
 function predictNetMeleeFx() {
