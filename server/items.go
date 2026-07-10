@@ -108,7 +108,7 @@ var bodySlots = []string{"head", "main", "torso", "off", "legs", "acc1", "boots"
 
 // shop stock (the client opens the shop UI; the server validates the purchase).
 var shops = map[string][]string{
-	"smith":  {"sword1", "sword2", "sword3", "bow1", "shield", "hat", "helm", "armor", "legs"},
+	"smith":  {"sword1", "sword2", "sword3", "bow1", "arrow1", "arrow2", "arrow3", "shield", "hat", "helm", "armor", "legs"},
 	"grocer": {"bread", "meat", "potion", "boots", "ring", "amulet"},
 }
 
