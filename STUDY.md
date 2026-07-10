@@ -2,13 +2,13 @@ Fixed the player collision / "walk over then warp back" bug.
 
 Root cause
 • Server (authoritative): occupied() / playerAt() treats other living players as solid (like enemies/walls) in stepPlayer(), findPath(), etc. However, all players are stepped in a single pass over h.players (random map iteration order). Positions are mutated in place, so later-processed players can see updated positions from earlier ones in the same tick. This allows order-dependent "crossing" into what was a pre-tick occupied tile (or contested free tiles).
-• Client prediction (in sim.js stepHero() + findPath() + startPathTo(), used for both offline and net): Only blocked on map isBlocked() + enemyAt(). No playerAt(). Hero could predict/commit a tile step onto another player's last-known position. Server would reject (different view of "occupied players"), causing tile drift. Reconcile (tileDrift > 1 || pixelDrift > TS) would snap/warp you back.
+• Client prediction (in sim.js stepHero() + findPath() + startPathTo()): Only blocked on map isBlocked() + enemyAt(). No playerAt(). Hero could predict/commit a tile step onto another player's last-known position. Server would reject (different view of "occupied players"), causing tile drift. Reconcile (tileDrift > 1 || pixelDrift > TS) would snap/warp you back.
 • Why monsters worked (and players didn't): Enemy positions are fixed during the entire player step phase (updateEnemies() runs after all player steps, using pre-tick player positions for their own checks). Client's last-known enemy tx/ty (from snapshots) matches what the server uses for decisions in that tick. No view mismatch. Players are dynamic (other clients' moves processed in the same pass), so stale snapshot positions in client didn't match server's in-tick view.
 • Result: You could "walk over" (prediction allowed it), server corrected, visual warp 1 step back. (Overlaps were also possible in some orderings, though server tried to prevent landing on pre positions.)
 
 Fix
 1. Client prediction now blocks players exactly like enemies (in sim.js):
-   • Added playerAt(x, y) (parallels enemyAt(); uses game.players remotes in net mode, safe/no-op offline).
+   • Added playerAt(x, y) (parallels enemyAt() and uses remote players from server snapshots).
    • Updated all hero tile commit sites: stepHero() (dir moves, path following, follow chasing) + findPath() + startPathTo().
    • Added tx/ty population for remote players in netclient.js (from snapshots; previously missing or incomplete, so playerAt would have been ineffective).
 

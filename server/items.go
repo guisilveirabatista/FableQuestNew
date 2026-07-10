@@ -10,8 +10,9 @@ type item struct {
 	heal                        int     // HP restored when used (0 = not food)
 	slot                        string  // body slot: head/main/off/torso/legs/boots/acc ("" = not gear)
 	atk, def, mdef, dodge, crit int
-	twoH                        bool // needs both hands (kicks out the shield)
-	price                       int  // shop price (used from the shop step)
+	twoH                        bool   // needs both hands (kicks out the shield)
+	weaponType                  string // bow, etc
+	price                       int    // shop price (used from the shop step)
 }
 
 var items = map[string]item{
@@ -21,6 +22,7 @@ var items = map[string]item{
 	"sword1": {w: 3, slot: "main", atk: 2, price: 60},
 	"sword2": {w: 5, slot: "main", atk: 5, price: 150},
 	"sword3": {w: 8, slot: "main", atk: 9, twoH: true, price: 340},
+	"bow1":   {w: 2.5, slot: "main", atk: 4, twoH: true, weaponType: "bow", price: 100},
 	"shield": {w: 4, slot: "off", def: 2, price: 90},
 	"hat":    {w: 0.5, slot: "head", def: 1, price: 40},
 	"helm":   {w: 3, slot: "head", def: 3, price: 180},
@@ -29,6 +31,9 @@ var items = map[string]item{
 	"boots":  {w: 1.5, slot: "boots", dodge: 3, price: 110},
 	"ring":   {w: 0.1, slot: "acc", crit: 5, price: 200},
 	"amulet": {w: 0.2, slot: "acc", mdef: 3, price: 200},
+	"arrow1": {w: 0.05, price: 5, slot: "ammo"},
+	"arrow2": {w: 0.05, price: 10, slot: "ammo"},
+	"arrow3": {w: 0.05, price: 20, slot: "ammo"},
 }
 
 var itemNames = map[string]string{
@@ -38,6 +43,7 @@ var itemNames = map[string]string{
 	"sword1": "Bronze Sword",
 	"sword2": "Iron Sword",
 	"sword3": "Claymore",
+	"bow1":   "Short Bow",
 	"shield": "Buckler",
 	"hat":    "Felt Hat",
 	"helm":   "Iron Helm",
@@ -46,6 +52,9 @@ var itemNames = map[string]string{
 	"boots":  "Swift Boots",
 	"ring":   "Lucky Ring",
 	"amulet": "Ward Amulet",
+	"arrow1": "Bronze Arrow",
+	"arrow2": "Iron Arrow",
+	"arrow3": "Steel Arrow",
 }
 
 func itemName(id string) string {
@@ -99,7 +108,7 @@ var bodySlots = []string{"head", "main", "torso", "off", "legs", "acc1", "boots"
 
 // shop stock (the client opens the shop UI; the server validates the purchase).
 var shops = map[string][]string{
-	"smith":  {"sword1", "sword2", "sword3", "shield", "hat", "helm", "armor", "legs"},
+	"smith":  {"sword1", "sword2", "sword3", "bow1", "shield", "hat", "helm", "armor", "legs"},
 	"grocer": {"bread", "meat", "potion", "boots", "ring", "amulet"},
 }
 
@@ -195,7 +204,9 @@ func unequipSlot(p *Player, slot string) {
 		return
 	}
 	delete(p.equip, slot)
-	addItem(p, id, 1)
+	if items[id].slot != "ammo" {
+		addItem(p, id, 1)
+	}
 }
 
 func equipTo(p *Player, id, slot string) bool {
@@ -210,7 +221,9 @@ func equipTo(p *Player, id, slot string) bool {
 		unequipSlot(p, "main")
 	}
 	unequipSlot(p, slot)
-	removeItem(p, id, 1)
+	if items[id].slot != "ammo" {
+		removeItem(p, id, 1)
+	}
 	if p.equip == nil {
 		p.equip = map[string]string{}
 	}

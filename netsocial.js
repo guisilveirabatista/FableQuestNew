@@ -348,12 +348,7 @@ function drawTradeWindow() {
   const tr = game.trade;
   if (!tr) return;
   const b = tradeBox();
-  ctx.save();
-  ctx.fillStyle = 'rgba(0,0,0,.28)';
-  ctx.fillRect(0, 0, W, H);
-  ctx.restore();
-  
-  drawWindow(b.x, b.y, b.w, b.h);
+  drawFloatingWindow(b.x, b.y, b.w, b.h);
   text('TRADE with ' + tr.with.name, b.x + 12, b.y + 8, '#ffe080');
 
   const boxes = tradeBoxes(b);
@@ -672,7 +667,7 @@ function drawSocialPrompt() {
   const p = game.socialPrompt;
   if (!p) return;
   const w = 236, h = 52, x = Math.floor((W - w) / 2), y = 40;
-  drawWindow(x, y, w, h);
+  drawModalWindow(x, y, w, h);
   const msg = p.kind === 'trade' ? p.from + ' wants to trade.' : 'You have a party invite.';
   text(msg, x + 12, y + 8, '#ffe080');
   const yes = { x: x + 24, y: y + 26, w: 80, h: 18 }, no = { x: x + w - 104, y: y + 26, w: 80, h: 18 };
@@ -709,14 +704,27 @@ function drawNameTags() {
   if (!h.dead) tag(h.px, h.py, game.youPvp);
 }
 
-// ---- the one entry point called from netFrame after drawMap -----------------
+// ---- render layers called by netFrame --------------------------------------
 
-function drawNetSocial() {
+function drawNetWorldOverlay() {
+  drawNameTags();
+}
+
+function drawNetPersistentUi() {
   drawChatPanel();
   drawPartyFrames();
-  drawNameTags();
   if (game.youPvp) text('PvP ON', W - 60, 6, '#f88');
+}
+
+function drawNetPrimaryUi() {
   if (game.trade) drawTradeWindow();
+}
+
+function netHasModalUi() {
+  return !!(game.tradePrompt || game.socialPrompt);
+}
+
+function drawNetModalUi() {
   if (game.tradePrompt) drawTradePrompt();
   drawSocialPrompt();
 }
@@ -797,13 +805,7 @@ function drawTradePrompt() {
   if (!game.tradePrompt) return;
   const l = tradePromptLayout(), it = ITEMS[p.id];
   
-  // draw semi-dark overlay on top of trade window
-  ctx.save();
-  ctx.fillStyle = 'rgba(0,0,0,.35)';
-  ctx.fillRect(l.x - 10, l.y - 10, l.w + 20, l.h + 20);
-  ctx.restore();
-
-  drawWindow(l.x, l.y, l.w, l.h);
+  drawModalWindow(l.x, l.y, l.w, l.h);
   text('Offer Quantity', l.x + 12, l.y + 8, '#ffe080');
   if (it) {
     ctx.drawImage(img[it.img], l.x + 12, l.y + 17, 14, 14);

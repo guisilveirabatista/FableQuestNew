@@ -572,7 +572,7 @@ func slashReachesXY(p *Player, dir string, px, py float64) bool {
 	return math.Abs(px+8-cx) <= 13 && math.Abs(py+8-cy) <= 13
 }
 
-func (h *Hub) autoPvpMelee(p *Player) {
+func (h *Hub) autoPvpAttack(p *Player) {
 	o := h.players[p.pvpTarget]
 	if o == nil || !h.canPvp(p, o) {
 		p.pvpTarget = ""
@@ -583,9 +583,18 @@ func (h *Hub) autoPvpMelee(p *Player) {
 	}
 	if p.atkCool <= 0 {
 		dir := faceTowardPlayer(p, o)
-		if slashReachesXY(p, dir, o.px, o.py) {
-			p.dir = dir
-			h.doSlash(p)
+		it := items[p.equip["main"]]
+		if it.weaponType == "bow" {
+			dist := math.Hypot(o.px+8-(p.px+8), o.py+8-(p.py+8))
+			if dist <= 7.5*TS {
+				p.dir = dir
+				h.doShoot(p, 0, o.id, o.px, o.py)
+			}
+		} else {
+			if slashReachesXY(p, dir, o.px, o.py) {
+				p.dir = dir
+				h.doSlash(p)
+			}
 		}
 	}
 }

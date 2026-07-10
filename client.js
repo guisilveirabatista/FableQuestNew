@@ -1,9 +1,7 @@
 'use strict';
-// Fable Quest — browser CLIENT (Phase 0 split of game.js): canvas + camera,
-// input capture, rendering, UI panels/menus, localStorage persistence, and the
-// main loop. It reads world state from sim.js to draw it, and turns raw input
-// into intents (pushIntent) that the sim resolves. Loaded after sim.js, so it
-// shares the global scope where sim's constants and functions live.
+// Fable Quest browser client: canvas, input, rendering, and shared UI.
+// The Go server owns gameplay state; sim.js contains browser-side definitions
+// and movement prediction helpers used by this client.
 
 const cv = document.getElementById('screen');
 const ctx = cv.getContext('2d');
@@ -31,7 +29,7 @@ const IMAGES = ['chipset', 'hero', 'npc', 'custom', 'knight',
   'general1', 'general2', 'protagonist1', 'protagonist2', 'protagonist4',
   'system', 'title',
   'monsters', 'slash', 'flame', 'punch', 'skeleton',
-  'i_potion', 'i_bread', 'i_meat', 'i_sword1', 'i_sword2', 'i_sword3',
+  'i_potion', 'i_bread', 'i_meat', 'i_sword1', 'i_sword2', 'i_sword3', 'i_bow1', 'i_arrow1', 'i_arrow2', 'i_arrow3',
   'i_hat', 'i_helm', 'i_shield', 'i_armor', 'i_legs', 'i_boots', 'i_ring', 'i_amulet'];
 const img = {};
 const CLASS_SPRITES = {
@@ -216,7 +214,10 @@ cv.addEventListener('mousedown', e => {
   const dbl = e.button === 0 && now - lastClick.t < 400 &&
     Math.abs(p.x - lastClick.x) < 8 && Math.abs(p.y - lastClick.y) < 8;
   if (e.button === 0) lastClick = { t: dbl ? 0 : now, x: p.x, y: p.y };
-  clicks.push({ b: e.button, x: p.x, y: p.y, dbl, alt: e.altKey, ctrl: e.ctrlKey || e.metaKey });
+  clicks.push({
+    b: e.button, x: p.x, y: p.y, dbl,
+    alt: e.altKey, ctrl: e.ctrlKey || e.metaKey, shift: e.shiftKey,
+  });
   if (e.button === 0) recordButtonFeedback(p);
   if (!audioOk) { audioOk = true; syncMusic(); }
 });
@@ -265,6 +266,26 @@ function drawWindow(x, y, w, h) {
     ctx.fillStyle = `rgba(0,0,0,${feedback})`;
     ctx.fillRect(x + 2, y + 2, Math.max(0, w - 4), Math.max(0, h - 4));
   }
+}
+const UI_ELEVATION = Object.freeze({ floating: 1, modal: 2 });
+function drawWindowShadow(x, y, w, h, elevation = UI_ELEVATION.floating) {
+  const modal = elevation >= UI_ELEVATION.modal;
+  const spread = modal ? 3 : 1;
+  const offset = modal ? 3 : 2;
+  ctx.fillStyle = modal ? 'rgba(0,0,0,.52)' : 'rgba(0,0,0,.28)';
+  ctx.fillRect(x - spread + offset, y - spread + offset, w + spread * 2, h + spread * 2);
+}
+function drawFloatingWindow(x, y, w, h) {
+  drawWindowShadow(x, y, w, h, UI_ELEVATION.floating);
+  drawWindow(x, y, w, h);
+}
+function drawModalWindow(x, y, w, h) {
+  drawWindowShadow(x, y, w, h, UI_ELEVATION.modal);
+  drawWindow(x, y, w, h);
+}
+function drawModalBackdrop(alpha = 0.18) {
+  ctx.fillStyle = `rgba(0,0,0,${alpha})`;
+  ctx.fillRect(0, 0, W, H);
 }
 function drawCursor(x, y, w, h) {
   nineSlice(img.system, 64, 0, x, y, w, h);
@@ -315,13 +336,14 @@ function hpColor(cur, max) {
   if (pct < 0.65) return '#ffe080';
   return '#69d36d';
 }
+function rnd(n) { return Math.floor(Math.random() * n); }
 function heroDisplayName() {
   return (game.hero && game.hero.name) || (game.net && game.net.id) || 'Hero';
 }
 
 window.FQ = game; // console/test handle
 
-// ---------------------------------------------------------------- music & save
+// ---------------------------------------------------------------- music
 function sceneSong() {
   return { title: 'title', map: 'field' }[game.scene] || null;
 }
@@ -331,77 +353,6 @@ function syncMusic() {
   if (s) MidiPlayer.play(s);
   else MidiPlayer.stop();
 }
-const SAVE_KEY = 'fablequest_save';
-function saveGame() {
-  localStorage.setItem(SAVE_KEY, JSON.stringify({
-    hero: game.hero, won: game.won, steps: game.steps,
-    mapId: game.mapId, floor: game.floor, autoloot: game.autoloot,
-    corpses: game.corpses, invOpen: game.invOpen, logOpen: game.logOpen,
-    minimapOpen: game.minimapOpen, hudCompact: game.hudCompact,
-  }));
-}
-function loadGame() {
-  const raw = localStorage.getItem(SAVE_KEY);
-  if (!raw) return false;
-  const d = JSON.parse(raw);
-  Object.assign(game.hero, d.hero);
-  game.won = d.won;
-  game.steps = d.steps;
-  game.mapId = d.mapId || 'field';
-  game.floor = d.floor || [];
-  game.corpses = d.corpses || [];
-  game.corpses.forEach(normalizeCorpse); // pre-loot/pre-sprite saves
-  game.corpseOpen = null;
-  game.autoloot = d.autoloot !== false;
-  game.invOpen = d.invOpen !== false;
-  game.bagScroll = 0;
-  game.logOpen = d.logOpen !== false;
-  game.mapOpen = false;
-  game.minimapOpen = d.minimapOpen === true;
-  game.hudCompact = d.hudCompact === true;
-  game.shop = null;
-  const h = game.hero;
-  if (!h.name) h.name = 'Hero';
-  if (!h.class) h.class = 'Knight';
-  normalizeSkillProgress(h);
-  ensureQuests(h);
-  // pre-64x40 saves may sit out of bounds on the new maps
-  if (h.tx >= MW || h.ty >= MH || cur().blocked.has(h.tx + ',' + h.ty)) {
-    game.mapId = SPAWN.map; h.tx = SPAWN.tx; h.ty = SPAWN.ty;
-  }
-  h.px = h.tx * TS; h.py = h.ty * TS; h.moving = false;
-  game.dialogue = null;
-  game.enemies = [];
-  game.projectiles = [];
-  game.bolts = [];
-  game.pops = [];
-  game.iframes = 1;
-  game.lock = null;
-  game.follow = false;
-  game.followEngaged = false;
-  game.path = null;
-  if (!h.slots) h.slots = defaultSlotsForClass(h.class); // pre-skillbar save
-  normalizeHeroSlots(h);
-  if (!h.attr) { // pre-attribute save: default attrs, level-ups worth of points to spend
-    h.attr = { ...BASE_ATTR };
-    h.points = (h.lv - 1) * 3;
-    recalcMax();
-  }
-  if (!h.bag) { // pre-inventory save: h.potions was a bare counter
-    h.bag = { potion: h.potions || 0 };
-  }
-  if (!h.equip) { // pre-paper-doll save: h.weapon was equipped straight from the bag
-    h.equip = { head: null, main: null, off: null, torso: null, legs: null, boots: null, acc1: null, acc2: null };
-    if (h.weapon && h.bag[h.weapon] > 0) {
-      h.bag[h.weapon]--;
-      h.equip.main = h.weapon;
-    }
-    delete h.weapon;
-  }
-  normalizeHeroEquipment();
-  return true;
-}
-
 // ---------------------------------------------------------------- map data
 // ground chars: G grass, D dirt, W water (blocked), P pavement,
 // X city wall, R shop brick, U shop stucco, O shop door (all blocked)
@@ -586,15 +537,17 @@ const BAG_WIN = { x: Math.max(4, BODY_WIN.x - 136), y: 4, w: 132, h: H - 8 };
 const PANEL = { x: BAG_WIN.x }; // anything right of this belongs to the inventory/menu column
 const BAG_UI = { x: BAG_WIN.x + 12, y: BAG_WIN.y + 34, C: 4, S: 26 };
 const BODY_UI = {
-  head: [BODY_WIN.x + 48, 20], main: [BODY_WIN.x + 16, 50], torso: [BODY_WIN.x + 48, 50], off: [BODY_WIN.x + 80, 50],
+  head: [BODY_WIN.x + 48, 20], ammo: [BODY_WIN.x + 80, 20],
+  main: [BODY_WIN.x + 16, 50], torso: [BODY_WIN.x + 48, 50], off: [BODY_WIN.x + 80, 50],
   legs: [BODY_WIN.x + 48, 80], acc1: [BODY_WIN.x + 16, 110], boots: [BODY_WIN.x + 48, 110], acc2: [BODY_WIN.x + 80, 110],
 };
-const BODY_LABEL = { head: 'Hd', main: 'Wpn', off: 'Off', torso: 'Tor', legs: 'Leg', boots: 'Bt', acc1: 'Ac', acc2: 'Ac' };
+const BODY_LABEL = { head: 'Hd', ammo: 'Amm', main: 'Wpn', off: 'Off', torso: 'Tor', legs: 'Leg', boots: 'Bt', acc1: 'Ac', acc2: 'Ac' };
 const BODY_NAV = { // keyboard moves between slots, roughly matching the doll shape
-  head: { down: 'torso' },
+  head: { down: 'torso', right: 'ammo' },
+  ammo: { left: 'head', down: 'off' },
   main: { right: 'torso', down: 'acc1' },
   torso: { up: 'head', left: 'main', right: 'off', down: 'legs' },
-  off: { left: 'torso', down: 'acc2' },
+  off: { up: 'ammo', left: 'torso', down: 'acc2' },
   legs: { up: 'torso', down: 'boots', left: 'main', right: 'off' },
   acc1: { right: 'boots', up: 'main' },
   boots: { up: 'legs', left: 'acc1', right: 'acc2' },
@@ -836,10 +789,27 @@ function hotbarSlotAt(px, py) {
   }
   return -1;
 }
+function slotClearHit(px, py, x, y, size) {
+  return px >= x + size - 8 && px < x + size && py >= y && py < y + 8;
+}
+function hotbarClearAt(px, py) {
+  const slot = hotbarSlotAt(px, py);
+  if (slot < 0) return -1;
+  const x = 4 + slot * 21, y = H - 24;
+  return slotClearHit(px, py, x, y, 20) ? slot : -1;
+}
+function drawSlotClearButton(x, y, size) {
+  const bx = x + size - 8;
+  ctx.fillStyle = 'rgba(70,18,18,.92)';
+  ctx.fillRect(bx, y, 8, 8);
+  ctx.strokeStyle = '#d98b8b';
+  ctx.strokeRect(bx + 0.5, y + 0.5, 7, 7);
+  text('×', bx + 1, y - 1, '#fff');
+}
 function drawCorpseWin() {
   const c = game.corpseOpen, ids = Object.keys(c.items);
   clampCorpseWin();
-  drawWindow(CORPSE_WIN.x, CORPSE_WIN.y, CORPSE_WIN.w, CORPSE_WIN.h);
+  drawFloatingWindow(CORPSE_WIN.x, CORPSE_WIN.y, CORPSE_WIN.w, CORPSE_WIN.h);
   text(c.name || 'Your remains', CORPSE_WIN.x + 12, CORPSE_WIN.y + 7, '#f76');
   ids.forEach((id, i) => {
     const x = CORPSE_WIN.x + 12 + (i % CORPSE_WIN.C) * CORPSE_WIN.S;
@@ -1010,7 +980,7 @@ function drawDropPrompt() {
   clampDropPrompt();
   if (!game.dropPrompt) return;
   const l = dropPromptLayout(), it = ITEMS[p.id], max = dropQtyMax(p.id);
-  drawWindow(l.x, l.y, l.w, l.h);
+  drawModalWindow(l.x, l.y, l.w, l.h);
   text('Drop', l.x + 12, l.y + 8, '#ffe080');
   if (it) {
     ctx.drawImage(img[it.img], l.x + 12, l.y + 17, 14, 14);
@@ -1061,6 +1031,12 @@ function drawInvPanel() {
     const id = h.equip[slot];
     if (id && !(game.invDrag && game.invDrag.from === 'body' && game.invDrag.slot === slot)) {
       ctx.drawImage(img[ITEMS[id].img], x + 3, y + 3, 18, 18);
+      if (slot === 'ammo') {
+        const count = h.bag[id] || 0;
+        ctx.textAlign = 'right';
+        text(`${count}`, x + 24, y + 24, '#fff');
+        ctx.textAlign = 'left';
+      }
     } else if (!id && slot === 'off' && mainTwoH) {
       ctx.globalAlpha = 0.3; // both hands are busy with the two-hander
       ctx.drawImage(img[ITEMS[h.equip.main].img], x + 3, y + 3, 18, 18);
@@ -1113,7 +1089,7 @@ function drawItemPopup() {
   const it = ITEMS[game.itemPopup];
   const pw = 190, ph = 96;
   const px = (W - pw) / 2, py = (H - ph) / 2;
-  drawWindow(px, py, pw, ph);
+  drawModalWindow(px, py, pw, ph);
   ctx.drawImage(img[it.img], px + 10, py + 10, 24, 24);
   text(it.name, px + 42, py + 12, '#ffe080');
   text(itemInfo(it), px + 42, py + 24, '#bcd');
@@ -1131,7 +1107,7 @@ function drawSkillPopup() {
     if (skillWin.x - pw - 8 >= 4) px = skillWin.x - pw - 8;
   }
   const py = Math.max(4, Math.floor((H - ph) / 2));
-  drawWindow(px, py, pw, ph);
+  drawModalWindow(px, py, pw, ph);
   drawSkillIcon(id, px + 10, py + 10, true);
   text(sk.name, px + 34, py + 12, '#ffe080');
   text(skillPopupMeta(id), px + 10, py + 34, '#bcd');
@@ -1381,7 +1357,7 @@ function updateShop() {
 }
 function drawShopChoice() {
   const s = game.shop, shop = SHOPS[s.who], l = shopChoiceLayout();
-  drawWindow(l.x, l.y, l.w, l.h);
+  drawFloatingWindow(l.x, l.y, l.w, l.h);
   text(shop.name, l.x + 12, l.y + 8, '#ffe080');
   SHOP_CHOICE.forEach((choice, i) => {
     const y = l.rowY + i * l.rowH;
@@ -1394,7 +1370,7 @@ function drawShop() {
   if (s.mode === 'choice') { drawShopChoice(); return; }
   const h = game.hero, shop = SHOPS[s.who], l = shopLayout(s), ids = l.ids;
   clampShopScroll(s, ids);
-  drawWindow(l.x, l.y, l.w, l.h);
+  drawFloatingWindow(l.x, l.y, l.w, l.h);
   text(`${shop.name} ${shopModeLabel(s)} - Gold ${h.gold}`, l.x + 12, l.y + 8, '#ffe080');
   if (!ids.length) {
     text('Your backpack is empty.', l.x + 14, l.rowY + 8, '#bcd');
@@ -1571,14 +1547,44 @@ function drawSuperNovaBolt(b) {
 
 function drawProjectiles() {
   for (const p of game.projectiles) {
-    // flame1 cells (0,0)/(1,0) are round puffs centered at (48,48); crop tight
-    const fr = Math.floor(p.t * 12) % 2;
-    if (p.boom !== undefined) {
-      ctx.globalAlpha = Math.max(0, p.boom / 0.18);
-      ctx.drawImage(img.flame, 4 * 96 + 30, 3 * 96 + 30, 36, 36, p.x - 14, p.y - 14, 28, 28);
-      ctx.globalAlpha = 1;
+    if (p.kind === 'arrow') {
+      const a = Math.atan2(p.dy, p.dx);
+      ctx.save();
+      if (p.t < 0.1 && p.boom === undefined) {
+        ctx.globalAlpha = 1 - (p.t / 0.1);
+        ctx.strokeStyle = '#fff';
+        ctx.beginPath(); ctx.arc(p.x - p.dx*p.t*130, p.y - p.dy*p.t*130, 3 + p.t*50, 0, Math.PI*2); ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+      ctx.translate(p.x, p.y);
+      ctx.rotate(a);
+      if (p.boom !== undefined) {
+        ctx.globalAlpha = Math.max(0, p.boom / 0.18);
+        ctx.strokeStyle = '#fff';
+        ctx.beginPath();
+        ctx.arc(0, 0, 3 + (0.18 - p.boom)*20, 0, Math.PI * 2);
+        ctx.stroke();
+      } else {
+        ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+        ctx.beginPath(); ctx.moveTo(-15, 0); ctx.lineTo(-5, 0); ctx.stroke();
+      }
+      ctx.globalAlpha = p.boom !== undefined ? Math.max(0, p.boom / 0.18) : 1;
+      ctx.strokeStyle = '#a60';
+      ctx.beginPath(); ctx.moveTo(-6, 0); ctx.lineTo(4, 0); ctx.stroke();
+      ctx.fillStyle = '#eee';
+      ctx.beginPath(); ctx.moveTo(6, 0); ctx.lineTo(2, -2); ctx.lineTo(2, 2); ctx.fill();
+      ctx.fillStyle = '#fff';
+      ctx.beginPath(); ctx.moveTo(-6, 0); ctx.lineTo(-8, -2); ctx.lineTo(-4, 0); ctx.lineTo(-8, 2); ctx.fill();
+      ctx.restore();
     } else {
-      ctx.drawImage(img.flame, fr * 96 + 30, 30, 36, 36, p.x - 9, p.y - 9, 18, 18);
+      const fr = Math.floor(p.t * 12) % 2;
+      if (p.boom !== undefined) {
+        ctx.globalAlpha = Math.max(0, p.boom / 0.18);
+        ctx.drawImage(img.flame, 4 * 96 + 30, 3 * 96 + 30, 36, 36, p.x - 14, p.y - 14, 28, 28);
+        ctx.globalAlpha = 1;
+      } else {
+        ctx.drawImage(img.flame, fr * 96 + 30, 30, 36, 36, p.x - 9, p.y - 9, 18, 18);
+      }
     }
   }
 }
@@ -1627,7 +1633,7 @@ function drawDeathPopup() {
   ctx.fillStyle = 'rgba(0,0,0,.45)';
   ctx.fillRect(0, 0, W, H);
   ctx.restore();
-  drawWindow(ui.box.x, ui.box.y, ui.box.w, ui.box.h);
+  drawModalWindow(ui.box.x, ui.box.y, ui.box.w, ui.box.h);
   text('You died', ui.box.x + 94, ui.box.y + 14, '#f76');
   wrapText(deathCauseText(), ui.box.x + 18, ui.box.y + 34, ui.box.w - 36);
   ui.buttons.forEach((b, i) => {
@@ -1639,13 +1645,11 @@ function drawDeathPopup() {
 
 function deathAction(id) {
   if (id === 'respawn') {
-    if (game.net) netSend(game.net, { t: 'respawn' });
+    netSend(game.net, { t: 'respawn' });
     sfx('Decision1');
   } else {
     sfx('Cancel1');
-    if (game.net) {
-      if (game.net.ws) game.net.ws.close();
-    }
+    if (game.net.ws) game.net.ws.close();
     location.reload();
   }
 }
@@ -1701,7 +1705,7 @@ function hoverTarget() {
     if (f.map === game.mapId && tileHit(wx, wy, f.tx, f.ty, 1)) {
       const direct = floorItemHit(wx, wy, f);
       add(direct ? f.ty * TS + TS + 1 : f.ty * TS + 2, direct ? 6 : 1, {
-        name: itemLabel(f), hp: 1, maxhp: 1, hpColor: '#9fb4c8',
+        name: itemLabel(f), kind: 'item',
         x: f.tx * TS + 8 - cam.x, y: f.ty * TS - cam.y, color: '#ffe080',
       });
     }
@@ -1709,14 +1713,15 @@ function hoverTarget() {
   for (const c of game.corpses) {
     if (c.map === game.mapId && tileHit(wx, wy, c.tx, c.ty))
       add(c.ty * TS + 4, 2, {
-        name: corpseLabel(c), hp: 0, maxhp: 1, hpColor: c.decayed ? '#7b8791' : '#9aa0a6',
+        name: corpseLabel(c), kind: 'corpse',
         x: c.tx * TS + 8 - cam.x, y: c.ty * TS - cam.y, color: c.decayed ? '#b8c0c8' : '#f0d0d0',
       });
   }
   for (const n of npcs) {
     if (n.map === game.mapId && spriteHit(wx, wy, n.px, n.py))
       add(n.py + TS, 3, {
-        name: npcName(n), hp: 1, maxhp: 1, hpColor: '#69d36d',
+        name: npcName(n), kind: 'npc', combatant: !!n.combatant,
+        hp: n.hp, maxhp: n.maxhp, hpColor: hpColor(n.hp, n.maxhp),
         x: n.px + 8 - cam.x, y: n.py - 18 - cam.y, color: '#bde8ff',
       });
   }
@@ -1724,6 +1729,7 @@ function hoverTarget() {
     if (!en.dead && en.dying <= 0 && spriteHit(wx, wy, en.px, en.py))
       add(en.py + TS, 4, {
         name: ENEMIES[en.kind] ? ENEMIES[en.kind].name : en.kind,
+        kind: 'enemy', combatant: true,
         hp: en.hp, maxhp: en.maxhp, hpColor: hpColor(en.hp, en.maxhp),
         x: en.px + 8 - cam.x, y: en.py - 18 - cam.y, color: '#ffd0d0',
       });
@@ -1732,6 +1738,7 @@ function hoverTarget() {
     if (!p.dead && spriteHit(wx, wy, p.px, p.py))
       add(p.py + TS, 5, {
         name: p.name || p.id || 'Player', hp: p.hp, maxhp: p.maxhp || 1,
+        kind: 'player', combatant: true,
         hpColor: hpColor(p.hp, p.maxhp || 1),
         x: p.px + 8 - cam.x, y: p.py - 18 - cam.y, color: '#d6e8ff',
       });
@@ -1740,7 +1747,7 @@ function hoverTarget() {
   if (fs.length && !hits.some(h => h.name === itemLabel(fs[0]))) {
     const label = fs.map(itemLabel).slice(0, 2).join(', ') + (fs.length > 2 ? '...' : '');
     add(ty * TS + 1, 0, {
-      name: label, hp: 1, maxhp: 1, hpColor: '#9fb4c8',
+      name: label, kind: 'item',
       x: tx * TS + 8 - cam.x, y: ty * TS - cam.y, color: '#ffe080',
     });
   }
@@ -1750,14 +1757,22 @@ function hoverTarget() {
 function drawHoverCard() {
   const t = hoverTarget();
   if (!t) return;
-  const hasHp = typeof t.hp === 'number' && typeof t.maxhp === 'number';
-  const w = Math.max(66, Math.ceil(textWidth(t.name)) + 18, hasHp ? 84 : 0);
-  const h = hasHp ? 32 : 20;
+  const hasHp = t.combatant === true && typeof t.hp === 'number' && typeof t.maxhp === 'number';
+  const w = Math.max(hasHp ? 84 : 34, Math.ceil(textWidth(t.name)) + (hasHp ? 18 : 12));
+  const h = hasHp ? 32 : 15;
   const x = Math.max(2, Math.min(W - w - 2, Math.round(t.x - w / 2)));
   const y = Math.max(2, Math.min(H - h - 2, Math.round(t.y - h - 4)));
-  drawWindow(x, y, w, h);
-  text(t.name, x + 8, y + 6, t.color || '#fff');
-  if (hasHp) drawMeter(x + 8, y + 21, w - 16, 5, t.hp, t.maxhp, t.hpColor || hpColor(t.hp, t.maxhp));
+  if (hasHp) {
+    drawWindow(x, y, w, h);
+    text(t.name, x + 8, y + 6, t.color || '#fff');
+    drawMeter(x + 8, y + 21, w - 16, 5, t.hp, t.maxhp, t.hpColor || hpColor(t.hp, t.maxhp));
+    return;
+  }
+  ctx.fillStyle = 'rgba(5,12,18,.68)';
+  ctx.fillRect(x, y, w, h);
+  ctx.strokeStyle = 'rgba(159,180,200,.72)';
+  ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+  text(t.name, x + 6, y + 3, t.color || '#fff');
 }
 function drawWorldDrag() {
   const d = game.worldDrag;
@@ -1847,7 +1862,7 @@ function drawPlayerMenu() {
   if (!m) return;
   const items = playerMenuItems();
   const b = playerMenuBox();
-  drawWindow(b.x, b.y, b.w, b.h);
+  drawFloatingWindow(b.x, b.y, b.w, b.h);
   text(m.name, b.x + 10, b.y + 7, '#ffe080');
   items.forEach((it, i) => {
     const y = b.rowY + i * b.rowH;
@@ -1891,11 +1906,7 @@ function updateMapWindow() {
 function drawWorldMapWindow() {
   if (!game.mapOpen) return;
   const h = game.hero, l = mapWindowLayout();
-  ctx.save();
-  ctx.fillStyle = 'rgba(0,0,0,.42)';
-  ctx.fillRect(0, 0, W, H);
-  ctx.restore();
-  drawWindow(l.x, l.y, l.w, l.h);
+  drawFloatingWindow(l.x, l.y, l.w, l.h);
   text(mapName(game.mapId), l.x + 18, l.y + 12, '#ffe080');
   text(`${h.tx},${h.ty}`, l.x + l.w - 54, l.y + 12, '#bcd');
   drawMapRaster(game.mapId, l.mx, l.my, l.cell, { actors: true, viewport: true });
@@ -1943,36 +1954,25 @@ function toggleOption(sel) {
   else if (sel === 'Network') toggleNetOverlayWindow();
 }
 function logOut() {
-  if (game.net) {
-    const left = game.isAdmin ? 0 : Math.ceil(game.hero.combatLogoutT || 0);
-    if (left > 0) {
-      sfx('Buzzer1');
-      logMsg(`You cannot log out during combat. Wait ${left}s.`);
-      return;
-    }
-    if (typeof openCharacterScreen === 'function') {
-      if (typeof netSend === 'function') netSend(game.net, { t: 'leaveCharacter' });
-      game.menu = null;
-      game.mapOpen = false;
-      game.shop = null;
-      game.itemPopup = null;
-      game.invFocus = null;
-      game.trade = null;
-      openCharacterScreen({
-        characters: (game.net && game.net.characters) || [{ name: game.hero.name || '', class: game.hero.class || '', lv: game.hero.lv || 1, map: game.mapId || 'city', gold: game.hero.gold || 0 }],
-        selected: game.hero.name || '',
-        class: game.hero.class || '',
-      });
-      sfx('Decision1');
-      return;
-    }
-    sfx('Decision1');
-    if (game.net.ws) game.net.ws.close();
-    location.reload();
+  const left = game.isAdmin ? 0 : Math.ceil(game.hero.combatLogoutT || 0);
+  if (left > 0) {
+    sfx('Buzzer1');
+    logMsg(`You cannot log out during combat. Wait ${left}s.`);
     return;
   }
+  netSend(game.net, { t: 'leaveCharacter' });
+  game.menu = null;
+  game.mapOpen = false;
+  game.shop = null;
+  game.itemPopup = null;
+  game.invFocus = null;
+  game.trade = null;
+  openCharacterScreen({
+    characters: game.net.characters || [{ name: game.hero.name || '', class: game.hero.class || '', lv: game.hero.lv || 1, map: game.mapId || 'city', gold: game.hero.gold || 0 }],
+    selected: game.hero.name || '',
+    class: game.hero.class || '',
+  });
   sfx('Decision1');
-  location.reload();
 }
 function clearMenuShortcutUi() {
   game.mapOpen = false;
@@ -2143,6 +2143,13 @@ function openSkillPopup(id) {
   sfx('Decision1');
   return true;
 }
+function openHotbarDetails(id) {
+  if (SKILLS[id]) return openSkillPopup(id);
+  if (!ITEMS[id]) return false;
+  game.itemPopup = id;
+  sfx('Decision1');
+  return true;
+}
 function closeSkillPopup() {
   game.skillPopup = null;
   sfx('Cancel1');
@@ -2170,6 +2177,12 @@ function skillSlotAt(l, px, py) {
     if (px >= x && px < x + 18 && py >= y && py < y + 18) return j;
   }
   return -1;
+}
+function skillSlotClearAt(l, px, py) {
+  const slot = skillSlotAt(l, px, py);
+  if (slot < 0) return -1;
+  const x = l.x + 14 + slot * 22;
+  return slotClearHit(px, py, x, l.slotsY, 18) ? slot : -1;
 }
 function drawSkillIcon(id, x, y, selected = false) {
   ctx.fillStyle = selected ? '#456380' : 'rgba(10,20,30,.6)';
@@ -2329,9 +2342,12 @@ function updateMenu(dt) {
       const slot = skillSlotAt(l, c.x, c.y);
       if (slot >= 0) {
         const id = h.slots[slot];
-        if (id && SKILLS[id]) { openSkillPopup(id); m.skillDrag = null; }
-        else if (id) { pushIntent({ t: 'assignSkill', id, slot }); m.skillDrag = null; sfx('Cancel1'); }
-        else sfx('Buzzer1');
+        if (!id) return;
+        if (c.shift) {
+          pushIntent({ t: 'assignSkill', id: '', slot });
+          sfx('Cancel1');
+        } else openHotbarDetails(id);
+        m.skillDrag = null;
         return;
       }
       for (let i = 0; i < ids.length; i++) {
@@ -2345,6 +2361,15 @@ function updateMenu(dt) {
     }
     for (const c of mc) {
       if (!hit(c, l.x, l.y, l.w, l.h)) { m.mode = 'root'; m.skillDrag = null; sfx('Cancel1'); return; }
+      const clearSlot = skillSlotClearAt(l, c.x, c.y);
+      if (clearSlot >= 0) {
+        if (h.slots[clearSlot]) {
+          pushIntent({ t: 'assignSkill', id: '', slot: clearSlot });
+          m.skillDrag = null;
+          sfx('Cancel1');
+        }
+        continue;
+      }
       const slot = skillSlotAt(l, c.x, c.y);
       if (slot >= 0) {
         if (m.skillDrag) { pushIntent({ t: 'assignSkill', id: m.skillDrag, slot }); m.skillDrag = null; }
@@ -2421,7 +2446,7 @@ function drawMenu() {
   const m = game.menu, h = game.hero;
   syncAdminMenuEntry();
   const rb = rootBox();
-  drawWindow(rb.x, rb.y, rb.w, rb.h);
+  drawFloatingWindow(rb.x, rb.y, rb.w, rb.h);
   ROOT_MENU.forEach((s, i) => {
     if (m.mode === 'root' && m.cursor === i) drawCursor(rb.x + 6, rb.y + 6 + i * 16, rb.w - 12, 16);
     const left = s === 'Log Out' && game.net && !game.isAdmin ? Math.ceil(h.combatLogoutT || 0) : 0;
@@ -2431,7 +2456,7 @@ function drawMenu() {
     ensureSkillDraft(m);
     const ids = availableSkillIds(h);
     const l = skillLayout(ids);
-    drawWindow(l.x, l.y, l.w, l.h);
+    drawFloatingWindow(l.x, l.y, l.w, l.h);
     text('Skills', l.x + 12, l.y + 8, '#ffe080');
     text(`Pts ${m.skillPoints}`, l.x + 92, l.y + 8, m.skillPoints ? '#ffe080' : '#bcd');
     ids.forEach((id, i) => {
@@ -2451,7 +2476,10 @@ function drawMenu() {
       drawWindow(bx, by, 18, 18);
       text(String(j + 1), bx + 3, by - 8, '#9cf');
       const sid = h.slots[j];
-      if (sid) drawHotbarEntry(sid, bx + 1, by + 1, false, h);
+      if (sid) {
+        drawHotbarEntry(sid, bx + 1, by + 1, false, h);
+        drawSlotClearButton(bx, by, 18);
+      }
     }
     if (skillHasPending(m)) {
       drawWindow(l.x + 16, l.buttonY, 72, 18);
@@ -2459,7 +2487,7 @@ function drawMenu() {
       drawWindow(l.x + 96, l.buttonY, 56, 18);
       text('Reset', l.x + 112, l.buttonY + 6);
     }
-    text('Drag skill icons to slots.', l.x + 12, l.hintY, '#bcd');
+    text('Drag. RMB details. × clears.', l.x + 12, l.hintY, '#bcd');
     if (m.skillDrag) {
       drawSkillIcon(m.skillDrag, mouse.x - 8, mouse.y - 8, true);
       text(SKILLS[m.skillDrag].name, Math.min(W - 86, mouse.x + 12), mouse.y - 3, '#ffe080');
@@ -2467,7 +2495,7 @@ function drawMenu() {
   } else if (m.mode === 'attributes') {
     ensureAttrDraft(m);
     const l = attrLayout(), st = statsForAttr(m.attrDraft);
-    drawWindow(l.x, l.y, l.w, l.h);
+    drawFloatingWindow(l.x, l.y, l.w, l.h);
     text(`Points: ${m.attrPoints}`, l.x + 10, l.y + 10, m.attrPoints > 0 ? '#ffe080' : '#bcd');
     ATTRS.forEach(([k, label], i) => {
       const y = l.y + 30 + i * 15, pending = attrPending(m, k);
@@ -2494,7 +2522,7 @@ function drawMenu() {
   } else if (m.mode === 'status') {
     const w = 188, x = subX(w);
     const l = { x, y: 8, w, h: 124 };
-    drawWindow(l.x, l.y, l.w, l.h);
+    drawFloatingWindow(l.x, l.y, l.w, l.h);
     const lines = [
       `${heroDisplayName()}  Lv.${h.lv}`,
       `HP  ${Math.floor(h.hp)}/${h.maxhp}`,
@@ -2507,7 +2535,7 @@ function drawMenu() {
     lines.forEach((line, i) => text(line, x + 12, 18 + i * 15));
   } else if (m.mode === 'quest') {
     const l = questLayout(), tabs = questTabs(m);
-    drawWindow(l.x, l.y, l.w, l.h);
+    drawFloatingWindow(l.x, l.y, l.w, l.h);
     text('Quests', l.x + 12, l.y + 8, '#ffe080');
     tabs.forEach((tab, i) => {
       const bx = l.x + 12 + i * 72;
@@ -2607,17 +2635,13 @@ function drawMenu() {
     }
   } else if (m.mode === 'options') {
     const l = optionsLayout();
-    drawWindow(l.x, l.y, l.w, l.h);
+    drawFloatingWindow(l.x, l.y, l.w, l.h);
     OPTIONS_MENU.forEach((s, i) => {
       if (m.cursor2 === i) drawCursor(l.x + 6, l.y + 8 + i * 16, l.w - 12, 16);
       text(optionLabel(s), l.x + 14, l.y + 12 + i * 16);
     });
   } else if (m.mode === 'admin' && typeof drawAdminMenu === 'function') {
     drawAdminMenu(m);
-  }
-  if (m.msg) {
-    drawWindow((W - 140) / 2, (H - 30) / 2, 140, 30);
-    text(m.msg, (W - 140) / 2 + 14, (H - 30) / 2 + 11, '#ffe080');
   }
 }
 
@@ -2767,46 +2791,74 @@ function drawMap(drawMenuLayer = true) {
   drawBolts();
   drawPops();
   ctx.restore(); // end of the scrolled world; UI is screen-fixed below
+}
 
+function drawHotbar() {
+  const h = game.hero;
+  if (game.dialogue) return;
+  h.slots.forEach((id, i) => {
+    const x = 4 + i * 21, y = H - 24;
+    drawWindow(x, y, 20, 20);
+    text(String(i + 1), x + 3, y + 2, '#9cf');
+    if (!id) return;
+    const canUse = SKILLS[id]
+      ? skillAllowedForClass(id, h) && skillMpAvailable(id, h)
+      : (h.bag && h.bag[id]) > 0;
+    ctx.globalAlpha = canUse ? 1 : 0.55;
+    drawHotbarEntry(id, x + 2, y + 3, false, h);
+    ctx.globalAlpha = 1;
+    drawSlotClearButton(x, y, 20);
+  });
+}
+
+function drawDialogueWindow() {
+  const d = game.dialogue;
+  if (!d) return;
+  const dw = W - 8 - (game.invOpen ? panelWidth() : 0);
+  drawFloatingWindow(4, H - 62, dw, 58);
+  const full = d.pages[d.page] || '';
+  const shown = full.slice(0, Math.floor(d.chars));
+  wrapText(shown, 14, H - 52, dw - 24);
+  if (d.chars >= full.length && Math.floor(performance.now() / 400) % 2)
+    text('▼', dw - 16, H - 18);
+}
+
+function drawClientPersistentUi() {
   drawHud();
-  if (!game.dialogue) { // skill hotbar
-    h.slots.forEach((id, i) => {
-      const x = 4 + i * 21, y = H - 24;
-      drawWindow(x, y, 20, 20);
-      text(String(i + 1), x + 3, y + 2, '#9cf');
-      if (id) {
-        const canUse = SKILLS[id] ? (skillAllowedForClass(id, h) && skillMpAvailable(id, h)) : ((h.bag && h.bag[id]) > 0);
-        ctx.globalAlpha = canUse ? 1 : 0.55;
-        drawHotbarEntry(id, x + 2, y + 3, false, h);
-        ctx.globalAlpha = 1;
-      }
-    });
-  }
+  drawHotbar();
   drawMiniMap();
   drawHoverCard();
-
   if (game.invOpen) drawInvPanel();
-  if (game.corpseOpen) drawCorpseWin();
   if (game.logOpen) drawLog();
   drawWorldDrag();
-  drawDropPrompt();
-  if (game.dialogue) {
-    const d = game.dialogue;
-    const dw = W - 8 - (game.invOpen ? panelWidth() : 0);
-    drawWindow(4, H - 62, dw, 58);
-    const full = d.pages[d.page];
-    const shown = full.slice(0, Math.floor(d.chars));
-    wrapText(shown, 14, H - 52, dw - 24);
-    if (d.chars >= full.length && Math.floor(performance.now() / 400) % 2)
-      text('▼', dw - 16, H - 18);
-  }
+}
+
+function drawClientPrimaryUi() {
+  if (game.corpseOpen) drawCorpseWin();
+  drawDialogueWindow();
   if (game.shop) drawShop();
-  if (game.itemPopup) drawItemPopup();
   if (game.mapOpen) drawWorldMapWindow();
   if (game.playerMenu) drawPlayerMenu();
+  if (game.menu) drawMenu();
+}
+
+function clientHasModalUi() {
+  return !!(game.dropPrompt || game.itemPopup || game.skillPopup || (game.menu && game.menu.msg));
+}
+
+function drawClientModalUi() {
+  drawDropPrompt();
+  if (game.itemPopup) drawItemPopup();
+  if (game.skillPopup) drawSkillPopup();
+  if (game.menu && game.menu.msg) {
+    const x = (W - 140) / 2, y = (H - 30) / 2;
+    drawModalWindow(x, y, 140, 30);
+    text(game.menu.msg, x + 14, y + 11, '#ffe080');
+  }
+}
+
+function drawClientCriticalUi() {
   if (game.death) drawDeathPopup();
-  if (drawMenuLayer && game.menu) drawMenu();
-  if (drawMenuLayer && game.skillPopup) drawSkillPopup();
 }
 
 function updateDialogue(dt) {
@@ -2855,159 +2907,6 @@ function wrapText(str, x, y, w) {
   text(line, x, ly);
 }
 
-// ---------------------------------------------------------------- input → intents
-// The client half of the old updateMap(): read raw input, drive the local UI
-// state (menus, panels, dialogue, drag), and translate player actions into
-// intents for the sim. It mutates only presentation/UI state here — every
-// change to the *world* goes through pushIntent().
-function processInput(dt) {
-  const h = game.hero;
-  if (game.death) {
-    pushIntent({ t: 'moveDir', dir: null });
-    updateDeathPopup();
-    return;
-  }
-  if (game.dropPrompt) {
-    pushIntent({ t: 'moveDir', dir: null });
-    updateDropPrompt();
-    return;
-  }
-  if (handleHudToggleClicks()) {
-    pushIntent({ t: 'moveDir', dir: null });
-    return;
-  }
-  if (handleWindowShortcuts()) {
-    pushIntent({ t: 'moveDir', dir: null });
-    return;
-  }
-  if (!textInputActive() && keyTapped(MAP_KEYS)) {
-    pushIntent({ t: 'moveDir', dir: null });
-    toggleMapWindow();
-    return;
-  }
-  if (game.mapOpen) {
-    pushIntent({ t: 'moveDir', dir: null });
-    updateMapWindow();
-    return;
-  }
-  // walk command: the held direction, unless a UI panel owns the keyboard
-  const captured = game.shop || game.menu || game.dialogue || game.itemPopup || game.dropPrompt || game.invFocus || game.worldDrag;
-  const heldDir = captured ? null : dirHeld();
-  if (heldDir) { setCorpseWalkTarget(null); setFloorLootTarget(null, null); }
-  pushIntent({ t: 'moveDir', dir: heldDir });
-
-  // walked away from your remains: the loot window closes itself
-  updatePendingCorpseOpen();
-  updatePendingFloorLoot((tx, ty) => pushIntent({ t: 'takeLoot', tx, ty }));
-  if (game.corpseOpen && (game.corpseOpen.map !== game.mapId ||
-    game.corpseOpen.decayed || !nearHero(game.corpseOpen.tx, game.corpseOpen.ty))) {
-    game.corpseOpen = null;
-    game.corpseDrag = null;
-  }
-
-  if (game.itemPopup) { // item details popup: any confirm/click closes
-    if (pressed(CANCEL) || pressed(CONFIRM) || clicked(0)) { game.itemPopup = null; sfx('Cancel1'); }
-    return;
-  }
-  if (game.skillPopup) {
-    if (pressed(CANCEL) || pressed(CONFIRM) || clicked(0) || clicked(2)) closeSkillPopup();
-    return;
-  }
-  if (game.corpseOpen) { // corpse window: take loot; walking stays live
-    updateCorpseWinControls((c, id) => pushIntent({ t: 'takeCorpse', tx: c.tx, ty: c.ty, id }));
-  }
-  if (!game.corpseOpen && !game.shop && !game.menu && !game.dialogue && game.invOpen && pressed(CANCEL)) {
-    closeInventory();
-    return;
-  }
-  if (game.invOpen) updateInvPanel(); // panel mouse works in every mode
-  if (game.shop) { updateShop(); return; }
-  if (game.menu) { updateMenu(dt); return; }
-  if (game.dialogue) {
-    updateDialogue(dt);
-    return;
-  }
-  for (const c of clicks) {
-    if (c.b !== 2) continue;
-    const hs = hotbarSlotAt(c.x, c.y);
-    const id = hs >= 0 && h.slots ? h.slots[hs] : '';
-    if (id && SKILLS[id] && openSkillPopup(id)) return;
-  }
-
-  // inventory panel: I toggles it, E cycles keyboard focus into it
-  if (pressed(['i', 'I'])) {
-    game.invOpen = !game.invOpen;
-    if (!game.invOpen) { game.invFocus = null; game.invDrag = null; }
-    sfx('Decision1');
-  }
-  if (game.invOpen && pressed(['e', 'E'])) {
-    game.invFocus = game.invFocus === null ? 'bag' : game.invFocus === 'bag' ? 'body' : null;
-    sfx('Cursor1');
-  }
-
-  const cam = camPos(); // screen clicks land in the scrolled world
-  finishWorldDragFromReleases(pushIntent);
-  for (const c of clicks) {
-    if (game.invOpen && inPanel(c)) continue; // the panel owns its clicks
-    if (game.corpseOpen && inCorpseWin(c)) continue; // handled above
-    if (game.worldDrag) continue;
-    if (c.b === 2) { // right-click: interact/open nearby things, no direct lock-on
-      const wxp = c.x + cam.x, wyp = c.y + cam.y;
-      const wx = Math.floor(wxp / TS), wy = Math.floor(wyp / TS);
-      const shopNpc = shopNpcAtPoint(wxp, wyp);
-      const co = corpseAt(wx, wy);
-      const floor = floorAt(wx, wy);
-      if (shopNpc) { setCorpseWalkTarget(null); setFloorLootTarget(null, null); openShopChoice(shopForNpc(shopNpc), c.x, c.y); }
-      else if (co && !co.decayed) requestCorpseOpen(co, (tx, ty) => pushIntent({ t: 'moveTo', tx, ty }));
-      else if (floor.length) requestFloorLoot(wx, wy,
-        (tx, ty) => pushIntent({ t: 'moveTo', tx, ty }),
-        (tx, ty) => pushIntent({ t: 'takeLoot', tx, ty }));
-      else { setCorpseWalkTarget(null); setFloorLootTarget(null, null); }
-    } else if (game.net) {
-      // net mode combat clicks (Ctrl/Alt for lock/follow) are handled in netclient.js
-    } else if (c.b === 0 && c.ctrl && c.alt) { // Ctrl+Alt + left-click: activate both lock (attack) and follow
-      setCorpseWalkTarget(null); setFloorLootTarget(null, null);
-      pushIntent({ t: 'followAt', x: c.x + cam.x, y: c.y + cam.y });
-    } else if (c.b === 0 && c.ctrl) { // Ctrl+left-click: toggle lock for attack (re-click same to unlock)
-      setCorpseWalkTarget(null); setFloorLootTarget(null, null);
-      pushIntent({ t: 'lockAt', x: c.x + cam.x, y: c.y + cam.y });
-    } else if (c.b === 0 && c.alt) { // Alt + left-click: toggle "Follow mode" on the enemy
-      setCorpseWalkTarget(null); setFloorLootTarget(null, null);
-      const wx = c.x + cam.x;
-      const wy = c.y + cam.y;
-      const en = enemyAtPoint(wx, wy);
-      if (en && game.lock === en) {
-        // direct for local: toggle follow state + sfx (no need to push, apply would double)
-        game.follow = !game.follow;
-        game.followEngaged = false;
-        sfx(game.follow ? 'Decision1' : 'Cancel1');
-      } else if (en) {
-        pushIntent({ t: 'followAt', x: wx, y: wy });
-      }
-    } else if (c.b === 0 && !game.invDrag) {
-      if (startWorldDragAt(c)) continue;
-      const wx = Math.floor((c.x + cam.x) / TS), wy = Math.floor((c.y + cam.y) / TS);
-      const co = corpseAt(wx, wy);
-      if (co && !co.decayed && nearHero(wx, wy) && c.dbl) { setCorpseWalkTarget(null); setFloorLootTarget(null, null); game.corpseOpen = co; sfx('Decision1'); } // open your remains
-      else {
-        setCorpseWalkTarget(null); setFloorLootTarget(null, null);
-        pushIntent({ t: 'moveTo', tx: wx, ty: wy });
-      }
-    }
-  }
-  finishWorldDragFromReleases(pushIntent);
-  game.lootDrag = null;
-  if (pressed(CANCEL)) {
-    if (game.invFocus) { game.invFocus = null; sfx('Cancel1'); return; }
-    return;
-  }
-  if (game.invFocus) { updateInvKeys(); return; } // arrows/Enter/Q work the panel
-  if (pressed(['Tab'])) pushIntent({ t: 'cycleLock' });
-  if (pressed(['f', 'F'])) pushIntent({ t: 'toggleFollow' });
-  if (pressed(CONFIRM)) pushIntent({ t: 'confirm' });
-  for (let i = 0; i < 5; i++) if (pressed([String(i + 1)])) pushIntent({ t: 'cast', slot: i });
-}
-
 // ---------------------------------------------------------------- render interpolation
 // The sim advances in discrete 20 Hz ticks, so between ticks entity positions
 // would sit still and then jump. To keep motion smooth at any refresh rate we
@@ -3039,29 +2938,14 @@ function clearInterp() {
 }
 
 // ---------------------------------------------------------------- main loop
-// Fixed-timestep loop: input every rendered frame, but the world only advances
-// in whole 20 Hz ticks pulled from a time accumulator (so the sim is fully
-// decoupled from the display's refresh rate — the same cadence the server will
-// run). Whatever time is left in the accumulator becomes the interpolation
-// alpha for a smooth draw.
 const FIXED = 1 / 20; // authoritative tick: 20 Hz
-let last = 0, acc = 0;
+let last = 0;
 function loop(ts) {
   let frame = (ts - last) / 1000;
   last = ts;
   if (!(frame >= 0)) frame = 0;   // first frame / clock reset
   if (frame > 0.25) frame = 0.25; // don't spiral after a long pause
-  if (game.scene === 'title') {
-    if (!game.net) netStart(configuredNetUrl());
-    acc = 0;
-  } else if (game.scene === 'map') {
-    if (game.net) {
-      netFrame(frame); // netplay: predict own hero, render server snapshots
-    } else {
-      netStart(configuredNetUrl());
-      acc = 0;
-    }
-  }
+  netFrame(frame);
   queue = [];
   keyTap.clear();
   clicks = [];

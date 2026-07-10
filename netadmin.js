@@ -400,7 +400,7 @@ function updateAdminMenu(m, mc) {
 
 function drawAdminMenu(m) {
   const a = m.admin || { section: 'root', cursor: 0 }, l = adminLayout();
-  drawWindow(l.x, l.y, l.w, l.h);
+  drawFloatingWindow(l.x, l.y, l.w, l.h);
   text(a.section === 'root' ? 'Admin' : adminSectionLabel(a.section), l.x + 12, l.y + 9, '#ffe080');
   if (a.section === 'root') {
     ADMIN_SECTIONS.forEach((s, i) => {
@@ -440,7 +440,7 @@ function drawAdminMenu(m) {
     const listVisible = Math.max(1, Math.floor((box.y + box.h - box.rowY) / box.rowH));
     const maxScroll = Math.max(0, rows.length - listVisible);
     a.listScroll = Math.max(0, Math.min(maxScroll, a.listScroll || 0));
-    drawWindow(box.x, box.y, box.w, box.h);
+    drawFloatingWindow(box.x, box.y, box.w, box.h);
     text(adminBanListTitle(a.section), box.x + 6, box.y + 5, '#bcd');
     if (rows.length === 0) {
       text('None', box.x + 8, box.rowY + 2, '#777');

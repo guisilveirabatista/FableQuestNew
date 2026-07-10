@@ -137,7 +137,7 @@ function drawLoginScreen() {
   const L = game.login, b = loginBox();
   if (img.title) ctx.drawImage(img.title, (W - 320) / 2, -20, 320, 240);
   ctx.fillStyle = 'rgba(0,0,0,.5)'; ctx.fillRect(0, 0, W, H);
-  drawWindow(b.x, b.y, b.w, b.h);
+  drawModalWindow(b.x, b.y, b.w, b.h);
   text('FABLE QUEST', b.x + 16, b.y + 12, '#ffe080');
   text('Account', b.user.x, b.user.y - 11, '#bcd');
   drawLoginField(b.user, L.user, L.field === 'user');
@@ -343,7 +343,7 @@ function drawCharacterScreen() {
   const s = game.charSelect, b = charBox();
   if (img.title) ctx.drawImage(img.title, (W - 320) / 2, -20, 320, 240);
   ctx.fillStyle = 'rgba(0,0,0,.55)'; ctx.fillRect(0, 0, W, H);
-  drawWindow(b.x, b.y, b.w, b.h);
+  drawModalWindow(b.x, b.y, b.w, b.h);
   text('Characters', b.x + 14, b.y + 12, '#ffe080');
   drawWindow(b.login.x, b.login.y, b.login.w, b.login.h);
   text('Logout', b.login.x + 11, b.login.y + 5);
@@ -397,6 +397,10 @@ function drawCharacterScreen() {
     drawWindow(b.preview.x, b.preview.y, b.preview.w, b.preview.h);
     drawActor({ class: s.class, dir: 'down', moving: false, anim: 1 },
       b.preview.x + 21, b.preview.y + 39);
+    if (s.class === 'Archer') {
+      text('Starts with a Short Bow', b.classX, b.classY + s.classes.length * b.rowH + 6, '#9ab');
+      text('for ranged combat.', b.classX, b.classY + s.classes.length * b.rowH + 18, '#9ab');
+    }
     drawWindow(b.create.x, b.create.y, b.create.w, b.create.h);
     text('Create', b.create.x + 20, b.create.y + 6);
     if (s.characters.length) {
@@ -559,8 +563,31 @@ function onSnapshot(m) {
 
   // fireballs and lightning are shared world entities; render them straight from
   // the server (boom < 0 means still flying, >= 0 means the impact burst)
-  game.projectiles = (m.projectiles || []).map(v =>
-    v.boom >= 0 ? { x: v.x, y: v.y, t: v.t, boom: v.boom } : { x: v.x, y: v.y, t: v.t });
+  if (!net.projById) net.projById = {};
+  const pSeen = {};
+  for (const v of (m.projectiles || [])) {
+    pSeen[v.id] = true;
+    let p = net.projById[v.id];
+    if (!p) {
+      p = { id: v.id, kind: v.kind || 'fire', ownerID: v.ownerID, dx: v.dx, dy: v.dy, t: v.t };
+      net.projById[v.id] = p;
+      if (p.kind === 'arrow') sfx('Evasion1');
+      else if (p.kind === 'fire') sfx('Flame1');
+    }
+    const becameBoom = v.boom >= 0 && p.boom === undefined;
+    if (becameBoom) {
+      if (p.kind === 'arrow') sfx('Sword1');
+    }
+    p.x = v.x;
+    p.y = v.y;
+    p.t = v.t;
+    p.dx = v.dx;
+    p.dy = v.dy;
+    p.kind = v.kind || 'fire';
+    p.boom = v.boom >= 0 ? v.boom : undefined;
+  }
+  for (const id in net.projById) if (!pSeen[id]) delete net.projById[id];
+  game.projectiles = Object.values(net.projById);
   game.bolts = (m.bolts || []).map(v => ({ x: v.x, y: v.y, t: v.t, kind: v.kind || '' }));
 
   // floor loot and corpses are shared world entities on the current map; tag them
@@ -584,8 +611,8 @@ function onSnapshot(m) {
   }
 }
 
-// One render frame in netplay mode (called from the main loop instead of the
-// single-player processInput/stepWorld path).
+// One browser render frame: process server-backed UI/input, predict the local
+// hero, reconcile snapshots, and draw the world.
 function netFrame(frameDt) {
   const net = game.net, h = game.hero;
   updateNetPing(net);
@@ -597,12 +624,14 @@ function netFrame(frameDt) {
   }
   let uiCaptured = false;
   const hadBlockingUi = !!(game.death || game.dialogue || game.mapOpen || game.menu || game.shop || game.invFocus || game.itemPopup || game.skillPopup ||
-    game.dropPrompt || game.chatInput || game.trade || game.playerMenu);
+    game.dropPrompt || game.chatInput || game.trade || game.playerMenu || game.socialPrompt);
 
-  // 1) input -> intents. The menu and inventory panels reuse the single-player
-  //    UI code: their pushIntent() calls forward to the server (sim.js pushIntent).
+  // 1) Input -> server intents. Menus and inventory share pushIntent().
   if (game.death) {
     updateDeathPopup();
+    uiCaptured = true;
+  } else if (game.socialPrompt) {
+    updateSocialPrompt();
     uiCaptured = true;
   } else if (game.chatInput) {
     updateChatInput(); // typing a chat line / slash command captures the keyboard
@@ -621,6 +650,12 @@ function netFrame(frameDt) {
     uiCaptured = true;
   } else if (game.skillPopup) {
     if (pressed(CANCEL) || pressed(CONFIRM) || clicked(0) || clicked(2)) closeSkillPopup();
+    uiCaptured = true;
+  } else if (game.itemPopup) {
+    if (pressed(CANCEL) || pressed(CONFIRM) || clicked(0) || clicked(2)) {
+      game.itemPopup = null;
+      sfx('Cancel1');
+    }
     uiCaptured = true;
   } else if (handleHudToggleClicks()) {
     uiCaptured = true;
@@ -654,8 +689,6 @@ function netFrame(frameDt) {
       game.invFocus = game.invFocus === null ? 'bag' : game.invFocus === 'bag' ? 'body' : null;
       sfx('Cursor1');
     }
-    const closedItemPopup = game.itemPopup && (pressed(CANCEL) || pressed(CONFIRM) || clicked(0));
-    if (closedItemPopup) { game.itemPopup = null; sfx('Cancel1'); }
     updatePendingCorpseOpen();
     updatePendingFloorLoot((tx, ty) => netSend(net, { t: 'takeLoot', tx, ty }));
     if (game.corpseOpen && (game.corpseOpen.map !== game.mapId ||
@@ -665,21 +698,36 @@ function netFrame(frameDt) {
     }
     if (game.corpseOpen) updateCorpseWinControls((co, id) =>
       netSend(net, { t: 'takeCorpse', tx: co.tx, ty: co.ty, id }));
-    if (!closedItemPopup && !game.corpseOpen && game.invOpen && pressed(CANCEL)) {
+    if (!game.corpseOpen && game.invOpen && pressed(CANCEL)) {
       closeInventory();
       uiCaptured = true;
     } else if (game.invOpen && !game.itemPopup) updateInvPanel(); // mouse drag/click -> item intents
     for (const c of clicks) {
-      if (c.b !== 2) continue;
       const hs = hotbarSlotAt(c.x, c.y);
-      const id = hs >= 0 && h.slots ? h.slots[hs] : '';
-      if (id && SKILLS[id] && openSkillPopup(id)) {
+      if (hs < 0) continue;
+      const id = h.slots ? h.slots[hs] : '';
+      if (c.b === 0 && hotbarClearAt(c.x, c.y) === hs) {
+        if (id) {
+          netSend(net, { t: 'assignSkill', slot: hs, id: '' });
+          sfx('Cancel1');
+        }
         uiCaptured = true;
         break;
       }
+      if (c.b !== 2) continue;
+      if (id) {
+        if (c.shift) {
+          netSend(net, { t: 'assignSkill', slot: hs, id: '' });
+          sfx('Cancel1');
+        } else openHotbarDetails(id);
+      }
+      // Hotbar slots own their click even when empty, so it cannot fall through
+      // to a world interaction underneath the HUD.
+      uiCaptured = true;
+      break;
     }
   }
-  if (game.death || game.dialogue || game.skillPopup || game.mapOpen || game.menu || game.shop || game.dropPrompt || game.chatInput || game.trade || game.playerMenu) {
+  if (game.death || game.dialogue || game.itemPopup || game.skillPopup || game.mapOpen || game.menu || game.shop || game.dropPrompt || game.chatInput || game.trade || game.playerMenu || game.socialPrompt) {
     game.worldDrag = null;
   } else {
     if (finishWorldDragFromReleases(obj => netSend(net, obj))) uiCaptured = true;
@@ -688,7 +736,7 @@ function netFrame(frameDt) {
 
   // movement is blocked while a panel owns the keyboard
   const captured = uiCaptured || hadBlockingUi || game.death || game.dialogue || game.mapOpen || game.menu || game.shop ||
-    game.invFocus || game.itemPopup || game.skillPopup || game.dropPrompt || game.chatInput || game.trade || game.playerMenu || game.worldDrag;
+    game.invFocus || game.itemPopup || game.skillPopup || game.dropPrompt || game.chatInput || game.trade || game.playerMenu || game.socialPrompt || game.worldDrag;
   const dir = captured ? '' : (dirHeld() || '');
   if (dir !== net.lastDir) {
     net.lastDir = dir;
@@ -701,7 +749,6 @@ function netFrame(frameDt) {
     else if (game.invFocus && pressed(CANCEL)) { game.invFocus = null; sfx('Cancel1'); }
     else if (game.invFocus) updateInvKeys(); // arrows/Enter/Q drive the focused panel
   } else {
-    updateSocialPrompt(); // Accept/Decline an incoming party invite or trade request
     if (pressed(['Enter'])) openChat();
     if (pressed([' ', 'z', 'Z'])) netInteract();
     if (pressed(['Tab'])) netSend(net, { t: 'cycleLock' });
@@ -732,12 +779,6 @@ function netFrame(frameDt) {
       if (game.invOpen && inPanel(c)) continue; // the panel owns its own clicks
       if (game.corpseOpen && inCorpseWin(c)) continue;
       if (game.worldDrag) continue;
-      const hs = hotbarSlotAt(c.x, c.y);
-      if (c.b === 2 && hs >= 0) {
-        netSend(net, { t: 'assignSkill', slot: hs, id: '' });
-        sfx('Cancel1');
-        continue;
-      }
       const wxp = c.x + cam.x, wyp = c.y + cam.y;
       const wx = Math.floor(wxp / TS), wy = Math.floor(wyp / TS);
       if (c.b === 2) { // right-click: open context/interact targets, not lock-on
@@ -869,7 +910,7 @@ function netFrame(frameDt) {
   for (const p of game.players) { p.px += (p.tpx - p.px) * k; p.py += (p.tpy - p.py) * k; }
   for (const e of game.enemies) { e.px += (e.tpx - e.px) * k; e.py += (e.tpy - e.py) * k; }
 
-  // 3.5) advance the client-only visual timers advanceWorld() would normally run
+  // 3.5) Advance client-only visual timers.
   for (const p of game.pops) p.t += frameDt;
   game.pops = game.pops.filter(p => p.t < 0.8);
   game.iframes = Math.max(0, game.iframes - frameDt);
@@ -883,12 +924,18 @@ function netFrame(frameDt) {
   // 4) draw the world (hero interpolated by the leftover accumulator)
   const a = Math.max(0, Math.min(1, net.acc / FIXED));
   applyInterp(a);
-  drawMap(false);
+  drawMap();
   clearInterp();
-  drawNetSocial(); // chat feed, party frames, name tags, trade window, prompts
+  drawNetWorldOverlay();
+  drawClientPersistentUi();
+  drawNetPersistentUi();
   drawNetOverlay();
-  if (game.menu) drawMenu();
-  if (game.skillPopup) drawSkillPopup();
+  drawClientPrimaryUi();
+  drawNetPrimaryUi();
+  if (clientHasModalUi() || netHasModalUi()) drawModalBackdrop();
+  drawClientModalUi();
+  drawNetModalUi();
+  drawClientCriticalUi();
 }
 
 function predictNetMeleeFx() {

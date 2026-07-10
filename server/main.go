@@ -148,10 +148,15 @@ type playerView struct {
 	Cheats       adminCheats           `json:"cheats,omitempty"`
 }
 type projView struct {
-	X    float64 `json:"x"`
-	Y    float64 `json:"y"`
-	T    float64 `json:"t"`
-	Boom float64 `json:"boom"` // -1 = flying, >=0 = impact burst remaining
+	Id      int     `json:"id"`
+	Kind    string  `json:"kind"`
+	OwnerID string  `json:"ownerID"`
+	X       float64 `json:"x"`
+	Y       float64 `json:"y"`
+	Dx      float64 `json:"dx"`
+	Dy      float64 `json:"dy"`
+	T       float64 `json:"t"`
+	Boom    float64 `json:"boom"` // -1 = flying, >=0 = impact burst remaining
 }
 type boltView struct {
 	X    float64 `json:"x"`
@@ -411,6 +416,13 @@ func newCharacterState(name, class, hair, cloth string) *charState {
 	p.px, p.py = float64(p.tx*TS), float64(p.ty*TS)
 	initHero(p)
 	applyClassTemplate(p, class)
+	if class == "Archer" {
+		if p.equip == nil { p.equip = map[string]string{} }
+		p.equip["main"] = "bow1"
+		p.equip["ammo"] = "arrow1"
+		if p.bag == nil { p.bag = map[string]int{} }
+		p.bag["arrow1"] = 50
+	}
 	p.name, p.class = name, class
 	p.hair, p.cloth = sanitizeColor(hair, defaultHair), sanitizeColor(cloth, defaultCloth)
 	return charStateOf(p)
@@ -859,10 +871,10 @@ func (h *Hub) run() {
 		// 4) locked-on players auto-swing when a target is in reach
 		for _, p := range h.players {
 			if p.lockID != 0 {
-				h.autoMelee(p)
+				h.autoAttack(p)
 			}
 			if p.pvpTarget != "" {
-				h.autoPvpMelee(p)
+				h.autoPvpAttack(p)
 			}
 		}
 		// 5) advance fireballs (homing + hits) and decay bolts
@@ -888,7 +900,7 @@ func (h *Hub) run() {
 				if pr.booming {
 					b = pr.boom
 				}
-				prViews[mapID] = append(prViews[mapID], projView{pr.x, pr.y, pr.t, b})
+				prViews[mapID] = append(prViews[mapID], projView{pr.id, pr.kind, pr.ownerID, pr.x, pr.y, pr.dx, pr.dy, pr.t, b})
 			}
 		}
 		blViews := map[string][]boltView{}

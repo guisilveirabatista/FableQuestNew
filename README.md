@@ -1,12 +1,20 @@
 # Fable Quest
 
 A mini action RPG built with HTML5/JavaScript on top of the RPG Maker 2003 RTP
-assets. No build step, no server, no dependencies — everything (including
-music) is self-contained.
+assets, backed by an authoritative Go multiplayer server. There is no browser
+build step and no JavaScript package installation.
 
 ## Play
 
-Open `index.html` in a browser (double-click it, or `open index.html`).
+Start the server, then open the game URL it serves:
+
+```sh
+cd server
+go run .
+```
+
+Open **http://localhost:8080/**. Opening `index.html` directly is not supported;
+the browser client requires the game server and its WebSocket endpoint.
 
 ## Controls
 
@@ -59,8 +67,10 @@ Auto-melee on a locked target keeps swinging even while you read.
 
 Skills: **Fire** (4 MP fireball, homes in on your lock), **Heal** (6 MP, +15 HP),
 **Spin** (3 MP sword sweep all around you), **Bolt** (6 MP lightning on your lock
-or the nearest foe), and **Nova** (area lightning). Right-click a skill for its
-description. HP and MP both regenerate slowly on their own.
+or the nearest foe), and **Nova** (area lightning). Right-click any skill or
+occupied hotbar slot for its description. Clear an occupied slot with its
+visible **×** button or with **Shift + right-click**. HP and MP both regenerate
+slowly on their own.
 
 ## The city
 
@@ -114,19 +124,16 @@ report to the Elder by the well. He also heals you and tops up your potions.
 
 ## How it works
 
-The engine is split into an authoritative **simulation** and a thin **client**
-(step one of the road to server-authoritative multiplayer — see "MMORPG plan"):
+The game is split into an authoritative Go server and a browser client:
 
-- `sim.js` — the world model and all the *rules*: tile maps, enemy AI, real-time
-  combat (damage, crit, loot, XP), movement, inventory/equipment, shops. It
-  touches no DOM, canvas, input or audio, so it runs headless (`node
-  tools/simtest.js`) — the same rules will later run on the server. The client
-  never mutates the world directly: it pushes **intents** (`move`, `attack`,
-  `cast`, `equip`, `buy`, …) that the sim drains each tick in `stepWorld()`.
-  `applyIntent()` is the single entry point for player actions.
-- `client.js` — the browser front end: canvas + camera, input capture, all
-  rendering, the UI panels/menus, `localStorage` save/load, and the main loop.
-  It reads the world to draw it and turns raw input into intents.
+- `server/` — the authoritative world, combat, inventory, progression,
+  persistence, social systems, and WebSocket protocol.
+- `sim.js` — browser-side shared definitions, map queries, and local movement
+  prediction. It does not run an offline game simulation.
+- `client.js` — canvas rendering, input capture, UI panels, and the browser
+  frame loop.
+- `netclient.js` — login, snapshots, prediction/reconciliation, and networked
+  input. Browser actions are sent to the server as intents.
 - `midi.js` — a tiny Standard MIDI File parser + WebAudio synth (oscillator
   voices per GM instrument family, synthesized drums), so the RTP's `.mid`
   soundtrack plays without a soundfont.
@@ -136,7 +143,7 @@ The engine is split into an authoritative **simulation** and a thin **client**
   walk sprites and the slash/flame effects are ripped from the RTP by
   `tools/rip.js` (it injects a tRNS chunk so palette 0 becomes transparent).
 
-## Multiplayer server (MMORPG)
+## Server
 
 An **authoritative Go server** (`server/`) owns the entire world for many clients
 sharing it — movement, enemies, combat, skills, inventory, loot, shops, and
@@ -151,13 +158,13 @@ go run .            # serves the game + WebSocket on http://localhost:8080
 go test ./...       # world / combat / items / persistence tests
 ```
 
-Open **http://localhost:8080/index.html?net=1** in one or more browser windows.
+Open **http://localhost:8080/** in one or more browser windows.
 You'll get a **login screen** — pick any name and password (new names are
 registered automatically), and you're in. Two windows = two players who see each
 other. The client predicts your own hero with the same rules the server runs
 (`sim.js`'s `stepHero`) and interpolates everyone else. `netclient.js` is the
-netplay layer; `?net=1` opts into it (plain `index.html` still runs the full
-single-player game).
+network layer. To connect the served page to a different WebSocket endpoint,
+pass it as `?net=ws://host:port/ws`.
 
 ### Playing together: chat, parties, trading, PvP
 
@@ -220,7 +227,7 @@ go build
 ./server -mode gateway -addr :8080 -zone city=:9101 -zone field=:9102
 ```
 
-Then open the game at `http://localhost:8080/index.html?net=1` exactly as before.
+Then open the game at `http://localhost:8080/` exactly as before.
 The default `-mode solo` is the all-in-one server above (no gateway needed); a
 gateway with a single zone that owns every map (`-maps city,field`) works too, so
 you can shard only when you need to.

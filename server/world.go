@@ -196,7 +196,18 @@ func (h *Hub) followDir(p *Player) string {
 			return ""
 		}
 		dx, dy := o.tx-p.tx, o.ty-p.ty
-		if abs(dx) <= 1 && abs(dy) <= 1 && p.followEngaged {
+		weaponRange := 1
+		if p.equip != nil && p.equip["main"] != "" && items[p.equip["main"]].weaponType == "bow" {
+			weaponRange = 5
+		}
+		dist := abs(dx)
+		if abs(dy) > dist {
+			dist = abs(dy)
+		}
+		within := dist <= weaponRange
+		beyond := dist > weaponRange+1
+
+		if within && p.followEngaged {
 			p.dir = faceTowardPlayer(p, o)
 			return "" // one square around: just face (don't chase...); rule activates only after first close
 		}
@@ -225,8 +236,12 @@ func (h *Hub) followDir(p *Player) string {
 			}
 			return fd
 		}
-		if abs(dx) <= 1 && abs(dy) <= 1 {
+		if within {
 			p.followEngaged = true
+		} else if beyond {
+			p.followEngaged = false
+		}
+		if within {
 			p.dir = faceTowardPlayer(p, o)
 		}
 		return ""
@@ -237,7 +252,18 @@ func (h *Hub) followDir(p *Player) string {
 			return ""
 		}
 		dx, dy := o.tx-p.tx, o.ty-p.ty
-		if abs(dx) <= 1 && abs(dy) <= 1 && p.followEngaged {
+		weaponRange := 1
+		if p.equip != nil && p.equip["main"] != "" && items[p.equip["main"]].weaponType == "bow" {
+			weaponRange = 5
+		}
+		dist := abs(dx)
+		if abs(dy) > dist {
+			dist = abs(dy)
+		}
+		within := dist <= weaponRange
+		beyond := dist > weaponRange+1
+
+		if within && p.followEngaged {
 			p.dir = faceTowardPlayer(p, o)
 			return "" // one square around: just face (don't chase...); rule activates only after first close
 		}
@@ -266,8 +292,12 @@ func (h *Hub) followDir(p *Player) string {
 			}
 			return fd
 		}
-		if abs(dx) <= 1 && abs(dy) <= 1 {
+		if within {
 			p.followEngaged = true
+		} else if beyond {
+			p.followEngaged = false
+		}
+		if within {
 			p.dir = faceTowardPlayer(p, o)
 		}
 		return ""
@@ -277,7 +307,18 @@ func (h *Hub) followDir(p *Player) string {
 		return ""
 	}
 	dx, dy := en.tx-p.tx, en.ty-p.ty
-	if abs(dx) <= 1 && abs(dy) <= 1 && p.followEngaged {
+	weaponRange := 1
+	if p.equip != nil && p.equip["main"] != "" && items[p.equip["main"]].weaponType == "bow" {
+		weaponRange = 5
+	}
+	dist := abs(dx)
+	if abs(dy) > dist {
+		dist = abs(dy)
+	}
+	within := dist <= weaponRange
+	beyond := dist > weaponRange+1
+
+	if within && p.followEngaged {
 		p.dir = faceToward(p, en)
 		return "" // one square around: just face (don't chase...); rule activates only after first close
 	}
@@ -306,8 +347,12 @@ func (h *Hub) followDir(p *Player) string {
 		}
 		return fd
 	}
-	if abs(dx) <= 1 && abs(dy) <= 1 {
+	if within {
 		p.followEngaged = true
+	} else if beyond {
+		p.followEngaged = false
+	}
+	if within {
 		p.dir = faceToward(p, en)
 	}
 	return ""

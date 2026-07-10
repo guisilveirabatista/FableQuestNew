@@ -36,7 +36,11 @@ func skillRequiresTarget(id string) bool {
 	return id != "heal" && id != "nova" && id != "supernova"
 }
 
+var nextProjID int
+
 type projectile struct {
+	id           int
+	kind         string
 	ownerID      string
 	x, y         float64
 	dx, dy       float64
@@ -136,8 +140,9 @@ func (h *Hub) castFire(p *Player) bool {
 		m = 1
 	}
 	dx, dy := (tx-p.px)/m, (ty-p.py)/m
+	nextProjID++
 	h.projectiles[p.mapID] = append(h.projectiles[p.mapID], &projectile{
-		ownerID: p.id, x: p.px + 8 + dx*8, y: p.py + 8 + dy*8, dx: dx, dy: dy,
+		id: nextProjID, kind: "fire", ownerID: p.id, x: p.px + 8 + dx*8, y: p.py + 8 + dy*8, dx: dx, dy: dy,
 		targetID: targetID, targetPlayer: targetPlayer, boom: -1,
 	})
 	return true
@@ -310,7 +315,7 @@ func (h *Hub) updateProjectiles(dt float64) {
 				continue
 			}
 			owner := h.players[pr.ownerID]
-			if pr.targetID != 0 { // home in on the locked target while it lives
+			if pr.targetID != 0 && pr.kind == "fire" { // home in on the locked target while it lives
 				if t := h.enemyByID(mapID, pr.targetID); t != nil && !t.dead && t.dying <= 0 {
 					m := math.Hypot(t.px+8-pr.x, t.py+8-pr.y)
 					if m == 0 {
@@ -318,7 +323,7 @@ func (h *Hub) updateProjectiles(dt float64) {
 					}
 					pr.dx, pr.dy = (t.px+8-pr.x)/m, (t.py+8-pr.y)/m
 				}
-			} else if pr.targetPlayer != "" && owner != nil {
+			} else if pr.targetPlayer != "" && owner != nil && pr.kind == "fire" {
 				if t := h.players[pr.targetPlayer]; t != nil && h.canPvp(owner, t) {
 					m := math.Hypot(t.px+8-pr.x, t.py+8-pr.y)
 					if m == 0 {
@@ -338,7 +343,11 @@ func (h *Hub) updateProjectiles(dt float64) {
 				}
 				if math.Abs(en.px+8-pr.x) < 11 && math.Abs(en.py+8-pr.y) < 11 {
 					if owner != nil {
-						h.hitEnemy(owner, en, skillMagicDamage(owner, "fire", rand.Intn(5)), false)
+						if pr.kind == "arrow" {
+							h.arrowHit(owner, en)
+						} else {
+							h.hitEnemy(owner, en, skillMagicDamage(owner, "fire", rand.Intn(5)), false)
+						}
 					}
 					hit = true
 					break
@@ -350,7 +359,11 @@ func (h *Hub) updateProjectiles(dt float64) {
 						continue
 					}
 					if math.Abs(o.px+8-pr.x) < 11 && math.Abs(o.py+8-pr.y) < 11 {
-						h.pvpHit(owner, o, skillMagicDamage(owner, "fire", rand.Intn(5)), false, true)
+						if pr.kind == "arrow" {
+							h.arrowPvpHit(owner, o)
+						} else {
+							h.pvpHit(owner, o, skillMagicDamage(owner, "fire", rand.Intn(5)), false, true)
+						}
 						hit = true
 						break
 					}

@@ -317,6 +317,12 @@ func (h *Hub) setCharacter(p *Player, name, class string) {
 	p.name = name
 	if isFresh {
 		applyClassTemplate(p, class)
+		if class == "Archer" {
+			if p.equip == nil { p.equip = map[string]string{} }
+			p.equip["main"] = "bow1"
+			if p.bag == nil { p.bag = map[string]int{} }
+			p.bag["arrow1"] = 50
+		}
 	}
 	p.class = class
 	normalizeSlots(p)
@@ -571,9 +577,8 @@ func (h *Hub) cycleLock(p *Player) {
 	p.follow, p.followEngaged = false, false
 }
 
-// autoMelee: while locked on and off cooldown, the sword strikes by itself when
-// the target is in reach (ported from advanceWorld's auto-melee).
-func (h *Hub) autoMelee(p *Player) {
+// autoAttack: equipment-aware automatic attack
+func (h *Hub) autoAttack(p *Player) {
 	en := h.enemyByID(p.mapID, p.lockID)
 	if en == nil || en.dead || en.dying > 0 {
 		p.lockID = 0
@@ -581,9 +586,69 @@ func (h *Hub) autoMelee(p *Player) {
 	}
 	if p.atkCool <= 0 {
 		dir := faceToward(p, en)
-		if slashReaches(p, dir, en) {
-			p.dir = dir
-			h.doSlash(p)
+		it := items[p.equip["main"]]
+		if it.weaponType == "bow" {
+			dist := math.Hypot(en.px+8-(p.px+8), en.py+8-(p.py+8))
+			if dist <= 7.5*TS {
+				p.dir = dir
+				h.doShoot(p, en.id, "", en.px, en.py)
+			}
+		} else {
+			if slashReaches(p, dir, en) {
+				p.dir = dir
+				h.doSlash(p)
+			}
 		}
 	}
+}
+
+func (h *Hub) doShoot(p *Player, targetID int, targetPlayer string, tx, ty float64) {
+	st := statsOf(p)
+	p.atkCool = math.Max(0.5, 1.3/st.aspd)
+
+	arrowType := p.equip["ammo"]
+	if arrowType == "" || p.bag[arrowType] <= 0 {
+		return // out of arrows or no arrows equipped
+	}
+	p.bag[arrowType]--
+	if p.bag[arrowType] == 0 {
+		delete(p.bag, arrowType)
+	}
+	m := math.Hypot(tx-p.px, ty-p.py)
+	if m == 0 {
+		m = 1
+	}
+	dx, dy := (tx-p.px)/m, (ty-p.py)/m
+	nextProjID++
+	h.projectiles[p.mapID] = append(h.projectiles[p.mapID], &projectile{
+		id: nextProjID, kind: "arrow", ownerID: p.id,
+		x: p.px + 8 + dx*8, y: p.py + 8 + dy*8, dx: dx, dy: dy,
+		targetID: 0, targetPlayer: "", boom: -1,
+	})
+}
+
+func (h *Hub) arrowHit(p *Player, en *enemy) {
+	st := statsOf(p)
+	if rand.Intn(100) >= st.prec {
+		return
+	}
+	a := effectiveAttr(p)
+	eq := equipBonus(p)
+	rangedAtk := 1 + a.Dex*2 + a.Agi/2 + eq.atk
+	dmg := rangedAtk + rand.Intn(4) - enemyKinds[en.kind].def
+	if dmg < 1 {
+		dmg = 1
+	}
+	h.hitEnemy(p, en, dmg, rand.Intn(100) < st.crit)
+}
+
+func (h *Hub) arrowPvpHit(p *Player, target *Player) {
+	st := statsOf(p)
+	if rand.Intn(100) >= st.prec {
+		return
+	}
+	a := effectiveAttr(p)
+	eq := equipBonus(p)
+	rangedAtk := 1 + a.Dex*2 + a.Agi/2 + eq.atk
+	h.pvpHit(p, target, rangedAtk+rand.Intn(4), rand.Intn(100) < st.crit, false)
 }

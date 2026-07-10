@@ -227,3 +227,22 @@ Improvements
 - I want to be able to drag and drop an item using mouse 1 when I'm close to them. If I'm close I hold mouse 1 on them, I start dragging. When I release mouse 1 I drop it. I can drop it as far as I want in my field of view. Same works for corpses.
 
 - Items on the floor are not displaying their names when I hover my mouse over them. They are displaying "Object object" as their name
+
+- Only combat-capable actors show health on hover. Enemies and players use the
+  framed name-and-health card. Non-combat NPCs, items, and corpses use a compact
+  translucent nameplate without a synthetic health value. A future combat NPC
+  can opt into the health card by exposing combatant and health state.
+
+- UI depth is consistent across the game: embedded HUD/inventory/chat panels
+  have no shadow, primary windows use a soft offset shadow, modal popups use a
+  stronger shadow plus one shared backdrop dim, and critical overlays such as
+  death/login use the strongest backdrop. Only top-level surfaces receive
+  elevation; buttons and panels nested inside a window do not cast shadows.
+
+- Rendering and input follow the same order: world overlays, persistent panels,
+  primary windows, modal popups, then critical overlays. The topmost visible
+  modal exclusively owns mouse and keyboard input.
+
+- Overhaul the HUD and window system by separating in multiple layers. I want some HUDs to be in the same layer as some windows, like to skill/items slot HUD that I would like to be in the same layer as the inventory. Some windows like the trade system should be on top of all the other layers.
+
+- Don't show HP bar of NPCs if they don't battle. Maybe not show a little green pop up, but perhaps just the label of their names with a transparent background when hovering the mouse over them.
