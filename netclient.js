@@ -70,6 +70,8 @@ function netStart(url) {
     } else if (m.t === 'snap') {
       net.ack = m.ack;
       onSnapshot(m);
+    } else if (m.t === 'questPrompt') {
+      game.questPrompt = { id: m.id, text: m.text, cursor: 0 };
     } else if (m.t === 'chat') {
       if (m.chat) for (const c of m.chat) pushChatLine(c);
     } else if (m.t === 'pong') {
@@ -624,11 +626,14 @@ function netFrame(frameDt) {
   }
   let uiCaptured = false;
   const hadBlockingUi = !!(game.death || game.dialogue || game.mapOpen || game.menu || game.shop || game.invFocus || game.itemPopup || game.skillPopup ||
-    game.dropPrompt || game.chatInput || game.trade || game.playerMenu || game.socialPrompt);
+    game.dropPrompt || game.chatInput || game.trade || game.playerMenu || game.socialPrompt || game.questPrompt);
 
   // 1) Input -> server intents. Menus and inventory share pushIntent().
   if (game.death) {
     updateDeathPopup();
+    uiCaptured = true;
+  } else if (game.questPrompt) {
+    updateQuestPrompt();
     uiCaptured = true;
   } else if (game.socialPrompt) {
     updateSocialPrompt();

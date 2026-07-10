@@ -330,8 +330,19 @@ func (h *Hub) adminGrantItem(p *Player, id string, n int) {
 	}
 	id = strings.TrimSpace(id)
 	if _, ok := items[id]; !ok {
-		h.systemTo(p, "Unknown item.")
-		return
+		lowerId := strings.ToLower(id)
+		found := false
+		for k, v := range itemNames {
+			if strings.ToLower(v) == lowerId {
+				id = k
+				found = true
+				break
+			}
+		}
+		if !found {
+			h.systemTo(p, "Unknown item.")
+			return
+		}
 	}
 	n = clampInt(n, 1, 9999)
 	addItem(p, id, n)

@@ -1182,6 +1182,8 @@ func (h *Hub) applyIntent(p *Player, m inMsg) {
 		if m.Id == "elder" && npcFacing(p) == "elder" {
 			h.talkElder(p)
 		}
+	case "acceptQuest":
+		h.acceptQuest(p, m.Id)
 	case "spendAttr":
 		spendAttr(p, m.Key)
 	case "assignSkill":

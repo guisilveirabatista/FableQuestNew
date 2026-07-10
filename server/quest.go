@@ -33,11 +33,6 @@ func normalizeQuests(p *Player) {
 		p.quests = map[string]QuestState{}
 	}
 	q := p.quests[elderQuestID]
-	if q.Progress == 0 && !q.Completed && !q.Ready && !q.Active {
-		q.Active = true
-		q.Progress = min(p.kills, elderQuestTarget)
-		q.Ready = p.kills >= elderQuestTarget
-	}
 	if q.Progress < 0 {
 		q.Progress = 0
 	}
@@ -50,7 +45,6 @@ func normalizeQuests(p *Player) {
 		q.Rewarded = true
 		q.Progress = elderQuestTarget
 	} else {
-		q.Active = q.Active || !q.Completed
 		q.Ready = q.Ready || q.Progress >= elderQuestTarget
 	}
 	p.quests[elderQuestID] = q
@@ -84,6 +78,21 @@ func (h *Hub) talkElder(p *Player) {
 	q := elderQuest(p)
 	p.hp = float64(p.maxhp)
 	p.mp = float64(p.maxmp)
+	
+	if !q.Active && !q.Completed {
+		type questPromptMsg struct {
+			T    string `json:"t"`
+			Id   string `json:"id"`
+			Text string `json:"text"`
+		}
+		writeJSON(p.conn, questPromptMsg{
+			T:    "questPrompt",
+			Id:   elderQuestID,
+			Text: "Will you help me clear the fields of slimes?",
+		})
+		return
+	}
+
 	if q.Completed {
 		if p.bag["potion"] < 3 {
 			addItem(p, "potion", 1)
@@ -141,4 +150,17 @@ func npcFacing(p *Player) string {
 		}
 	}
 	return ""
+}
+
+func (h *Hub) acceptQuest(p *Player, id string) {
+	if id == elderQuestID {
+		q := elderQuest(p)
+		if !q.Active && !q.Completed {
+			q.Active = true
+			q.Progress = min(p.kills, elderQuestTarget)
+			q.Ready = p.kills >= elderQuestTarget
+			setElderQuest(p, q)
+			p.logMsg("Quest accepted: Fields of Trouble.")
+		}
+	}
 }

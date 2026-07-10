@@ -1654,6 +1654,59 @@ function deathAction(id) {
   }
 }
 
+function questPromptButtons() {
+  const w = 220, h = 90, x = (W - w) / 2, y = (H - h) / 2;
+  return {
+    box: { x, y, w, h },
+    buttons: [
+      { id: 'accept', label: 'Accept', x: x + 24, y: y + h - 28, w: 70, h: 20 },
+      { id: 'decline', label: 'Decline', x: x + w - 94, y: y + h - 28, w: 70, h: 20 },
+    ]
+  };
+}
+
+function drawQuestPrompt() {
+  const p = game.questPrompt;
+  if (!p) return;
+  const ui = questPromptButtons();
+  drawModalWindow(ui.box.x, ui.box.y, ui.box.w, ui.box.h);
+  text('Quest', ui.box.x + 90, ui.box.y + 10, '#ffe080');
+  wrapText(p.text, ui.box.x + 18, ui.box.y + 26, ui.box.w - 36);
+  ui.buttons.forEach((b, i) => {
+    drawWindow(b.x, b.y, b.w, b.h);
+    if ((p.cursor || 0) === i) drawCursor(b.x + 3, b.y + 3, b.w - 6, b.h - 6);
+    text(b.label, b.x + 16, b.y + 6, '#fff');
+  });
+}
+
+function updateQuestPrompt() {
+  const p = game.questPrompt;
+  if (!p) return false;
+  const ui = questPromptButtons();
+  
+  if (pressed(['ArrowLeft', 'ArrowRight', 'a', 'd'])) { p.cursor = (p.cursor || 0) ^ 1; sfx('Cursor1'); }
+  
+  let acted = false;
+  ui.buttons.forEach((b, i) => {
+    if (hit(clicks[0], b.x, b.y, b.w, b.h)) { acted = true; p.cursor = i; }
+  });
+  if (acted || pressed(CONFIRM)) {
+    const action = ui.buttons[p.cursor || 0].id;
+    if (action === 'accept') {
+      netSend(game.net, { t: 'acceptQuest', id: p.id });
+      sfx('Decision1');
+    } else {
+      sfx('Cancel1');
+    }
+    game.questPrompt = null;
+    clicks.length = 0;
+  } else if (pressed(CANCEL)) {
+    game.questPrompt = null;
+    sfx('Cancel1');
+  }
+  return true;
+}
+
 function updateDeathPopup() {
   const d = game.death;
   if (!d) return;
@@ -1676,7 +1729,7 @@ function updateDeathPopup() {
 }
 
 function hoverBlockedByUI() {
-  if (game.worldDrag || game.death || game.mapOpen || game.menu || game.shop || game.itemPopup || game.skillPopup || game.dropPrompt || game.dialogue ||
+  if (game.worldDrag || game.death || game.mapOpen || game.menu || game.shop || game.itemPopup || game.skillPopup || game.dropPrompt || game.dialogue || game.questPrompt ||
     game.playerMenu || game.trade) return true;
   if (game.invOpen && inPanel(mouse)) return true;
   if (game.corpseOpen && inCorpseWin(mouse)) return true;
@@ -1995,7 +2048,7 @@ function openMenuSection(sel) {
   rootMenuSelect(sel);
 }
 function menuShortcutBlocked() {
-  return !!(game.death || game.shop || game.dialogue || game.itemPopup || game.dropPrompt || game.corpseOpen || game.invFocus || game.playerMenu);
+  return !!(game.death || game.shop || game.dialogue || game.itemPopup || game.dropPrompt || game.corpseOpen || game.invFocus || game.playerMenu || game.questPrompt);
 }
 function handleWindowShortcuts() {
   if (textInputActive() || menuShortcutBlocked()) return false;
@@ -2024,7 +2077,7 @@ function rootMenuSelect(sel) {
   else if (sel === 'Admin' && typeof openAdminMenu === 'function') openAdminMenu(m);
   else if (sel === 'Log Out') logOut();
 }
-function hit(c, x, y, w, hgt) { return c.x >= x && c.x < x + w && c.y >= y && c.y < y + hgt; }
+function hit(c, x, y, w, hgt) { return c && c.x >= x && c.x < x + w && c.y >= y && c.y < y + hgt; }
 function hoverRow(x, y, w, hgt, count, step = hgt) {
   const i = Math.floor((mouse.y - y) / step);
   return i >= 0 && i < count && mouse.x >= x && mouse.x < x + w &&
@@ -2843,13 +2896,14 @@ function drawClientPrimaryUi() {
 }
 
 function clientHasModalUi() {
-  return !!(game.dropPrompt || game.itemPopup || game.skillPopup || (game.menu && game.menu.msg));
+  return !!(game.dropPrompt || game.itemPopup || game.skillPopup || game.questPrompt || (game.menu && game.menu.msg));
 }
 
 function drawClientModalUi() {
   drawDropPrompt();
   if (game.itemPopup) drawItemPopup();
   if (game.skillPopup) drawSkillPopup();
+  if (game.questPrompt) drawQuestPrompt();
   if (game.menu && game.menu.msg) {
     const x = (W - 140) / 2, y = (H - 30) / 2;
     drawModalWindow(x, y, 140, 30);
