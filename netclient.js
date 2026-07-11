@@ -70,8 +70,9 @@ function netStart(url) {
     } else if (m.t === 'snap') {
       net.ack = m.ack;
       onSnapshot(m);
-    } else if (m.t === 'questPrompt') {
-      game.questPrompt = { id: m.id, text: m.text, cursor: 0 };
+    } else if (m.t === 'npcDialogue') {
+      say(m.pages || [], m.offer ? { offer: { id: m.id, cursor: 0 } } : {});
+      sfx('Decision1');
     } else if (m.t === 'chat') {
       if (m.chat) for (const c of m.chat) pushChatLine(c);
     } else if (m.t === 'pong') {
@@ -455,7 +456,9 @@ function onSnapshot(m) {
   h.cloth = you.cloth || h.cloth;
   h.skillPoints = you.skillPts || 0;
   h.skillLevels = you.skillLv || h.skillLevels || {};
-  h.quests = you.quests || h.quests || {};
+  // Quest state is character-specific. An omitted/empty snapshot means this
+  // character has discovered no quests; never retain the previous character's.
+  h.quests = you.quests || {};
   ensureQuests(h);
   h.combatLogoutT = Math.max(0, you.combatLog || 0);
   h.dead = !!you.dead;
@@ -626,14 +629,11 @@ function netFrame(frameDt) {
   }
   let uiCaptured = false;
   const hadBlockingUi = !!(game.death || game.dialogue || game.mapOpen || game.menu || game.shop || game.invFocus || game.itemPopup || game.skillPopup ||
-    game.dropPrompt || game.chatInput || game.trade || game.playerMenu || game.socialPrompt || game.questPrompt);
+    game.dropPrompt || game.chatInput || game.trade || game.playerMenu || game.socialPrompt);
 
   // 1) Input -> server intents. Menus and inventory share pushIntent().
   if (game.death) {
     updateDeathPopup();
-    uiCaptured = true;
-  } else if (game.questPrompt) {
-    updateQuestPrompt();
     uiCaptured = true;
   } else if (game.socialPrompt) {
     updateSocialPrompt();
@@ -796,9 +796,7 @@ function netFrame(frameDt) {
           if (shopForNpc(npc)) {
             openShopChoice(shopForNpc(npc), c.x, c.y);
           } else if (npc.id === 'elder') {
-            const pages = elderQuestPages(game.hero);
             netSend(game.net, { t: 'talkNpc', id: 'elder' });
-            say(pages);
             sfx('Decision1');
           }
         }
@@ -987,9 +985,7 @@ function netInteract() {
   const npc = npcs.find(n => n.map === game.mapId && n.tx === fx && n.ty === fy);
   if (shopForNpc(npc)) { openShopChoice(shopForNpc(npc)); return true; }
   if (npc && npc.id === 'elder') {
-    const pages = elderQuestPages(h);
     netSend(game.net, { t: 'talkNpc', id: 'elder' });
-    say(pages);
     sfx('Decision1');
     return true;
   }

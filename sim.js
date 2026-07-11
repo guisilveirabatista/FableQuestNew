@@ -196,21 +196,12 @@ function logMsg(str) {
 function ensureQuests(h = game.hero) {
   if (!h.quests || typeof h.quests !== 'object') h.quests = {};
   const def = QUESTS[ELDER_QUEST_ID];
-  let q = h.quests[ELDER_QUEST_ID];
-  if (!q) {
-    const completed = game.won === true;
-    q = {
-      active: !completed,
-      progress: completed ? def.target : Math.min(def.target, h.kills || 0),
-      ready: !completed && (h.kills || 0) >= def.target,
-      completed,
-      rewarded: completed,
-    };
-  }
+  const q = h.quests[ELDER_QUEST_ID];
+  if (!q) return h.quests;
   q.progress = Math.max(0, Math.min(def.target, q.progress || 0));
   q.completed = q.completed === true;
   q.rewarded = q.rewarded === true;
-  q.active = !q.completed && q.active !== false;
+  q.active = !q.completed && q.active === true;
   q.ready = !q.completed && (q.ready === true || q.progress >= def.target);
   if (q.completed) {
     q.active = false;
@@ -223,19 +214,7 @@ function ensureQuests(h = game.hero) {
 }
 function elderQuest(h = game.hero) {
   ensureQuests(h);
-  return h.quests[ELDER_QUEST_ID];
-}
-function elderQuestPages(h = game.hero) {
-  const def = QUESTS[ELDER_QUEST_ID], q = elderQuest(h);
-  if (q.completed) return ['Elder: Rest well, hero.', '* Fully recovered! *'];
-  if (q.ready) return [
-    'Elder: The fields are quieter already.',
-    `Elder: Take this reward: ${def.rewardGold} gold, ${def.rewardExp} EXP, and potions.`,
-  ];
-  return [
-    `Elder: Monsters plague our fields! Defeat ${def.target} of them. (${q.progress}/${def.target} so far)`,
-    '* The Elder healed you and refilled a potion! *',
-  ];
+  return h.quests[ELDER_QUEST_ID] || null;
 }
 
 const SOLID_GROUND = 'WXRUO';
@@ -359,7 +338,14 @@ function switchMap(to, tx, ty) {
 }
 
 // ---------------------------------------------------------------- dialogue
-function say(pages) { game.dialogue = { pages, page: 0, chars: 0 }; }
+function say(pages, options = {}) {
+  game.dialogue = {
+    pages: Array.isArray(pages) ? pages : [],
+    page: 0,
+    chars: 0,
+    offer: options.offer || null,
+  };
+}
 // ---------------------------------------------------------------- action combat
 // Enemies roam the grass in real time (charas from the RTP monster charset).
 // They chase the hero on sight; touching one hurts. Lock-on auto-melee slashes

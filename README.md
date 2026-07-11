@@ -119,8 +119,9 @@ ghosts hit with magic), Dodge (Agi, Luck) and Attack Speed (Agi). Vitality and
 Intelligence also raise max HP/MP.
 
 Quest: monsters roam the grass in real time and chase you on sight — touching
-one hurts (the dirt path is safe: they won't step on it). Slay 5 of them and
-report to the Elder by the well. He also heals you and tops up your potions.
+one hurts (the dirt path is safe: they won't step on it). Talk to the Elder by
+the well and accept his request before kills begin counting. Undiscovered quests
+stay out of the Quest menu, which shows only the currently active objective.
 
 ## How it works
 

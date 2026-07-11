@@ -1050,8 +1050,9 @@ function drawInvPanel() {
   // backpack window
   drawWindow(BAG_WIN.x, BAG_WIN.y, BAG_WIN.w, BAG_WIN.h);
   text('Backpack', BAG_WIN.x + 12, BAG_WIN.y + 7, '#bcd');
-  text(`${bagWeight().toFixed(1)}/${capacity()}kg`, BAG_WIN.x + 12, BAG_WIN.y + 18,
-    overloaded() ? '#f76' : '#bcd');
+  text(`${bagWeight().toFixed(1)}/${capacity()}kg`, BAG_WIN.x + 12, BAG_WIN.y + 18, overloaded() ? '#f76' : '#bcd');
+  const goldStr = (h.gold || 0) + 'g';
+  text(goldStr, BAG_WIN.x + BAG_WIN.w - textWidth(goldStr) - 12, BAG_WIN.y + 7, '#ffe080');
   const first = (game.bagScroll || 0) * BAG_UI.C;
   const visible = ids.slice(first, first + bagRows() * BAG_UI.C);
   visible.forEach((id, off) => {
@@ -1321,6 +1322,19 @@ function updateShop() {
   }
   const first = s.scroll || 0;
   for (const c of clicks) {
+    if (c.b === 2) {
+      for (let vi = 0; vi < l.visibleRows; vi++) {
+        const i = first + vi;
+        if (i >= ids.length) break;
+        const r = shopRowLayout(l, vi);
+        if (hit(c, r.x, r.y, r.minus.x - r.x, r.h)) {
+          game.itemPopup = ids[i];
+          sfx('Decision1');
+          break;
+        }
+      }
+      continue;
+    }
     if (c.b !== 0) continue;
     if (!hit(c, l.x, l.y, l.w, l.h)) { game.shop = null; sfx('Cancel1'); return; }
     const sb = shopScrollbar(l, s, ids);
@@ -1654,59 +1668,6 @@ function deathAction(id) {
   }
 }
 
-function questPromptButtons() {
-  const w = 220, h = 90, x = (W - w) / 2, y = (H - h) / 2;
-  return {
-    box: { x, y, w, h },
-    buttons: [
-      { id: 'accept', label: 'Accept', x: x + 24, y: y + h - 28, w: 70, h: 20 },
-      { id: 'decline', label: 'Decline', x: x + w - 94, y: y + h - 28, w: 70, h: 20 },
-    ]
-  };
-}
-
-function drawQuestPrompt() {
-  const p = game.questPrompt;
-  if (!p) return;
-  const ui = questPromptButtons();
-  drawModalWindow(ui.box.x, ui.box.y, ui.box.w, ui.box.h);
-  text('Quest', ui.box.x + 90, ui.box.y + 10, '#ffe080');
-  wrapText(p.text, ui.box.x + 18, ui.box.y + 26, ui.box.w - 36);
-  ui.buttons.forEach((b, i) => {
-    drawWindow(b.x, b.y, b.w, b.h);
-    if ((p.cursor || 0) === i) drawCursor(b.x + 3, b.y + 3, b.w - 6, b.h - 6);
-    text(b.label, b.x + 16, b.y + 6, '#fff');
-  });
-}
-
-function updateQuestPrompt() {
-  const p = game.questPrompt;
-  if (!p) return false;
-  const ui = questPromptButtons();
-  
-  if (pressed(['ArrowLeft', 'ArrowRight', 'a', 'd'])) { p.cursor = (p.cursor || 0) ^ 1; sfx('Cursor1'); }
-  
-  let acted = false;
-  ui.buttons.forEach((b, i) => {
-    if (hit(clicks[0], b.x, b.y, b.w, b.h)) { acted = true; p.cursor = i; }
-  });
-  if (acted || pressed(CONFIRM)) {
-    const action = ui.buttons[p.cursor || 0].id;
-    if (action === 'accept') {
-      netSend(game.net, { t: 'acceptQuest', id: p.id });
-      sfx('Decision1');
-    } else {
-      sfx('Cancel1');
-    }
-    game.questPrompt = null;
-    clicks.length = 0;
-  } else if (pressed(CANCEL)) {
-    game.questPrompt = null;
-    sfx('Cancel1');
-  }
-  return true;
-}
-
 function updateDeathPopup() {
   const d = game.death;
   if (!d) return;
@@ -1729,7 +1690,7 @@ function updateDeathPopup() {
 }
 
 function hoverBlockedByUI() {
-  if (game.worldDrag || game.death || game.mapOpen || game.menu || game.shop || game.itemPopup || game.skillPopup || game.dropPrompt || game.dialogue || game.questPrompt ||
+  if (game.worldDrag || game.death || game.mapOpen || game.menu || game.shop || game.itemPopup || game.skillPopup || game.dropPrompt || game.dialogue ||
     game.playerMenu || game.trade) return true;
   if (game.invOpen && inPanel(mouse)) return true;
   if (game.corpseOpen && inCorpseWin(mouse)) return true;
@@ -2048,7 +2009,7 @@ function openMenuSection(sel) {
   rootMenuSelect(sel);
 }
 function menuShortcutBlocked() {
-  return !!(game.death || game.shop || game.dialogue || game.itemPopup || game.dropPrompt || game.corpseOpen || game.invFocus || game.playerMenu || game.questPrompt);
+  return !!(game.death || game.shop || game.dialogue || game.itemPopup || game.dropPrompt || game.corpseOpen || game.invFocus || game.playerMenu);
 }
 function handleWindowShortcuts() {
   if (textInputActive() || menuShortcutBlocked()) return false;
@@ -2272,26 +2233,32 @@ function questTabs(m) {
     { id: 'completed', label: 'Completed' },
   ];
 }
-function questStepLine(done, label) {
-  return `${done ? '[x]' : '[ ]'} ${label}`;
-}
-function elderQuestLines(q = elderQuest(game.hero)) {
+function elderQuestSteps(q) {
+  if (!q) return [];
   const def = QUESTS[ELDER_QUEST_ID];
   const progress = Math.min(def.target, q.progress || 0);
-  return [
-    questStepLine(q.active || q.ready || q.completed, `Talk to ${def.giver}`),
-    questStepLine(progress >= def.target, `Defeat monsters ${progress}/${def.target}`),
-    questStepLine(q.completed, `Return to ${def.giver} for reward`),
-  ];
+  const steps = [];
+  if (q.completed) {
+    steps.push({ text: `[x] Defeat monsters ${def.target}/${def.target}`, color: '#9f9' });
+    steps.push({ text: `[x] Return to ${def.giver} for reward`, color: '#9f9' });
+    steps.push({ text: '[x] Quest completed', color: '#9f9' });
+  } else if (q.ready) {
+    steps.push({ text: `[x] Defeat monsters ${def.target}/${def.target}`, color: '#9f9' });
+    steps.push({ text: `[ ] Return to ${def.giver} for reward`, color: '#ffe080' });
+  } else {
+    steps.push({ text: `[ ] Defeat monsters ${progress}/${def.target}`, color: '#cde' });
+  }
+  return steps;
 }
 function getTabQuests(tab, h = game.hero) {
   const list = [];
   const q = elderQuest(h);
   const def = QUESTS[ELDER_QUEST_ID];
+  if (!q) return list;
   if (tab === 'completed') {
     if (q.completed) list.push({ id: ELDER_QUEST_ID, def, q });
   } else {
-    if (q.active || q.ready || !q.completed) list.push({ id: ELDER_QUEST_ID, def, q });
+    if (q.active || q.ready) list.push({ id: ELDER_QUEST_ID, def, q });
   }
   return list;
 }
@@ -2640,13 +2607,11 @@ function drawMenu() {
           text(`Given by ${entry.def.giver}`, detailsX, curY + 2, '#bcd');
           curY += 14;
 
-          const stepLines = elderQuestLines(entry.q);
-          stepLines.forEach((line, i) => {
-            let color = '#cde';
-            if (m.questTab === 'active' && i === 2 && entry.q.ready) color = '#ffe080';
-            text(line, detailsX, curY + 2, color);
+          const steps = elderQuestSteps(entry.q);
+          for (const step of steps) {
+            text(step.text, detailsX, curY + 2, step.color);
             curY += 14;
-          });
+          }
 
           text(`Reward: ${entry.def.rewardGold}G ${entry.def.rewardExp}EXP`, detailsX, curY + 2, '#9f9');
           curY += 14;
@@ -2864,16 +2829,40 @@ function drawHotbar() {
   });
 }
 
+function dialogueOfferVisible(d = game.dialogue) {
+  if (!d || !d.offer || d.page !== d.pages.length - 1) return false;
+  return d.chars >= (d.pages[d.page] || '').length;
+}
+
+function dialogueWindowLayout(d = game.dialogue) {
+  const dw = W - 8 - (game.invOpen ? panelWidth() : 0);
+  const h = dialogueOfferVisible(d) ? 80 : 58;
+  const x = 4, y = H - h - 4;
+  return {
+    x, y, w: dw, h,
+    accept: { x: x + 18, y: y + h - 24, w: 70, h: 18 },
+    decline: { x: x + 96, y: y + h - 24, w: 70, h: 18 },
+  };
+}
+
 function drawDialogueWindow() {
   const d = game.dialogue;
   if (!d) return;
-  const dw = W - 8 - (game.invOpen ? panelWidth() : 0);
-  drawFloatingWindow(4, H - 62, dw, 58);
+  const l = dialogueWindowLayout(d);
+  drawFloatingWindow(l.x, l.y, l.w, l.h);
   const full = d.pages[d.page] || '';
   const shown = full.slice(0, Math.floor(d.chars));
-  wrapText(shown, 14, H - 52, dw - 24);
-  if (d.chars >= full.length && Math.floor(performance.now() / 400) % 2)
-    text('▼', dw - 16, H - 18);
+  wrapText(shown, l.x + 10, l.y + 10, l.w - 20);
+  if (dialogueOfferVisible(d)) {
+    const buttons = [l.accept, l.decline];
+    buttons.forEach((b, i) => {
+      drawWindow(b.x, b.y, b.w, b.h);
+      if ((d.offer.cursor || 0) === i) drawCursor(b.x + 3, b.y + 3, b.w - 6, b.h - 6);
+      text(i === 0 ? 'Accept' : 'Decline', b.x + 16, b.y + 5);
+    });
+  } else if (d.chars >= full.length && Math.floor(performance.now() / 400) % 2) {
+    text('▼', l.x + l.w - 16, l.y + l.h - 18);
+  }
 }
 
 function drawClientPersistentUi() {
@@ -2896,14 +2885,13 @@ function drawClientPrimaryUi() {
 }
 
 function clientHasModalUi() {
-  return !!(game.dropPrompt || game.itemPopup || game.skillPopup || game.questPrompt || (game.menu && game.menu.msg));
+  return !!(game.dropPrompt || game.itemPopup || game.skillPopup || (game.menu && game.menu.msg));
 }
 
 function drawClientModalUi() {
   drawDropPrompt();
   if (game.itemPopup) drawItemPopup();
   if (game.skillPopup) drawSkillPopup();
-  if (game.questPrompt) drawQuestPrompt();
   if (game.menu && game.menu.msg) {
     const x = (W - 140) / 2, y = (H - 30) / 2;
     drawModalWindow(x, y, 140, 30);
@@ -2925,6 +2913,25 @@ function updateDialogue(dt) {
   }
   d.chars += dt * 40;
   const full = d.pages[d.page] || '';
+  if (dialogueOfferVisible(d)) {
+    if (pressed(['ArrowLeft', 'ArrowRight', 'a', 'd'])) {
+      d.offer.cursor = (d.offer.cursor || 0) ^ 1;
+      sfx('Cursor1');
+    }
+    const l = dialogueWindowLayout(d);
+    for (const c of clicks) {
+      if (c.b !== 0) continue;
+      if (hit(c, l.accept.x, l.accept.y, l.accept.w, l.accept.h)) d.offer.cursor = 0;
+      else if (hit(c, l.decline.x, l.decline.y, l.decline.w, l.decline.h)) d.offer.cursor = 1;
+      else continue;
+      resolveDialogueOffer(d.offer.cursor === 0);
+      return true;
+    }
+    if (pressed(CONFIRM)) {
+      resolveDialogueOffer((d.offer.cursor || 0) === 0);
+    }
+    return true;
+  }
   const tapped = pressed(CONFIRM) ||
     clicks.some(c => c.b === 0 && !(game.invOpen && inPanel(c)));
   if (tapped) {
@@ -2935,13 +2942,70 @@ function updateDialogue(dt) {
   }
   return true;
 }
+
+function resolveDialogueOffer(accepted) {
+  const offer = game.dialogue && game.dialogue.offer;
+  if (!offer) return;
+  if (accepted) {
+    netSend(game.net, { t: 'acceptQuest', id: offer.id });
+    say(['* Quest accepted: Fields of Trouble. *']);
+    sfx('Decision1');
+  } else {
+    say(['Elder: I understand. Come back if you change your mind.']);
+    sfx('Cancel1');
+  }
+}
+let lastLogLength = -1;
+let lastLogWrapped = [];
+let lastProcessedMsg = null;
+
 // toggleable combat/reward log, docked above the skill hotbar (bottom-left)
 function drawLog() {
   const rows = 5, lh = 10, lw = 250, lhgt = rows * lh + 16;
   const lx = 4, ly = H - 24 - 6 - lhgt;
   drawWindow(lx, ly, lw, lhgt);
   text('Log', lx + 8, ly + 4, '#bcd');
-  game.log.slice(-rows).forEach((s, i) => text(s, lx + 8, ly + 15 + i * lh, '#cde'));
+
+  const lastMsg = game.log[game.log.length - 1];
+  if (game.log.length !== lastLogLength || lastMsg !== lastProcessedMsg) {
+    lastLogWrapped = [];
+    const maxWidth = lw - 16;
+    for (const msg of game.log) {
+      const words = msg.split(' ');
+      let currentLine = '';
+      for (const word of words) {
+        const testLine = currentLine ? currentLine + ' ' + word : word;
+        if (textWidth(testLine) > maxWidth) {
+          if (currentLine) {
+            lastLogWrapped.push(currentLine);
+          }
+          if (textWidth(word) > maxWidth) {
+            let wPart = '';
+            for (let i = 0; i < word.length; i++) {
+              if (textWidth(wPart + word[i]) > maxWidth) {
+                lastLogWrapped.push(wPart);
+                wPart = word[i];
+              } else {
+                wPart += word[i];
+              }
+            }
+            currentLine = wPart;
+          } else {
+            currentLine = word;
+          }
+        } else {
+          currentLine = testLine;
+        }
+      }
+      if (currentLine) {
+        lastLogWrapped.push(currentLine);
+      }
+    }
+    lastProcessedMsg = lastMsg;
+    lastLogLength = game.log.length;
+  }
+
+  lastLogWrapped.slice(-rows).forEach((s, i) => text(s, lx + 8, ly + 15 + i * lh, '#cde'));
 }
 function prop(t, x, y) {
   return {

@@ -17,6 +17,13 @@ type QuestState struct {
 	Rewarded  bool `json:"rewarded,omitempty"`
 }
 
+type npcDialogueMsg struct {
+	T     string   `json:"t"`
+	Pages []string `json:"pages"`
+	Id    string   `json:"id,omitempty"`
+	Offer bool     `json:"offer,omitempty"`
+}
+
 func cloneQuestStates(src map[string]QuestState) map[string]QuestState {
 	if len(src) == 0 {
 		return nil
@@ -32,7 +39,16 @@ func normalizeQuests(p *Player) {
 	if p.quests == nil {
 		p.quests = map[string]QuestState{}
 	}
-	q := p.quests[elderQuestID]
+	q, exists := p.quests[elderQuestID]
+	if !exists {
+		return
+	}
+	// Earlier builds persisted an all-zero placeholder quest for every new
+	// character. Treat it as undiscovered and remove it during migration.
+	if !q.Active && !q.Ready && !q.Completed && !q.Rewarded && q.Progress == 0 {
+		delete(p.quests, elderQuestID)
+		return
+	}
 	if q.Progress < 0 {
 		q.Progress = 0
 	}
@@ -56,8 +72,18 @@ func elderQuest(p *Player) QuestState {
 }
 
 func setElderQuest(p *Player, q QuestState) {
+	if p.quests == nil {
+		p.quests = map[string]QuestState{}
+	}
 	p.quests[elderQuestID] = q
 	normalizeQuests(p)
+}
+
+func sendNpcDialogue(p *Player, pages []string, id string, offer bool) {
+	if p == nil || p.conn == nil || len(pages) == 0 {
+		return
+	}
+	writeJSON(p.conn, npcDialogueMsg{T: "npcDialogue", Pages: pages, Id: id, Offer: offer})
 }
 
 func (h *Hub) advanceElderQuestKill(p *Player) {
@@ -78,18 +104,13 @@ func (h *Hub) talkElder(p *Player) {
 	q := elderQuest(p)
 	p.hp = float64(p.maxhp)
 	p.mp = float64(p.maxmp)
-	
+
 	if !q.Active && !q.Completed {
-		type questPromptMsg struct {
-			T    string `json:"t"`
-			Id   string `json:"id"`
-			Text string `json:"text"`
-		}
-		writeJSON(p.conn, questPromptMsg{
-			T:    "questPrompt",
-			Id:   elderQuestID,
-			Text: "Will you help me clear the fields of slimes?",
-		})
+		sendNpcDialogue(p, []string{
+			"Elder: Monsters have overrun the fields outside the city.",
+			fmt.Sprintf("Elder: Defeat %d of them so travelers can use the road safely.", elderQuestTarget),
+			"Elder: Will you help us?",
+		}, elderQuestID, true)
 		return
 	}
 
@@ -97,12 +118,16 @@ func (h *Hub) talkElder(p *Player) {
 		if p.bag["potion"] < 3 {
 			addItem(p, "potion", 1)
 		}
+		sendNpcDialogue(p, []string{"Elder: Rest well, hero. The fields are safer because of you."}, "", false)
 		return
 	}
 	if !q.Ready {
 		if p.bag["potion"] < 3 {
 			addItem(p, "potion", 1)
 		}
+		sendNpcDialogue(p, []string{
+			fmt.Sprintf("Elder: The fields still need your help. Defeat monsters: %d/%d.", q.Progress, elderQuestTarget),
+		}, "", false)
 		return
 	}
 	q.Active = false
@@ -120,6 +145,10 @@ func (h *Hub) talkElder(p *Player) {
 		p.logMsg("Reward potions dropped at your feet.")
 	}
 	p.logMsg(fmt.Sprintf("Quest complete: Fields of Trouble: +%d EXP, +%d gold", elderRewardExp, elderRewardGold))
+	sendNpcDialogue(p, []string{
+		"Elder: The fields are quieter already.",
+		fmt.Sprintf("Elder: Take this reward: %d gold, %d EXP, and two potions.", elderRewardGold, elderRewardExp),
+	}, "", false)
 }
 
 func npcFacing(p *Player) string {
@@ -157,8 +186,8 @@ func (h *Hub) acceptQuest(p *Player, id string) {
 		q := elderQuest(p)
 		if !q.Active && !q.Completed {
 			q.Active = true
-			q.Progress = min(p.kills, elderQuestTarget)
-			q.Ready = p.kills >= elderQuestTarget
+			q.Progress = 0
+			q.Ready = false
 			setElderQuest(p, q)
 			p.logMsg("Quest accepted: Fields of Trouble.")
 		}
