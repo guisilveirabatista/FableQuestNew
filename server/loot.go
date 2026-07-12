@@ -27,6 +27,9 @@ const (
 )
 
 func (h *Hub) dropFloor(mapID, id string, n, tx, ty int) {
+	if waterTile(mapID, tx, ty) && isConsumable(id) {
+		return
+	}
 	for _, f := range h.floor[mapID] {
 		if f.id == id && f.tx == tx && f.ty == ty {
 			f.n += n
@@ -98,7 +101,7 @@ func (h *Hub) pickupAt(p *Player, tx, ty int) bool {
 }
 
 func (h *Hub) moveFloorItem(p *Player, fromTx, fromTy, toTx, toTy int, want string) bool {
-	if !near(p, fromTx, fromTy) || !lootDropTileAllowed(p.mapID, toTx, toTy) || !inPlayerView(p, toTx, toTy) {
+	if !near(p, fromTx, fromTy) || !inPlayerView(p, toTx, toTy) {
 		return false
 	}
 	list := h.floor[p.mapID]
@@ -109,9 +112,16 @@ func (h *Hub) moveFloorItem(p *Player, fromTx, fromTy, toTx, toTy int, want stri
 		if fromTx == toTx && fromTy == toTy {
 			return true
 		}
+		isWater := waterTile(p.mapID, toTx, toTy)
+		isConsumable := isConsumable(f.id)
+		if !lootDropTileAllowed(p.mapID, toTx, toTy) && !(isWater && isConsumable) {
+			return false
+		}
 		id, n := f.id, f.n
 		h.floor[p.mapID] = append(list[:i], list[i+1:]...)
-		h.dropFloor(p.mapID, id, n, toTx, toTy)
+		if !(isWater && isConsumable) {
+			h.dropFloor(p.mapID, id, n, toTx, toTy)
+		}
 		return true
 	}
 	return false

@@ -176,6 +176,32 @@ func TestMoveCorpseDisposesInWater(t *testing.T) {
 	}
 }
 
+func TestMoveConsumableDisposesInWater(t *testing.T) {
+	h := newHub()
+	p := heroAt("field", 27, 7)
+	p.aoiW, p.aoiH = 8, 8
+	h.dropFloor("field", "potion", 1, 27, 6)
+	if !h.moveFloorItem(p, 27, 6, 28, 6, "potion") {
+		t.Fatal("should be able to drop a consumable item into water")
+	}
+	if len(h.floor["field"]) != 0 {
+		t.Fatalf("water drop should dispose of the consumable completely, got %+v", h.floor["field"])
+	}
+}
+
+func TestMoveNonConsumableBlockedByWater(t *testing.T) {
+	h := newHub()
+	p := heroAt("field", 27, 7)
+	p.aoiW, p.aoiH = 8, 8
+	h.dropFloor("field", "sword1", 1, 27, 6)
+	if h.moveFloorItem(p, 27, 6, 28, 6, "sword1") {
+		t.Fatal("should not be able to drop a non-consumable item into water")
+	}
+	if len(h.floor["field"]) != 1 || h.floor["field"][0].id != "sword1" || h.floor["field"][0].tx != 27 || h.floor["field"][0].ty != 6 {
+		t.Fatalf("non-consumable item should remain on the floor, got %+v", h.floor["field"])
+	}
+}
+
 func TestTakeCorpseReturnsPack(t *testing.T) {
 	h := newHub()
 	p := heroAt("field", 15, 10)

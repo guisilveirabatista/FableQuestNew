@@ -730,7 +730,11 @@ function finishWorldDrag(sendFn, p) {
   if ((game.invOpen && inPanel(p)) || (game.corpseOpen && inCorpseWin(p))) return true;
   const t = worldTileAtPoint(p);
   if (!t) return true;
-  if (d.kind === 'floor' && isBlocked(t.tx, t.ty)) { sfx('Buzzer1'); return true; }
+  if (d.kind === 'floor') {
+    const isWater = t.tx >= 0 && t.ty >= 0 && t.tx < MW && t.ty < MH && cur().ground[t.ty][t.tx] === 'W';
+    const isConsumable = ITEMS[d.id] && ITEMS[d.id].heal > 0;
+    if (isBlocked(t.tx, t.ty) && !(isWater && isConsumable)) { sfx('Buzzer1'); return true; }
+  }
   if (d.kind === 'corpse' && !corpseDropTileAllowed(t.tx, t.ty)) { sfx('Buzzer1'); return true; }
   if (d.kind === 'floor') sendFn({ t: 'moveFloorItem', tx: d.tx, ty: d.ty, toTx: t.tx, toTy: t.ty, id: d.id });
   else if (d.kind === 'corpse') sendFn({ t: 'moveCorpse', tx: d.tx, ty: d.ty, toTx: t.tx, toTy: t.ty });

@@ -316,3 +316,9 @@ func equipBonus(p *Player) derived {
 	}
 	return b
 }
+
+func isConsumable(id string) bool {
+	it, ok := items[id]
+	return ok && it.heal > 0
+}
+
