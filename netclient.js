@@ -461,7 +461,7 @@ function drawCharacterScreen() {
       text('Back', b.back.x + 16, b.back.y + 6);
     }
   }
-  if (s.error) text(s.error, b.x + (b.w - textWidth(s.error)) / 2, b.y + b.h - 58, '#f76');
+  if (s.error) text(s.error, b.x + (b.w - textWidth(s.error)) / 2, b.y + b.h - 215, '#f76');
 }
 
 // hard-set the local hero from an authoritative server state
