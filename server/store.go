@@ -54,6 +54,7 @@ type charState struct {
 	Class       string                `json:"class,omitempty"`
 	Hair        string                `json:"hair,omitempty"`
 	Cloth       string                `json:"cloth,omitempty"`
+	Gender      string                `json:"gender,omitempty"`
 	MapID       string                `json:"map"`
 	Tx          int                   `json:"tx"`
 	Ty          int                   `json:"ty"`
@@ -84,6 +85,7 @@ type Store interface {
 	Login(user, pass string) (chars []*charState, err error)
 	Save(user string, ch *charState) error
 	DeleteCharacter(user, name string) error
+	CharacterExists(name string) (bool, error)
 	SetAccountBan(user string, banned bool) error
 	AccountBanned(user string) (bool, error)
 	SetCharacterBan(user, name string, banned bool) error
@@ -193,6 +195,19 @@ func (s *fileStore) Save(user string, ch *charState) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	for accUser, acc := range s.accounts {
+		if accUser == user {
+			continue
+		}
+		for _, existingCh := range acc.Characters {
+			if existingCh != nil && strings.EqualFold(existingCh.Name, ch.Name) {
+				return errors.New("character name already taken by another account")
+			}
+		}
+		if acc.Char != nil && strings.EqualFold(acc.Char.Name, ch.Name) {
+			return errors.New("character name already taken by another account")
+		}
+	}
 	a := s.accounts[user]
 	if a == nil {
 		return errors.New("no such account")
@@ -232,6 +247,22 @@ func (s *fileStore) DeleteCharacter(user, name string) error {
 		return errors.New("character not found")
 	}
 	return s.persistLocked()
+}
+
+func (s *fileStore) CharacterExists(name string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, acc := range s.accounts {
+		for _, ch := range acc.Characters {
+			if ch != nil && strings.EqualFold(ch.Name, name) {
+				return true, nil
+			}
+		}
+		if acc.Char != nil && strings.EqualFold(acc.Char.Name, name) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (s *fileStore) SetAccountBan(user string, banned bool) error {
@@ -420,7 +451,7 @@ func charStateOf(p *Player) *charState {
 		mapID, tx, ty = spawn.mapID, spawn.tx, spawn.ty
 	}
 	return &charState{
-		Name: p.name, Class: p.class, Hair: p.hair, Cloth: p.cloth,
+		Name: p.name, Class: p.class, Hair: p.hair, Cloth: p.cloth, Gender: p.gender,
 		MapID: mapID, Tx: tx, Ty: ty, Dir: p.dir,
 		HP: p.hp, MP: p.mp, Lv: p.lv, Exp: p.exp, Gold: p.gold, Kills: p.kills, Points: p.points,
 		SkillPoints: p.skillPoints, SkillLevels: cloneSkillLevels(p.skillLevels), Quests: cloneQuestStates(p.quests),
@@ -434,6 +465,10 @@ func applyCharState(p *Player, ch *charState) {
 	p.name, p.class = ch.Name, ch.Class
 	if p.class == "" {
 		p.class = "Knight"
+	}
+	p.gender = ch.Gender
+	if p.gender == "" {
+		p.gender = "male"
 	}
 	p.hair, p.cloth = sanitizeColor(ch.Hair, defaultHair), sanitizeColor(ch.Cloth, defaultCloth)
 	p.mapID, p.tx, p.ty, p.dir = ch.MapID, ch.Tx, ch.Ty, ch.Dir
@@ -478,13 +513,13 @@ func applyCharState(p *Player, ch *charState) {
 	p.px, p.py = float64(p.tx*TS), float64(p.ty*TS)
 }
 
-// validName keeps usernames to 1-16 letters/digits/underscore.
+// validName keeps character/usernames to 3-12 alphanumeric characters.
 func validName(s string) bool {
-	if len(s) < 1 || len(s) > 16 {
+	if len(s) < 3 || len(s) > 20 {
 		return false
 	}
 	for _, r := range s {
-		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_') {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9') {
 			return false
 		}
 	}

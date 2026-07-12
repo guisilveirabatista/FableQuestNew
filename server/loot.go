@@ -15,7 +15,7 @@ type floorItem struct {
 type corpse struct {
 	tx, ty             int
 	name               string
-	class, hair, cloth string
+	class, hair, cloth, gender string
 	items              map[string]int
 	age                float64
 	decayed            bool
@@ -126,7 +126,7 @@ func (h *Hub) dropCorpse(mapID string, tx, ty int, owner *Player, bag map[string
 			items[id] = n
 		}
 	}
-	name, class, hair, cloth := "Hero", "Knight", defaultHair, defaultCloth
+	name, class, hair, cloth, gender := "Hero", "Knight", defaultHair, defaultCloth, "male"
 	if owner != nil {
 		name = owner.displayName()
 		if owner.class != "" {
@@ -138,9 +138,12 @@ func (h *Hub) dropCorpse(mapID string, tx, ty int, owner *Player, bag map[string
 		if owner.cloth != "" {
 			cloth = owner.cloth
 		}
+		if owner.gender != "" {
+			gender = owner.gender
+		}
 	}
 	h.corpses[mapID] = append(h.corpses[mapID], &corpse{
-		tx: tx, ty: ty, name: name, class: class, hair: hair, cloth: cloth, items: items,
+		tx: tx, ty: ty, name: name, class: class, hair: hair, cloth: cloth, gender: gender, items: items,
 	})
 }
 

@@ -99,14 +99,28 @@ func (s *pgStore) Save(user string, ch *charState) error {
 	if ch == nil || !validName(ch.Name) {
 		return errors.New("character needs a valid name")
 	}
+	var nameTaken bool
+	err := s.pool.QueryRow(context.Background(), `
+		SELECT EXISTS (
+			SELECT 1 FROM accounts, jsonb_array_elements(COALESCE(characters, '[]'::jsonb)) AS elem
+			WHERE username <> $1 AND LOWER(elem->>'name') = LOWER($2)
+		)
+	`, user, ch.Name).Scan(&nameTaken)
+	if err != nil {
+		return err
+	}
+	if nameTaken {
+		return errors.New("character name already taken by another account")
+	}
+
 	var charsJSON []byte
-	err := s.pool.QueryRow(context.Background(), `SELECT characters FROM accounts WHERE username=$1`, user).Scan(&charsJSON)
+	err = s.pool.QueryRow(context.Background(), `SELECT characters FROM accounts WHERE username=$1`, user).Scan(&charsJSON)
 	if err != nil {
 		return err
 	}
 	var chars []*charState
 	if len(charsJSON) > 0 {
-		if err := json.Unmarshal(charsJSON, &chars); err != nil {
+		if err = json.Unmarshal(charsJSON, &chars); err != nil {
 			return err
 		}
 	}
@@ -148,6 +162,19 @@ func (s *pgStore) DeleteCharacter(user, name string) error {
 	}
 	_, err = s.pool.Exec(context.Background(), `UPDATE accounts SET characters=$2 WHERE username=$1`, user, data)
 	return err
+}
+
+func (s *pgStore) CharacterExists(name string) (bool, error) {
+	ctx := context.Background()
+	var exists bool
+	query := `
+		SELECT EXISTS (
+			SELECT 1 FROM accounts, jsonb_array_elements(COALESCE(characters, '[]'::jsonb)) AS elem
+			WHERE LOWER(elem->>'name') = LOWER($1)
+		)
+	`
+	err := s.pool.QueryRow(ctx, query, name).Scan(&exists)
+	return exists, err
 }
 
 func (s *pgStore) SetAccountBan(user string, banned bool) error {

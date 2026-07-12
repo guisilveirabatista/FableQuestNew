@@ -183,14 +183,19 @@ selectCharacter:
 				writeWelcome(c, user, nil, chars, true)
 			case "createCharacter":
 				if !validName(m.Name) || !validClass(m.Class) {
-					writeCharacterList(c, chars, "", "Choose a 1-16 name and a valid class.")
+					writeCharacterList(c, chars, "", "Choose a 3-12 alphanumeric name.")
 					continue
 				}
-				if findCharacter(chars, m.Name) != nil {
-					writeCharacterList(c, chars, m.Name, "That character already exists.")
+				exists, err := store.CharacterExists(m.Name)
+				if err != nil {
+					writeCharacterList(c, chars, "", "Could not verify character name.")
 					continue
 				}
-				ch := newCharacterState(m.Name, m.Class, m.Hair, m.Cloth)
+				if exists {
+					writeCharacterList(c, chars, "", "That character name is already taken.")
+					continue
+				}
+				ch := newCharacterState(m.Name, m.Class, m.Gender, m.Hair, m.Cloth)
 				if err := store.Save(user, ch); err != nil {
 					writeCharacterList(c, chars, "", "Could not save character.")
 					continue

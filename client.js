@@ -32,14 +32,23 @@ const IMAGES = ['chipset', 'hero', 'npc', 'custom', 'knight',
   'i_potion', 'i_bread', 'i_meat', 'i_sword1', 'i_sword2', 'i_sword3', 'i_bow1', 'i_arrow1', 'i_arrow2', 'i_arrow3',
   'i_hat', 'i_helm', 'i_shield', 'i_armor', 'i_legs', 'i_boots', 'i_ring', 'i_amulet'];
 const img = {};
-const CLASS_SPRITES = {
+const CLASS_SPRITES_MALE = {
   Knight: { sheet: 'protagonist1', cx: 2, cy: 0 },
   Lancer: { sheet: 'protagonist4', cx: 2, cy: 0 },
   Wizard: { sheet: 'protagonist1', cx: 0, cy: 1 },
   Archer: { sheet: 'protagonist2', cx: 2, cy: 1 },
   Vampire: { sheet: 'protagonist4', cx: 3, cy: 0 },
-  Holy: { sheet: 'general2', cx: 2, cy: 1 },
+  Holy: { sheet: 'general2', cx: 0, cy: 0 },
 };
+const CLASS_SPRITES_FEMALE = {
+  Knight: { sheet: 'protagonist1', cx: 3, cy: 0 },
+  Lancer: { sheet: 'protagonist4', cx: 1, cy: 1 },
+  Wizard: { sheet: 'protagonist1', cx: 1, cy: 1 },
+  Archer: { sheet: 'protagonist2', cx: 3, cy: 1 },
+  Vampire: { sheet: 'protagonist4', cx: 2, cy: 1 },
+  Holy: { sheet: 'general2', cx: 1, cy: 0 },
+};
+const CLASS_SPRITES = CLASS_SPRITES_MALE;
 let audioOk = false;
 function sfx(name) {
   if (!audioOk) return;
@@ -413,10 +422,11 @@ function normalizeCorpse(c) {
   c.class = c.class || c.Class || (c.sprite && c.sprite.class) || 'Knight';
   c.hair = c.hair || c.Hair || (c.sprite && c.sprite.hair) || '#6b3f22';
   c.cloth = c.cloth || c.Cloth || (c.sprite && c.sprite.cloth) || '#2f7fd1';
+  c.gender = c.gender || c.Gender || (c.sprite && c.sprite.gender) || 'male';
   return c;
 }
 function corpseActor(c) {
-  return normalizeCorpse(c) || { class: 'Knight' };
+  return normalizeCorpse(c) || { class: 'Knight', gender: 'male' };
 }
 function mapName(id) { return MAP_NAME[id] || id; }
 function expToNextLevel(v = game.hero) {
@@ -2670,7 +2680,9 @@ function drawChar(sheet, cx, cy, dir, frame, px, py) {
   ctx.drawImage(sheet, sx, sy, 24, 32, px - 4, py - 16, 24, 32);
 }
 function actorSprite(a = {}) {
-  return CLASS_SPRITES[a.class] || CLASS_SPRITES.Knight;
+  const gender = (a.gender || 'male').toLowerCase();
+  const sprites = gender === 'female' ? CLASS_SPRITES_FEMALE : CLASS_SPRITES_MALE;
+  return sprites[a.class] || sprites.Knight;
 }
 function drawActor(a, px = a.px, py = a.py, alpha = 1) {
   const sp = actorSprite(a);

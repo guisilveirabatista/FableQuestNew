@@ -53,6 +53,7 @@ function netStart(url) {
       net.characters = m.characters || net.characters || [];
       game.hero.name = m.name || m.id;
       game.hero.class = m.class || '';
+      game.hero.gender = m.gender || 'male';
       game.mapId = m.map;
       snapHero(m); // start at the server-assigned spawn
       game.login = null; // account is authenticated
@@ -167,6 +168,7 @@ function openCharacterScreen(m) {
     class: cls,
     classes,
     classCursor: Math.max(0, classes.indexOf(cls)),
+    gender: 'male',
     field: roster.length ? 'list' : 'name',
     error: m.error || '',
   };
@@ -185,8 +187,13 @@ function updateCharacterRoster(m) {
   if (selected < 0) selected = s.characters.length ? 0 : -1;
   s.selected = selected;
   s.scroll = Math.max(0, Math.min(s.scroll || 0, Math.max(0, s.characters.length - charBox().visible)));
-  s.mode = s.mode === 'create' && !m.selected ? 'create' : (s.characters.length ? 'select' : 'create');
-  s.field = s.mode === 'create' ? 'name' : 'list';
+  s.mode = (s.mode === 'create' && m.error) || (s.mode === 'create' && !m.selected) ? 'create' : (s.characters.length ? 'select' : 'create');
+  if (s.mode === 'create') {
+    if (!s.gender) s.gender = 'male';
+    s.field = s.field || 'name';
+  } else {
+    s.field = 'list';
+  }
   s.error = m.error || '';
 }
 
@@ -194,7 +201,10 @@ function charBox() {
   const w = Math.min(372, W - 16), h = Math.min(256, H - 16);
   const x = Math.floor((W - w) / 2), y = Math.floor((H - h) / 2);
   const listW = Math.min(138, Math.floor(w * 0.42));
-  const detailX = x + listW + 24, detailW = w - listW - 38;
+  const s = game.charSelect;
+  const isCreate = s && s.mode === 'create';
+  const detailX = isCreate ? x + 14 : x + listW + 24;
+  const detailW = isCreate ? w - 28 : w - listW - 38;
   const previewW = 58, previewH = 78;
   const rowH = 20, listH = h - 86;
   return {
@@ -202,7 +212,8 @@ function charBox() {
     list: { x: x + 14, y: y + 36, w: listW, h: listH, rowH },
     visible: Math.max(1, Math.floor(listH / rowH)),
     detail: { x: detailX, y: y + 36, w: detailW, h: listH },
-    name: { x: detailX, y: y + 58, w: detailW, h: 18 },
+    name: { x: detailX, y: y + 58, w: 100, h: 18 },
+    gender: { x: detailX + 112, y: y + 58, w: detailW - 112, h: 18 },
     classX: detailX, classY: y + 96, classW: detailW - previewW - 12, rowH: 14,
     preview: { x: detailX + detailW - previewW, y: y + 90, w: previewW, h: previewH },
     enter: { x: detailX, y: y + h - 32, w: 108, h: 20 },
@@ -224,12 +235,12 @@ function selectedCharacter() {
 function createCharacter() {
   const s = game.charSelect;
   const name = (s.name || '').trim();
-  if (!/^[A-Za-z0-9_]{1,16}$/.test(name)) {
-    s.error = 'Use 1-16 letters, digits, or _.';
+  if (!/^[A-Za-z0-9 ]{3,12}$/.test(name)) {
+    s.error = 'Use 3-12 letters or digits.';
     sfx('Buzzer1');
     return;
   }
-  netSend(game.net, { t: 'createCharacter', name, class: s.class });
+  netSend(game.net, { t: 'createCharacter', name, class: s.class, gender: s.gender || 'male' });
   s.error = 'Saving...';
   sfx('Decision1');
 }
@@ -287,7 +298,7 @@ function updateCharacterScreen() {
       }
       if (hit(c, b.enter.x, b.enter.y, b.enter.w, b.enter.h)) enterCharacter();
       if (hit(c, b.newBtn.x, b.newBtn.y, b.newBtn.w, b.newBtn.h)) {
-        s.mode = 'create'; s.field = 'name'; s.name = ''; s.error = ''; sfx('Decision1');
+        s.mode = 'create'; s.field = 'name'; s.name = ''; s.gender = 'male'; s.error = ''; sfx('Decision1');
       }
       if (hit(c, b.delBtn.x, b.delBtn.y, b.delBtn.w, b.delBtn.h) && s.characters.length) {
         s.mode = 'delete'; s.error = ''; sfx('Decision1');
@@ -299,6 +310,13 @@ function updateCharacterScreen() {
       }
     } else {
       if (hit(c, b.name.x, b.name.y, b.name.w, b.name.h)) { s.field = 'name'; sfx('Cursor1'); continue; }
+      const mw = Math.floor((b.gender.w - 4) / 2);
+      if (hit(c, b.gender.x, b.gender.y, mw, b.gender.h)) {
+        s.gender = 'male'; s.field = 'gender'; sfx('Cursor1'); continue;
+      }
+      if (hit(c, b.gender.x + mw + 4, b.gender.y, b.gender.w - mw - 4, b.gender.h)) {
+        s.gender = 'female'; s.field = 'gender'; sfx('Cursor1'); continue;
+      }
       for (let i = 0; i < s.classes.length; i++) {
         const y = b.classY + i * b.rowH;
         if (hit(c, b.classX, y, b.classW, b.rowH)) {
@@ -314,7 +332,7 @@ function updateCharacterScreen() {
   for (const k of queue) {
     if (s.mode === 'select') {
       if (k === 'Enter') enterCharacter();
-      else if (k === 'n' || k === 'N') { s.mode = 'create'; s.field = 'name'; s.name = ''; s.error = ''; sfx('Decision1'); }
+      else if (k === 'n' || k === 'N') { s.mode = 'create'; s.field = 'name'; s.name = ''; s.gender = 'male'; s.error = ''; sfx('Decision1'); }
       else if ((k === 'ArrowUp' || k === 'w') && s.characters.length) {
         s.selected = Math.max(0, s.selected - 1); s.scroll = Math.min(s.scroll, s.selected); sfx('Cursor1');
       } else if ((k === 'ArrowDown' || k === 's') && s.characters.length) {
@@ -327,11 +345,21 @@ function updateCharacterScreen() {
       else if (k === 'y' || k === 'Y' || k === 'Enter') deleteCharacter();
     } else {
       if (k === 'Escape' && s.characters.length) { s.mode = 'select'; s.field = 'list'; s.error = ''; sfx('Cancel1'); }
-      else if (k === 'Tab') { s.field = s.field === 'name' ? 'class' : 'name'; sfx('Cursor1'); }
+      else if (k === 'Tab') {
+        if (s.field === 'name') s.field = 'gender';
+        else if (s.field === 'gender') s.field = 'class';
+        else s.field = 'name';
+        sfx('Cursor1');
+      }
       else if (k === 'Enter') createCharacter();
       else if (s.field === 'name') {
         if (k === 'Backspace') s.name = s.name.slice(0, -1);
-        else if (/^[A-Za-z0-9_]$/.test(k) && s.name.length < 16) { s.name += k; s.error = ''; }
+        else if (/^[A-Za-z0-9]$/.test(k) && s.name.length < 12) { s.name += k; s.error = ''; }
+      } else if (s.field === 'gender') {
+        if (k === 'ArrowLeft' || k === 'ArrowRight' || k === 'ArrowUp' || k === 'ArrowDown' || k === 'w' || k === 's' || k === 'a' || k === 'd') {
+          s.gender = s.gender === 'male' ? 'female' : 'male';
+          sfx('Cursor1');
+        }
       } else if (k === 'ArrowUp' || k === 'w') {
         s.classCursor = (s.classCursor + s.classes.length - 1) % s.classes.length; s.class = s.classes[s.classCursor]; sfx('Cursor1');
       } else if (k === 'ArrowDown' || k === 's') {
@@ -347,17 +375,21 @@ function drawCharacterScreen() {
   if (img.title) ctx.drawImage(img.title, (W - 320) / 2, -20, 320, 240);
   ctx.fillStyle = 'rgba(0,0,0,.55)'; ctx.fillRect(0, 0, W, H);
   drawModalWindow(b.x, b.y, b.w, b.h);
-  text('Characters', b.x + 14, b.y + 12, '#ffe080');
+  if (s.mode !== 'create') {
+    text('Characters', b.x + 14, b.y + 12, '#ffe080');
+  }
   drawWindow(b.login.x, b.login.y, b.login.w, b.login.h);
   text('Logout', b.login.x + 11, b.login.y + 5);
-  drawWindow(b.list.x, b.list.y, b.list.w, b.list.h);
-  if (!s.characters.length) text('No characters', b.list.x + 10, b.list.y + 10, '#9ab');
-  for (let row = 0; row < b.visible; row++) {
-    const i = s.scroll + row, ch = s.characters[i];
-    if (!ch) continue;
-    const y = b.list.y + row * b.list.rowH;
-    if (s.mode === 'select' && i === s.selected) drawCursor(b.list.x + 2, y + 1, b.list.w - 4, b.list.rowH - 2);
-    text(ch.name, b.list.x + 8, y + 4, i === s.selected ? '#ffe080' : '#fff');
+  if (s.mode !== 'create') {
+    drawWindow(b.list.x, b.list.y, b.list.w, b.list.h);
+    if (!s.characters.length) text('No characters', b.list.x + 10, b.list.y + 10, '#9ab');
+    for (let row = 0; row < b.visible; row++) {
+      const i = s.scroll + row, ch = s.characters[i];
+      if (!ch) continue;
+      const y = b.list.y + row * b.list.rowH;
+      if (s.mode === 'select' && i === s.selected) drawCursor(b.list.x + 2, y + 1, b.list.w - 4, b.list.rowH - 2);
+      text(ch.name, b.list.x + 8, y + 4, i === s.selected ? '#ffe080' : '#fff');
+    }
   }
   if (s.mode === 'select') {
     const ch = selectedCharacter();
@@ -368,7 +400,7 @@ function drawCharacterScreen() {
       text(ch.map ? `Map ${ch.map}` : 'Map city', b.detail.x, b.detail.y + 50, '#9cf');
       text(`${ch.gold || 0} gold`, b.detail.x, b.detail.y + 66, '#ffd27a');
       drawWindow(b.preview.x, b.preview.y, b.preview.w, b.preview.h);
-      drawActor({ class: ch.class || 'Knight', dir: 'down', moving: false, anim: 1 }, b.preview.x + 21, b.preview.y + 39);
+      drawActor({ class: ch.class || 'Knight', gender: ch.gender, dir: 'down', moving: false, anim: 1 }, b.preview.x + 21, b.preview.y + 39);
     }
     drawWindow(b.enter.x, b.enter.y, b.enter.w, b.enter.h);
     text('Enter World', b.enter.x + 12, b.enter.y + 6);
@@ -391,6 +423,24 @@ function drawCharacterScreen() {
     text('New Character', b.detail.x, b.detail.y, '#ffe080');
     text('Name', b.name.x, b.name.y - 11, '#bcd');
     drawLoginField(b.name, s.name, s.field === 'name');
+    text('Gender', b.gender.x, b.name.y - 11, '#bcd');
+    const mActive = s.gender === 'male';
+    const fActive = s.gender === 'female';
+    const isGenderFocused = s.field === 'gender';
+    const mx = b.gender.x, my = b.gender.y, mw = Math.floor((b.gender.w - 4) / 2), mh = b.gender.h;
+    ctx.fillStyle = 'rgba(10,20,30,.6)';
+    ctx.fillRect(mx, my, mw, mh);
+    ctx.strokeStyle = mActive ? '#ffe080' : (isGenderFocused ? '#4b617a' : '#263a4d');
+    ctx.strokeRect(mx + 0.5, my + 0.5, mw - 1, mh - 1);
+    text('Male', mx + (mw - textWidth('Male')) / 2, my + 4, mActive ? '#ffe080' : '#8ab');
+
+    const fx = b.gender.x + mw + 4, fy = b.gender.y, fw = b.gender.w - mw - 4, fh = b.gender.h;
+    ctx.fillStyle = 'rgba(10,20,30,.6)';
+    ctx.fillRect(fx, fy, fw, fh);
+    ctx.strokeStyle = fActive ? '#ffe080' : (isGenderFocused ? '#4b617a' : '#263a4d');
+    ctx.strokeRect(fx + 0.5, fy + 0.5, fw - 1, fh - 1);
+    text('Female', fx + (fw - textWidth('Female')) / 2, fy + 4, fActive ? '#ffe080' : '#8ab');
+
     text('Class', b.classX, b.classY - 11, '#bcd');
     s.classes.forEach((cls, i) => {
       const y = b.classY + i * b.rowH;
@@ -398,7 +448,7 @@ function drawCharacterScreen() {
       text(cls, b.classX + 8, y + 3, cls === s.class ? '#ffe080' : '#fff');
     });
     drawWindow(b.preview.x, b.preview.y, b.preview.w, b.preview.h);
-    drawActor({ class: s.class, dir: 'down', moving: false, anim: 1 },
+    drawActor({ class: s.class, gender: s.gender, dir: 'down', moving: false, anim: 1 },
       b.preview.x + 21, b.preview.y + 39);
     if (s.class === 'Archer') {
       text('Starts with a Short Bow', b.classX, b.classY + s.classes.length * b.rowH + 6, '#9ab');
@@ -411,7 +461,7 @@ function drawCharacterScreen() {
       text('Back', b.back.x + 16, b.back.y + 6);
     }
   }
-  if (s.error) text(s.error, b.x + 14, b.y + b.h - 58, '#f76');
+  if (s.error) text(s.error, b.x + (b.w - textWidth(s.error)) / 2, b.y + b.h - 58, '#f76');
 }
 
 // hard-set the local hero from an authoritative server state
@@ -452,6 +502,7 @@ function onSnapshot(m) {
   h.cheats = you.cheats || {};
   game.adminBans = game.isAdmin ? (m.banLists || { accounts: [], characters: [] }) : null;
   h.class = you.class || h.class || '';
+  h.gender = you.gender || h.gender || 'male';
   h.hair = you.hair || h.hair;
   h.cloth = you.cloth || h.cloth;
   h.skillPoints = you.skillPts || 0;
@@ -531,6 +582,7 @@ function onSnapshot(m) {
     if (v.tx !== undefined) p.tx = v.tx;
     if (v.ty !== undefined) p.ty = v.ty;
     p.hp = v.hp; p.maxhp = v.maxhp; p.name = v.name || v.id; p.class = v.class || '';
+    p.gender = v.gender || 'male';
     p.hair = v.hair || p.hair; p.cloth = v.cloth || p.cloth;
     p.dead = !!v.dead; p.pvp = !!v.pvp;
   }
@@ -608,6 +660,7 @@ function onSnapshot(m) {
   game.corpses = (m.corpses || []).map(v => normalizeCorpse({
     map: game.mapId, tx: v.tx, ty: v.ty, name: v.name || '',
     class: v.class || v.Class || '', hair: v.hair || v.Hair || '', cloth: v.cloth || v.Cloth || '',
+    gender: v.gender || v.Gender || 'male',
     items: v.items || {}, decayed: !!v.decayed,
   }));
   if (openCorpse) {

@@ -46,8 +46,9 @@ type inMsg struct {
 	Slot  int     `json:"slot"`  // hotbar slot for cast
 	Id    string  `json:"id"`    // item id for useItem/equip/dropItem
 	Bslot string  `json:"bslot"` // body slot for equip/unequip
-	Hair  string  `json:"hair"`  // character creation color
-	Cloth string  `json:"cloth"` // character creation color
+	Hair   string  `json:"hair"`  // character creation color
+	Cloth  string  `json:"cloth"` // character creation color
+	Gender string  `json:"gender"`// character creation gender
 	V     bool    `json:"v"`     // toggle value (e.g. autoloot)
 	Tx    int     `json:"tx"`    // tile for takeLoot/takeCorpse
 	Ty    int     `json:"ty"`
@@ -141,6 +142,7 @@ type playerView struct {
 	CombatLog    float64               `json:"combatLog"`
 	Hair         string                `json:"hair"`
 	Cloth        string                `json:"cloth"`
+	Gender       string                `json:"gender"`
 	SkillPts     int                   `json:"skillPts"`
 	SkillLv      map[string]int        `json:"skillLv,omitempty"`
 	Quests       map[string]QuestState `json:"quests,omitempty"`
@@ -171,6 +173,7 @@ type welcomeMsg struct {
 	Class      string             `json:"class"`
 	Hair       string             `json:"hair"`
 	Cloth      string             `json:"cloth"`
+	Gender     string             `json:"gender"`
 	Map        string             `json:"map"`
 	Admin      bool               `json:"admin,omitempty"`
 	Tx         int                `json:"tx,omitempty"`
@@ -182,13 +185,14 @@ type welcomeMsg struct {
 	Characters []characterSummary `json:"characters,omitempty"`
 }
 type characterSummary struct {
-	Name  string `json:"name"`
-	Class string `json:"class"`
-	Map   string `json:"map"`
-	Lv    int    `json:"lv"`
-	Gold  int    `json:"gold"`
-	Hair  string `json:"hair,omitempty"`
-	Cloth string `json:"cloth,omitempty"`
+	Name   string `json:"name"`
+	Class  string `json:"class"`
+	Map    string `json:"map"`
+	Lv     int    `json:"lv"`
+	Gold   int    `json:"gold"`
+	Hair   string `json:"hair,omitempty"`
+	Cloth  string `json:"cloth,omitempty"`
+	Gender string `json:"gender,omitempty"`
 }
 type characterListMsg struct {
 	T          string             `json:"t"`
@@ -254,6 +258,7 @@ type corpseView struct {
 	Class   string         `json:"class,omitempty"`
 	Hair    string         `json:"hair,omitempty"`
 	Cloth   string         `json:"cloth,omitempty"`
+	Gender  string         `json:"gender,omitempty"`
 	Items   map[string]int `json:"items"`
 	Decayed bool           `json:"decayed"`
 }
@@ -271,6 +276,7 @@ type Player struct {
 	class    string
 	hair     string
 	cloth    string
+	gender   string
 	admin    bool
 	cheats   adminCheats
 	conn     netConn
@@ -342,7 +348,7 @@ func (p *Player) view() playerView {
 		HP: p.hp, MaxHP: p.maxhp, MP: p.mp, MaxMP: p.maxmp, Lv: p.lv, Exp: p.exp, Gold: p.gold, Kills: p.kills,
 		Lock: p.lockID, Slots: p.slots, Follow: p.follow, FollowTarget: p.followTarget, Dead: p.dead, DeathCause: p.deathCause,
 		Pvp: p.pvp, PvpTarget: p.pvpTarget, CombatLog: combatLogoutRemaining(p),
-		Hair: p.hair, Cloth: p.cloth, SkillPts: p.skillPoints, SkillLv: skillLv,
+		Hair: p.hair, Cloth: p.cloth, Gender: p.gender, SkillPts: p.skillPoints, SkillLv: skillLv,
 		Quests: cloneQuestStates(p.quests), Admin: p.admin, Cheats: p.cheats,
 	}
 }
@@ -381,7 +387,7 @@ func characterSummaries(chars []*charState) []characterSummary {
 		}
 		out = append(out, characterSummary{
 			Name: ch.Name, Class: ch.Class, Map: ch.MapID, Lv: ch.Lv, Gold: ch.Gold,
-			Hair: ch.Hair, Cloth: ch.Cloth,
+			Hair: ch.Hair, Cloth: ch.Cloth, Gender: ch.Gender,
 		})
 	}
 	return out
@@ -410,7 +416,7 @@ func upsertCharacter(chars []*charState, ch *charState) []*charState {
 	return append(chars, next)
 }
 
-func newCharacterState(name, class, hair, cloth string) *charState {
+func newCharacterState(name, class, gender, hair, cloth string) *charState {
 	p := &Player{dir: "down", friends: map[string]bool{}}
 	p.mapID, p.tx, p.ty = spawn.mapID, spawn.tx, spawn.ty
 	p.px, p.py = float64(p.tx*TS), float64(p.ty*TS)
@@ -424,6 +430,10 @@ func newCharacterState(name, class, hair, cloth string) *charState {
 		p.bag["arrow1"] = 50
 	}
 	p.name, p.class = name, class
+	p.gender = gender
+	if p.gender == "" {
+		p.gender = "male"
+	}
 	p.hair, p.cloth = sanitizeColor(hair, defaultHair), sanitizeColor(cloth, defaultCloth)
 	return charStateOf(p)
 }
@@ -442,14 +452,15 @@ func writeCharacterList(c netConn, chars []*charState, selected, errMsg string) 
 
 func writeWelcome(c netConn, user string, ch *charState, chars []*charState, needChar bool) {
 	mapID, tx, ty, dir := spawn.mapID, spawn.tx, spawn.ty, "down"
-	name, class, hair, cloth := "", "", defaultHair, defaultCloth
+	name, class, gender, hair, cloth := "", "", "male", defaultHair, defaultCloth
 	if ch != nil {
 		mapID, tx, ty, dir = ch.MapID, ch.Tx, ch.Ty, ch.Dir
 		name, class = ch.Name, ch.Class
+		gender = ch.Gender
 		hair, cloth = ch.Hair, ch.Cloth
 	}
 	writeJSON(c, welcomeMsg{
-		T: "welcome", ID: user, Name: name, Class: class, Hair: hair, Cloth: cloth, Map: mapID, Admin: isAdminUser(user), Tx: tx, Ty: ty, Dir: dir,
+		T: "welcome", ID: user, Name: name, Class: class, Hair: hair, Cloth: cloth, Gender: gender, Map: mapID, Admin: isAdminUser(user), Tx: tx, Ty: ty, Dir: dir,
 		Tick: tickHz, NeedChar: needChar, Classes: characterClasses, Characters: characterSummaries(chars),
 	})
 }
@@ -920,7 +931,7 @@ func (h *Hub) run() {
 			for _, c := range list {
 				cViews[mapID] = append(cViews[mapID], corpseView{
 					Tx: c.tx, Ty: c.ty, Name: c.name, Class: c.class,
-					Hair: c.hair, Cloth: c.cloth, Items: c.items, Decayed: c.decayed,
+					Hair: c.hair, Cloth: c.cloth, Gender: c.gender, Items: c.items, Decayed: c.decayed,
 				})
 			}
 		}
@@ -1326,14 +1337,19 @@ readloop:
 					writeWelcome(c, user, nil, chars, true)
 				case "createCharacter":
 					if !validName(m.Name) || !validClass(m.Class) {
-						writeCharacterList(c, chars, "", "Choose a 1-16 name and a valid class.")
+						writeCharacterList(c, chars, "", "Choose a 3-12 alphanumeric name.")
 						continue
 					}
-					if findCharacter(chars, m.Name) != nil {
-						writeCharacterList(c, chars, m.Name, "That character already exists.")
+					exists, err := store.CharacterExists(m.Name)
+					if err != nil {
+						writeCharacterList(c, chars, "", "Could not verify character name.")
 						continue
 					}
-					ch := newCharacterState(m.Name, m.Class, m.Hair, m.Cloth)
+					if exists {
+						writeCharacterList(c, chars, "", "That character name is already taken.")
+						continue
+					}
+					ch := newCharacterState(m.Name, m.Class, m.Gender, m.Hair, m.Cloth)
 					if err := store.Save(user, ch); err != nil {
 						writeCharacterList(c, chars, "", "Could not save character.")
 						continue
