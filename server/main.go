@@ -40,7 +40,7 @@ func clampInt(v, lo, hi int) int {
 type inMsg struct {
 	T     string  `json:"t"`   // "move" | "moveTo" | "attack" | "lockAt" | ...
 	Seq   int     `json:"seq"` // client input sequence, echoed back for reconciliation
-	Dir   string  `json:"dir"` // "up"|"down"|"left"|"right"|"" (stop)
+	Dir   string  `json:"dir"` // "up"|"down"|"left"|"right"|"upleft"|"upright"|"downleft"|"downright"|"" (stop)
 	X     float64 `json:"x"`   // world point for lockAt
 	Y     float64 `json:"y"`
 	Slot  int     `json:"slot"`  // hotbar slot for cast
@@ -296,6 +296,12 @@ type Player struct {
 	path        []tile
 	pathGoal    tile
 	hasPathGoal bool
+	// squeeze wind-up: brief effort pause when cutting between two diagonal solids
+	squeezeT        float64
+	squeezeNX       int
+	squeezeNY       int
+	squeezeDir      string
+	squeezeFromPath bool
 
 	// combat state
 	hp, mp           float64
@@ -1096,6 +1102,11 @@ func (h *Hub) applyIntent(p *Player, m inMsg) {
 			writeJSON(p.conn, pongMsg{T: "pong", Ts: m.Ts})
 		}
 	case "move":
+		if m.Dir != "" {
+			if _, ok := dirVec[m.Dir]; !ok {
+				m.Dir = ""
+			}
+		}
 		p.moveDir = m.Dir
 		p.ackSeq = m.Seq
 		if m.Dir != "" {

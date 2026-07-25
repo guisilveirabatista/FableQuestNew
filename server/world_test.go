@@ -33,10 +33,13 @@ func TestBlocked(t *testing.T) {
 
 // hop steps one tile in dir, then coasts (no input) until the player settles —
 // a single deliberate tile move, the way the client walks when you tap a key.
+// Holds dir until the step actually begins so squeeze wind-ups can finish.
 func hop(p *Player, dir string) {
 	h := newHub()
-	h.stepPlayer(p, dir, 1.0/tickHz) // the step that begins the hop
-	for i := 0; i < 20 && p.moving; i++ {
+	for i := 0; i < 40 && !p.moving; i++ {
+		h.stepPlayer(p, dir, 1.0/tickHz)
+	}
+	for i := 0; i < 40 && p.moving; i++ {
 		h.stepPlayer(p, "", 1.0/tickHz) // coast to the tile boundary
 	}
 }
@@ -76,6 +79,82 @@ func TestCollisionStopsAtWell(t *testing.T) {
 	}
 	if p.dir != "up" {
 		t.Fatalf("expected to still be facing up after bumping the well, got %q", p.dir)
+	}
+}
+
+// Field wells sit on a diagonal at (5,20) and (6,21). With only 4-way movement
+// those two solids form a virtual wall between (5,21) and (6,20). Tibia-style
+// 8-way walking lets the player squeeze through in a single diagonal step.
+func TestDiagonalSqueezeBetweenFieldWells(t *testing.T) {
+	if !blocked("field", 5, 20) || !blocked("field", 6, 21) {
+		t.Fatal("expected both field wells to be solid")
+	}
+	p := &Player{mapID: "field", tx: 5, ty: 21, px: 5 * TS, py: 21 * TS, dir: "down"}
+	hop(p, "upright") // step between the wells onto (6,20)
+	if p.tx != 6 || p.ty != 20 || p.moving {
+		t.Fatalf("expected diagonal squeeze to (6,20), got (%d,%d) moving=%v", p.tx, p.ty, p.moving)
+	}
+	// reverse direction still works
+	hop(p, "downleft")
+	if p.tx != 5 || p.ty != 21 || p.moving {
+		t.Fatalf("expected reverse diagonal squeeze to (5,21), got (%d,%d) moving=%v", p.tx, p.ty, p.moving)
+	}
+}
+
+func TestDiagonalSqueezeHasEffortDelay(t *testing.T) {
+	h := newHub()
+	p := &Player{mapID: "field", tx: 5, ty: 21, px: 5 * TS, py: 21 * TS, dir: "down"}
+	// First tick only starts the wind-up — player must not have moved yet.
+	h.stepPlayer(p, "upright", 1.0/tickHz)
+	if p.tx != 5 || p.ty != 21 || p.moving {
+		t.Fatalf("squeeze should not move on the first tick, got (%d,%d) moving=%v", p.tx, p.ty, p.moving)
+	}
+	if p.squeezeT <= 0 {
+		t.Fatal("expected squeeze wind-up timer to be running")
+	}
+	// Hold through half a second of effort (plus one tick of slack).
+	ticks := int(squeezeDelay*tickHz) + 2
+	for i := 0; i < ticks && !p.moving; i++ {
+		h.stepPlayer(p, "upright", 1.0/tickHz)
+	}
+	if !p.moving && (p.tx != 6 || p.ty != 20) {
+		t.Fatalf("after %.1fs effort delay, expected to start stepping to (6,20); at (%d,%d) squeezeT=%v",
+			squeezeDelay, p.tx, p.ty, p.squeezeT)
+	}
+	// Ordinary diagonal (not a squeeze) must not incur the delay.
+	p2 := &Player{mapID: "city", tx: 19, ty: 16, px: 19 * TS, py: 16 * TS, dir: "down"}
+	h.stepPlayer(p2, "upright", 1.0/tickHz)
+	if p2.squeezeT > 0 {
+		t.Fatal("open diagonal step should not start a squeeze wind-up")
+	}
+	if !p2.moving || p2.tx != 20 || p2.ty != 15 {
+		t.Fatalf("open diagonal should step immediately to (20,15), got (%d,%d) moving=%v", p2.tx, p2.ty, p2.moving)
+	}
+}
+
+func TestDiagonalStepOntoSolidRejected(t *testing.T) {
+	// From south of the city well, upright would land on the well tile.
+	p := &Player{mapID: "city", tx: 18, ty: 15, px: 18 * TS, py: 15 * TS, dir: "down"}
+	hop(p, "upright") // (19,14) is the well
+	if p.tx != 18 || p.ty != 15 || p.moving {
+		t.Fatalf("diagonal into a solid must fail, got (%d,%d) moving=%v", p.tx, p.ty, p.moving)
+	}
+}
+
+func TestClickPathUsesDiagonalBetweenWells(t *testing.T) {
+	h := newHub()
+	p := &Player{mapID: "field", tx: 5, ty: 21, px: 5 * TS, py: 21 * TS, dir: "down"}
+	h.applyIntent(p, inMsg{T: "moveTo", Tx: 6, Ty: 20})
+	// Allow for the 0.5s squeeze wind-up plus the tile slide.
+	for i := 0; i < 80 && (p.tx != 6 || p.ty != 20 || p.moving); i++ {
+		h.stepPlayer(p, "", 1.0/tickHz)
+	}
+	if p.tx != 6 || p.ty != 20 || p.moving {
+		t.Fatalf("click path should squeeze between wells to (6,20), got (%d,%d) moving=%v", p.tx, p.ty, p.moving)
+	}
+	// The short path is a single diagonal hop — not a long walk around.
+	if len(p.path) != 0 {
+		t.Fatalf("expected path to be fully consumed after one diagonal step, leftover=%v", p.path)
 	}
 }
 

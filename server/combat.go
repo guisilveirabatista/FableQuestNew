@@ -341,7 +341,18 @@ func slashReaches(p *Player, dir string, en *enemy) bool {
 
 func faceToward(p *Player, en *enemy) string {
 	dx, dy := en.px-p.px, en.py-p.py
-	if math.Abs(dx) > math.Abs(dy) {
+	ax, ay := math.Abs(dx), math.Abs(dy)
+	if ax > 4 && ay > 4 {
+		v, h := "up", "left"
+		if dy > 0 {
+			v = "down"
+		}
+		if dx > 0 {
+			h = "right"
+		}
+		return v + h
+	}
+	if ax > ay {
 		if dx > 0 {
 			return "right"
 		}

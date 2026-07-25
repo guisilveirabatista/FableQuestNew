@@ -236,14 +236,33 @@ addEventListener('mouseup', e => {
 });
 function clicked(button) { return clicks.some(c => c.b === button); }
 function dirHeld() {
-  // the most recently pressed direction wins; when it's released the previous
-  // still-held one takes back over (hold D, tap W -> up, release W -> right)
-  if (dirOrder.length) return dirOrder[dirOrder.length - 1];
+  // Combine the latest held vertical + horizontal axes into an 8-way direction
+  // (Tibia-style diagonals). Within one axis, the most recently pressed wins.
+  let vert = null, horiz = null;
+  for (const d of dirOrder) {
+    if (d === 'up' || d === 'down') vert = d;
+    else if (d === 'left' || d === 'right') horiz = d;
+  }
   // a tap quicker than one frame still turns/steps the hero
-  for (const [keys, dir] of [[['ArrowUp', 'w'], 'up'], [['ArrowDown', 's'], 'down'],
-    [['ArrowLeft', 'a'], 'left'], [['ArrowRight', 'd'], 'right']])
-    if (pressed(keys)) return dir;
-  return null;
+  if (!vert && !horiz) {
+    for (const [keys, dir] of [[['ArrowUp', 'w'], 'up'], [['ArrowDown', 's'], 'down'],
+      [['ArrowLeft', 'a'], 'left'], [['ArrowRight', 'd'], 'right']])
+      if (pressed(keys)) {
+        if (dir === 'up' || dir === 'down') vert = dir;
+        else horiz = dir;
+      }
+  } else {
+    if (!vert) {
+      for (const [keys, dir] of [[['ArrowUp', 'w'], 'up'], [['ArrowDown', 's'], 'down']])
+        if (pressed(keys)) vert = dir;
+    }
+    if (!horiz) {
+      for (const [keys, dir] of [[['ArrowLeft', 'a'], 'left'], [['ArrowRight', 'd'], 'right']])
+        if (pressed(keys)) horiz = dir;
+    }
+  }
+  if (vert && horiz) return vert + horiz; // "up"+"left" => "upleft", etc.
+  return vert || horiz || null;
 }
 
 // ---------------------------------------------------------------- windows & text
@@ -1439,7 +1458,7 @@ tintCv.width = 24; tintCv.height = 32;
 const tint = tintCv.getContext('2d');
 function drawTint(sheet, cx, cy, dir, frame, px, py, color, alpha) {
   tint.clearRect(0, 0, 24, 32);
-  tint.drawImage(sheet, cx * 72 + frame * 24, cy * 128 + DIRROW[dir] * 32, 24, 32, 0, 0, 24, 32);
+  tint.drawImage(sheet, cx * 72 + frame * 24, cy * 128 + (DIRROW[dir] ?? DIRROW.down) * 32, 24, 32, 0, 0, 24, 32);
   tint.globalCompositeOperation = 'source-in';
   tint.fillStyle = color;
   tint.fillRect(0, 0, 24, 32);
@@ -1500,7 +1519,10 @@ function drawCorners(x, y, w, h, L) {
   ctx.fillRect(x + w - L, y + h - 1, L, 1); ctx.fillRect(x + w - 1, y + h - L, 1, L);
 }
 
-const SLASH_ROT = { right: 0, down: Math.PI / 2, left: Math.PI, up: -Math.PI / 2 };
+const SLASH_ROT = {
+  right: 0, downright: Math.PI / 4, down: Math.PI / 2, downleft: 3 * Math.PI / 4,
+  left: Math.PI, upleft: -3 * Math.PI / 4, up: -Math.PI / 2, upright: -Math.PI / 4,
+};
 function drawSlash() {
   const h = game.hero, f = game.slashFx;
   ctx.save();
@@ -2677,10 +2699,14 @@ function drawMenu() {
   }
 }
 
-const DIRROW = { up: 0, right: 1, down: 2, left: 3 };
+// Sprites only have 4 facings; map diagonals to the horizontal component.
+const DIRROW = {
+  up: 0, right: 1, down: 2, left: 3,
+  upright: 1, downright: 1, upleft: 3, downleft: 3,
+};
 function drawChar(sheet, cx, cy, dir, frame, px, py) {
   const sx = cx * 72 + Math.floor(frame) % 3 * 24;
-  const sy = cy * 128 + DIRROW[dir] * 32;
+  const sy = cy * 128 + (DIRROW[dir] ?? DIRROW.down) * 32;
   ctx.drawImage(sheet, sx, sy, 24, 32, px - 4, py - 16, 24, 32);
 }
 function actorSprite(a = {}) {

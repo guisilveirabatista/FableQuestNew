@@ -552,7 +552,18 @@ func (h *Hub) playerAtPoint(mapID string, x, y float64, self *Player) *Player {
 
 func faceTowardPlayer(p, o *Player) string {
 	dx, dy := o.px-p.px, o.py-p.py
-	if math.Abs(dx) > math.Abs(dy) {
+	ax, ay := math.Abs(dx), math.Abs(dy)
+	if ax > 4 && ay > 4 {
+		v, h := "up", "left"
+		if dy > 0 {
+			v = "down"
+		}
+		if dx > 0 {
+			h = "right"
+		}
+		return v + h
+	}
+	if ax > ay {
 		if dx > 0 {
 			return "right"
 		}

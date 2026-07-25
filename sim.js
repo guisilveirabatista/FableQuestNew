@@ -5,7 +5,38 @@
 
 const TS = 16, MW = 40, MH = 25;
 const CORPSE_DECAY = 10 * 60;
-const DIRV = { up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0] };
+// 8-directional movement (Tibia-style). Diagonal steps only require the
+// destination tile free, so the hero can squeeze between diagonal obstacles.
+const DIRV = {
+  up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0],
+  upleft: [-1, -1], upright: [1, -1], downleft: [-1, 1], downright: [1, 1],
+};
+const DIR_ORDER = ['up', 'down', 'left', 'right', 'upleft', 'upright', 'downleft', 'downright'];
+// Effort pause when cutting between two diagonally-placed solids (matches server).
+const SQUEEZE_DELAY = 0.5;
+function dirBetween(fx, fy, tx, ty) {
+  const dx = Math.sign(tx - fx), dy = Math.sign(ty - fy);
+  for (const name of DIR_ORDER) {
+    const [vx, vy] = DIRV[name];
+    if (vx === dx && vy === dy) return name;
+  }
+  return 'down';
+}
+function mapSolid(x, y) {
+  if (x < 0 || y < 0 || x >= MW || y >= MH) return true;
+  return cur().blocked.has(x + ',' + y);
+}
+function isDiagonalSqueeze(fx, fy, tx, ty) {
+  const dx = tx - fx, dy = ty - fy;
+  if (Math.abs(dx) !== 1 || Math.abs(dy) !== 1) return false;
+  // Match the server: only map solids count as the "walls" you squeeze between.
+  return mapSolid(fx + dx, fy) && mapSolid(fx, fy + dy);
+}
+function clearSqueeze(h = game.hero) {
+  h.squeezeT = 0;
+  h.squeezeDir = '';
+  h.squeezeFromPath = false;
+}
 const ELDER_QUEST_ID = 'elder_fields';
 const QUESTS = {
   elder_fields: {
@@ -244,7 +275,7 @@ const MAPS = {
       [12, 17], [18, 15], [24, 18], [31, 16], [36, 18], [10, 21], [27, 21], [16, 9]],
     props: [
       ['rock', 4, 9], ['rock', 22, 14], ['rock', 33, 10], ['rock', 15, 19],
-      ['well', 5, 20], ['sign', 11, 11], ['palm', 30, 10], ['palm', 35, 9],
+      ['well', 5, 20],['well', 6, 21], ['sign', 11, 11], ['palm', 30, 10], ['palm', 35, 9],
       ['cactus', 9, 18],
     ],
     deco: [],
@@ -326,6 +357,7 @@ function switchMap(to, tx, ty) {
   const h = game.hero;
   game.mapId = to;
   h.tx = tx; h.ty = ty; h.px = tx * TS; h.py = ty * TS; h.moving = false;
+  clearSqueeze(h);
   game.enemies = [];
   game.spawnT = 1;
   game.lock = null;
@@ -372,7 +404,8 @@ function findPath(sx, sy, tx, ty) {
   const q = [[sx, sy]];
   while (q.length) {
     const [x, y] = q.shift();
-    for (const [dx, dy] of Object.values(DIRV)) {
+    for (const name of DIR_ORDER) {
+      const [dx, dy] = DIRV[name];
       const nx = x + dx, ny = y + dy;
       if (prev.has(key(nx, ny)) || isBlocked(nx, ny) || enemyAt(nx, ny) || playerAt(nx, ny)) continue;
       prev.set(key(nx, ny), [x, y]);
@@ -391,8 +424,9 @@ function startPathTo(tx, ty) {
   const h = game.hero;
   let p = null;
   if (!isBlocked(tx, ty) && !enemyAt(tx, ty) && !playerAt(tx, ty)) p = findPath(h.tx, h.ty, tx, ty);
-  if (!p) { // clicked a wall/NPC/enemy: walk up next to it instead
-    for (const [dx, dy] of Object.values(DIRV)) {
+  if (!p) { // clicked a wall/NPC/enemy: walk up next to it instead (cardinals preferred for adjacency)
+    for (const name of DIR_ORDER) {
+      const [dx, dy] = DIRV[name];
       const nx = tx + dx, ny = ty + dy;
       if (isBlocked(nx, ny) || enemyAt(nx, ny) || playerAt(nx, ny)) continue;
       const q = findPath(h.tx, h.ty, nx, ny);
@@ -427,7 +461,10 @@ function slashReaches(dir, en) {
 
 function faceToward(en) {
   const h = game.hero, dx = en.px - h.px, dy = en.py - h.py;
-  return Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up');
+  const ax = Math.abs(dx), ay = Math.abs(dy);
+  // Face diagonally when both axes are meaningfully offset (tile-scale).
+  if (ax > 4 && ay > 4) return (dy > 0 ? 'down' : 'up') + (dx > 0 ? 'right' : 'left');
+  return ax > ay ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up');
 }
 
 // Skills equipped into the five server-authoritative hotbar slots.
@@ -614,12 +651,68 @@ function faceFollowTargetIfInReach() {
   return true;
 }
 
+function beginHeroStep(h, nx, ny, dir, fromPath, dt) {
+  if (fromPath && game.path && game.path.length && game.path[0][0] === nx && game.path[0][1] === ny) {
+    game.path.shift();
+    if (!game.path.length) game.path = null;
+  }
+  h.dir = dir;
+  h.tx = nx; h.ty = ny; h.moving = true;
+  h.anim += dt * 8.75;
+  clearSqueeze(h);
+}
+
+function commitOrSqueezeHero(h, nx, ny, dir, fromPath, dt) {
+  if (isDiagonalSqueeze(h.tx, h.ty, nx, ny)) {
+    h.squeezeT = SQUEEZE_DELAY;
+    h.squeezeNX = nx; h.squeezeNY = ny;
+    h.squeezeDir = dir;
+    h.squeezeFromPath = fromPath;
+    h.dir = dir;
+    h.anim = 1;
+    return;
+  }
+  beginHeroStep(h, nx, ny, dir, fromPath, dt);
+}
+
+function tickHeroSqueeze(h, dir, dt) {
+  let holding = false;
+  if (h.squeezeFromPath) {
+    holding = !dir && game.path && game.path.length &&
+      game.path[0][0] === h.squeezeNX && game.path[0][1] === h.squeezeNY;
+  } else {
+    holding = dir === h.squeezeDir;
+  }
+  if (!holding) {
+    clearSqueeze(h);
+    return false; // caller should re-process this frame's intent
+  }
+  h.dir = h.squeezeDir;
+  h.squeezeT -= dt;
+  h.anim = 1;
+  if (h.squeezeT > 0) return true;
+  const nx = h.squeezeNX, ny = h.squeezeNY, fromPath = h.squeezeFromPath;
+  const face = h.squeezeDir;
+  clearSqueeze(h);
+  if (isBlocked(nx, ny) || enemyAt(nx, ny) || playerAt(nx, ny)) {
+    if (fromPath && game.path) {
+      const [gx, gy] = game.path[game.path.length - 1];
+      game.path = findPath(h.tx, h.ty, gx, gy);
+    }
+    h.anim = 1;
+    return true;
+  }
+  beginHeroStep(h, nx, ny, face, fromPath, dt);
+  return true;
+}
+
 // Hero locomotion used for client prediction. The Go server remains
 // authoritative and reconciles this predicted position through snapshots.
 function stepHero(dt) {
   const h = game.hero;
   if (h.dead || game.death) return false;
   if (h.moving) {
+    clearSqueeze(h);
     const speed = (overloaded() ? 32 : (cheatEnabled('superSpeed') ? 140 : 70)) * dt; // trudge when the pack is too heavy
     const gx = h.tx * TS, gy = h.ty * TS;
     h.px += Math.sign(gx - h.px) * Math.min(speed, Math.abs(gx - h.px));
@@ -631,22 +724,32 @@ function stepHero(dt) {
       const exit = cur().exits[h.tx + ',' + h.ty];
       if (exit) { switchMap(...exit); return true; }
     }
+  } else if (h.squeezeT > 0) {
+    const dir = game.moveDir;
+    if (tickHeroSqueeze(h, dir, dt)) return false;
+    // Intent changed mid-squeeze: fall through and process the new intent.
+    return stepHero(dt);
   } else {
     const dir = game.moveDir; // set by the 'moveDir' intent (null when a UI panel owns input)
     if (dir) {
       game.path = null; // keyboard overrides click-to-move
+      clearSqueeze(h);
       h.dir = dir;
       h.anim += dt * 8.75; // keeps stepping against walls, like RM2k
       const d = DIRV[dir];
-      const nx = h.tx + d[0], ny = h.ty + d[1];
-      if (!isBlocked(nx, ny) && !enemyAt(nx, ny) && !playerAt(nx, ny)) { h.tx = nx; h.ty = ny; h.moving = true; }
+      if (d) {
+        const nx = h.tx + d[0], ny = h.ty + d[1];
+        if (!isBlocked(nx, ny) && !enemyAt(nx, ny) && !playerAt(nx, ny)) {
+          commitOrSqueezeHero(h, nx, ny, dir, false, dt);
+        } else h.anim = 1;
+      } else h.anim = 1;
     } else if (game.path) { // click-to-move keeps walking under any UI
       const [nx, ny] = game.path[0];
-      h.dir = nx > h.tx ? 'right' : nx < h.tx ? 'left' : ny > h.ty ? 'down' : 'up';
+      h.dir = dirBetween(h.tx, h.ty, nx, ny);
       if (!isBlocked(nx, ny) && !enemyAt(nx, ny) && !playerAt(nx, ny)) {
-        game.path.shift();
-        h.tx = nx; h.ty = ny; h.moving = true;
+        commitOrSqueezeHero(h, nx, ny, h.dir, true, dt);
       } else { // something wandered into the route: replan to the same goal
+        clearSqueeze(h);
         const [gx, gy] = game.path[game.path.length - 1];
         game.path = findPath(h.tx, h.ty, gx, gy);
       }
@@ -675,20 +778,29 @@ function stepHero(dt) {
           game.followEngaged = false;
         }
         const hd = dx > 0 ? 'right' : 'left', vd = dy > 0 ? 'down' : 'up';
-        const dirs = Math.abs(dx) > Math.abs(dy) ? [hd, vd] : [vd, hd];
+        const dirs = [];
+        if (dx && dy) dirs.push(vd + hd);
+        if (Math.abs(dx) > Math.abs(dy)) {
+          if (dx) dirs.push(hd);
+          if (dy) dirs.push(vd);
+        } else {
+          if (dy) dirs.push(vd);
+          if (dx) dirs.push(hd);
+        }
         for (const fd of dirs) {
           const dv = DIRV[fd];
-          if (!dx && (fd === 'left' || fd === 'right')) continue;
-          if (!dy && (fd === 'up' || fd === 'down')) continue;
+          if (!dv) continue;
           const nx = h.tx + dv[0], ny = h.ty + dv[1];
           if (isBlocked(nx, ny) || enemyAt(nx, ny) || playerAt(nx, ny)) continue;
-          h.dir = fd;
-          h.tx = nx; h.ty = ny; h.moving = true;
+          commitOrSqueezeHero(h, nx, ny, fd, false, dt);
           break;
         }
       }
-      if (!h.moving) h.anim = 1;
-    } else h.anim = 1; // standing frame
+      if (!h.moving && !(h.squeezeT > 0)) h.anim = 1;
+    } else {
+      clearSqueeze(h);
+      h.anim = 1; // standing frame
+    }
   }
   return false;
 }

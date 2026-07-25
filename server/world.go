@@ -19,11 +19,19 @@ var spawn = struct {
 	tx, ty int
 }{"city", 19, 16}
 
+// 8-directional movement (Tibia-style). Diagonal steps are allowed whenever the
+// destination tile is free — including when both orthogonal neighbours are solid
+// — so the player can squeeze between obstacles placed on a diagonal.
 var dirVec = map[string][2]int{
 	"up": {0, -1}, "down": {0, 1}, "left": {-1, 0}, "right": {1, 0},
+	"upleft": {-1, -1}, "upright": {1, -1}, "downleft": {-1, 1}, "downright": {1, 1},
 }
 
-var dirOrder = []string{"up", "down", "left", "right"}
+// dirOrder prefers cardinals first, then diagonals (stable BFS tie-break).
+var dirOrder = []string{
+	"up", "down", "left", "right",
+	"upleft", "upright", "downleft", "downright",
+}
 
 type exit struct {
 	to     string
@@ -91,7 +99,7 @@ func buildMaps() {
 			block(field, t[0]+d[0], t[1]+d[1])
 		}
 	}
-	fieldProps := [][2]int{{4, 9}, {22, 14}, {33, 10}, {15, 19}, {5, 20}, {11, 11}, {30, 10}, {35, 9}, {9, 18}}
+	fieldProps := [][2]int{{4, 9}, {22, 14}, {33, 10}, {15, 19}, {5, 20}, {6, 21}, {11, 11}, {30, 10}, {35, 9}, {9, 18}}
 	for _, p := range fieldProps {
 		block(field, p[0], p[1])
 	}
@@ -211,29 +219,7 @@ func (h *Hub) followDir(p *Player) string {
 			p.dir = faceTowardPlayer(p, o)
 			return "" // one square around: just face (don't chase...); rule activates only after first close
 		}
-		hd, vd := "left", "up"
-		if dx > 0 {
-			hd = "right"
-		}
-		if dy > 0 {
-			vd = "down"
-		}
-		dirs := []string{vd, hd}
-		if abs(dx) > abs(dy) {
-			dirs = []string{hd, vd}
-		}
-		for _, fd := range dirs {
-			if dx == 0 && (fd == "left" || fd == "right") {
-				continue
-			}
-			if dy == 0 && (fd == "up" || fd == "down") {
-				continue
-			}
-			d := dirVec[fd]
-			nx, ny := p.tx+d[0], p.ty+d[1]
-			if blocked(p.mapID, nx, ny) || h.occupied(p.mapID, nx, ny, p) {
-				continue
-			}
+		if fd := h.chaseStep(p, dx, dy); fd != "" {
 			return fd
 		}
 		if within {
@@ -267,29 +253,7 @@ func (h *Hub) followDir(p *Player) string {
 			p.dir = faceTowardPlayer(p, o)
 			return "" // one square around: just face (don't chase...); rule activates only after first close
 		}
-		hd, vd := "left", "up"
-		if dx > 0 {
-			hd = "right"
-		}
-		if dy > 0 {
-			vd = "down"
-		}
-		dirs := []string{vd, hd}
-		if abs(dx) > abs(dy) {
-			dirs = []string{hd, vd}
-		}
-		for _, fd := range dirs {
-			if dx == 0 && (fd == "left" || fd == "right") {
-				continue
-			}
-			if dy == 0 && (fd == "up" || fd == "down") {
-				continue
-			}
-			d := dirVec[fd]
-			nx, ny := p.tx+d[0], p.ty+d[1]
-			if blocked(p.mapID, nx, ny) || h.occupied(p.mapID, nx, ny, p) {
-				continue
-			}
+		if fd := h.chaseStep(p, dx, dy); fd != "" {
 			return fd
 		}
 		if within {
@@ -322,29 +286,7 @@ func (h *Hub) followDir(p *Player) string {
 		p.dir = faceToward(p, en)
 		return "" // one square around: just face (don't chase...); rule activates only after first close
 	}
-	hd, vd := "left", "up"
-	if dx > 0 {
-		hd = "right"
-	}
-	if dy > 0 {
-		vd = "down"
-	}
-	dirs := []string{vd, hd}
-	if abs(dx) > abs(dy) {
-		dirs = []string{hd, vd}
-	}
-	for _, fd := range dirs {
-		if dx == 0 && (fd == "left" || fd == "right") {
-			continue
-		}
-		if dy == 0 && (fd == "up" || fd == "down") {
-			continue
-		}
-		d := dirVec[fd]
-		nx, ny := p.tx+d[0], p.ty+d[1]
-		if blocked(p.mapID, nx, ny) || h.occupied(p.mapID, nx, ny, p) {
-			continue
-		}
+	if fd := h.chaseStep(p, dx, dy); fd != "" {
 		return fd
 	}
 	if within {
@@ -354,6 +296,42 @@ func (h *Hub) followDir(p *Player) string {
 	}
 	if within {
 		p.dir = faceToward(p, en)
+	}
+	return ""
+}
+
+// chaseStep picks the next walk direction toward (dx,dy) tile offset from the
+// player. Prefers a diagonal step when both axes need progress (Tibia-style).
+func (h *Hub) chaseStep(p *Player, dx, dy int) string {
+	hd, vd := "left", "up"
+	if dx > 0 {
+		hd = "right"
+	}
+	if dy > 0 {
+		vd = "down"
+	}
+	var dirs []string
+	switch {
+	case dx != 0 && dy != 0:
+		// "up"+"left" => "upleft", etc.
+		dirs = []string{vd + hd}
+		if abs(dx) > abs(dy) {
+			dirs = append(dirs, hd, vd)
+		} else {
+			dirs = append(dirs, vd, hd)
+		}
+	case dx != 0:
+		dirs = []string{hd}
+	case dy != 0:
+		dirs = []string{vd}
+	}
+	for _, fd := range dirs {
+		d := dirVec[fd]
+		nx, ny := p.tx+d[0], p.ty+d[1]
+		if blocked(p.mapID, nx, ny) || h.occupied(p.mapID, nx, ny, p) {
+			continue
+		}
+		return fd
 	}
 	return ""
 }
@@ -470,22 +448,51 @@ func clearPath(p *Player) {
 	p.hasPathGoal = false
 }
 
-func dirBetween(fromX, fromY, toX, toY int) string {
-	switch {
-	case toX > fromX:
-		return "right"
-	case toX < fromX:
-		return "left"
-	case toY > fromY:
-		return "down"
-	default:
-		return "up"
+func clearSqueeze(p *Player) {
+	p.squeezeT = 0
+	p.squeezeDir = ""
+	p.squeezeFromPath = false
+}
+
+// squeezeDelay is how long a player spends straining to fit between two
+// diagonally-placed solid obstacles before the step is allowed.
+const squeezeDelay = 0.5
+
+// isDiagonalSqueeze reports whether stepping from (fx,fy) to (tx,ty) is a
+// diagonal move whose two orthogonal intermediate tiles are both solid — the
+// classic "squeeze between obstacles" case.
+func isDiagonalSqueeze(mapID string, fx, fy, tx, ty int) bool {
+	dx, dy := tx-fx, ty-fy
+	if abs(dx) != 1 || abs(dy) != 1 {
+		return false
 	}
+	return blocked(mapID, fx+dx, fy) && blocked(mapID, fx, fy+dy)
+}
+
+func dirBetween(fromX, fromY, toX, toY int) string {
+	dx, dy := 0, 0
+	if toX > fromX {
+		dx = 1
+	} else if toX < fromX {
+		dx = -1
+	}
+	if toY > fromY {
+		dy = 1
+	} else if toY < fromY {
+		dy = -1
+	}
+	for name, v := range dirVec {
+		if v[0] == dx && v[1] == dy {
+			return name
+		}
+	}
+	return "down"
 }
 
 // stepPlayer advances one player by dt, matching sim.js advanceWorld()'s hero
 // block: integrate toward the target tile while moving, else step to the next
 // tile in the desired direction if it isn't blocked or occupied (honoring exits).
+// Diagonal squeezes between two solid obstacles incur a brief effort delay.
 func (h *Hub) stepPlayer(p *Player, moveDir string, dt float64) {
 	base := 70.0
 	if adminCheatEnabled(p, "superSpeed") {
@@ -497,6 +504,7 @@ func (h *Hub) stepPlayer(p *Player, moveDir string, dt float64) {
 	speed := base * dt
 	switch {
 	case p.moving:
+		clearSqueeze(p)
 		gx, gy := float64(p.tx*TS), float64(p.ty*TS)
 		p.px += sign(gx-p.px) * math.Min(speed, math.Abs(gx-p.px))
 		p.py += sign(gy-p.py) * math.Min(speed, math.Abs(gy-p.py))
@@ -517,15 +525,22 @@ func (h *Hub) stepPlayer(p *Player, moveDir string, dt float64) {
 				}
 			}
 		}
+	case p.squeezeT > 0:
+		h.tickSqueeze(p, moveDir, dt)
 	case moveDir != "":
 		clearPath(p)
+		clearSqueeze(p)
+		d, ok := dirVec[moveDir]
+		if !ok {
+			p.anim = 1
+			break
+		}
 		p.dir = moveDir
-		d := dirVec[moveDir]
 		nx, ny := p.tx+d[0], p.ty+d[1]
+		// Destination-only collision: diagonal squeeze between solid tiles is allowed
+		// (Tibia-style), so no orthogonal "corner" checks are applied here.
 		if !blocked(p.mapID, nx, ny) && !h.occupied(p.mapID, nx, ny, p) {
-			p.tx, p.ty = nx, ny
-			p.moving = true
-			p.anim += dt * 8.75
+			h.commitOrSqueeze(p, nx, ny, moveDir, false, dt)
 		} else {
 			p.anim = 1
 		}
@@ -533,20 +548,85 @@ func (h *Hub) stepPlayer(p *Player, moveDir string, dt float64) {
 		next := p.path[0]
 		p.dir = dirBetween(p.tx, p.ty, next.x, next.y)
 		if h.walkable(p.mapID, next.x, next.y, p) {
-			p.path = p.path[1:]
-			p.tx, p.ty = next.x, next.y
-			p.moving = true
-			p.anim += dt * 8.75
-			if len(p.path) == 0 {
-				clearPath(p)
-			}
+			h.commitOrSqueeze(p, next.x, next.y, p.dir, true, dt)
 		} else {
+			clearSqueeze(p)
 			h.replanPath(p)
 			if len(p.path) == 0 {
 				p.anim = 1
 			}
 		}
 	default:
+		clearSqueeze(p)
 		p.anim = 1
 	}
+}
+
+// commitOrSqueeze either starts a normal tile step or begins the squeeze wind-up
+// when the step cuts between two diagonal solids.
+func (h *Hub) commitOrSqueeze(p *Player, nx, ny int, dir string, fromPath bool, dt float64) {
+	if isDiagonalSqueeze(p.mapID, p.tx, p.ty, nx, ny) {
+		p.squeezeT = squeezeDelay
+		p.squeezeNX, p.squeezeNY = nx, ny
+		p.squeezeDir = dir
+		p.squeezeFromPath = fromPath
+		p.dir = dir
+		p.anim = 1
+		return
+	}
+	h.startStep(p, nx, ny, dir, fromPath, dt)
+}
+
+func (h *Hub) startStep(p *Player, nx, ny int, dir string, fromPath bool, dt float64) {
+	if fromPath && len(p.path) > 0 && p.path[0].x == nx && p.path[0].y == ny {
+		p.path = p.path[1:]
+		if len(p.path) == 0 {
+			clearPath(p)
+		}
+	}
+	p.dir = dir
+	p.tx, p.ty = nx, ny
+	p.moving = true
+	p.anim += dt * 8.75
+	clearSqueeze(p)
+}
+
+// tickSqueeze advances the effort pause. Cancels if the player changes intent;
+// commits the step when the delay elapses and the gap is still free.
+func (h *Hub) tickSqueeze(p *Player, moveDir string, dt float64) {
+	// Still aiming at the same gap?
+	holding := false
+	if p.squeezeFromPath {
+		holding = len(p.path) > 0 && p.path[0].x == p.squeezeNX && p.path[0].y == p.squeezeNY && moveDir == ""
+		// Keyboard overrides cancel a path-based squeeze.
+		if moveDir != "" {
+			holding = false
+		}
+	} else {
+		holding = moveDir == p.squeezeDir
+	}
+	if !holding {
+		clearSqueeze(p)
+		// Re-process this frame's intent without the squeeze state.
+		h.stepPlayer(p, moveDir, dt)
+		return
+	}
+	p.dir = p.squeezeDir
+	p.squeezeT -= dt
+	p.anim = 1
+	if p.squeezeT > 0 {
+		return
+	}
+	// Delay finished: step through if still clear.
+	nx, ny := p.squeezeNX, p.squeezeNY
+	fromPath := p.squeezeFromPath
+	clearSqueeze(p)
+	if blocked(p.mapID, nx, ny) || h.occupied(p.mapID, nx, ny, p) {
+		if fromPath {
+			h.replanPath(p)
+		}
+		p.anim = 1
+		return
+	}
+	h.startStep(p, nx, ny, p.dir, fromPath, dt)
 }
