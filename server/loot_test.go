@@ -109,7 +109,7 @@ func TestDeathDropsCorpseAndWaitsForRespawn(t *testing.T) {
 	p.hair = "#112233"
 	p.cloth = "#445566"
 	p.bag = map[string]int{"potion": 3, "bread": 2}
-	h.playerDie(p, "Slime")
+	h.playerDie(p, "Goblin")
 	cs := h.corpses["field"]
 	if len(cs) != 1 || cs[0].tx != 15 || cs[0].ty != 10 {
 		t.Fatalf("death should leave a corpse where you fell, got %+v", cs)
@@ -129,7 +129,7 @@ func TestDeathDropsCorpseAndWaitsForRespawn(t *testing.T) {
 	if !p.dead || p.mapID != "field" || p.hp != 0 {
 		t.Fatalf("death should wait for respawn at the fall site, dead=%v map=%s hp=%v", p.dead, p.mapID, p.hp)
 	}
-	if len(p.log) == 0 || !strings.Contains(p.log[len(p.log)-1], "Killed by Slime") ||
+	if len(p.log) == 0 || !strings.Contains(p.log[len(p.log)-1], "Killed by Goblin") ||
 		!strings.Contains(p.log[len(p.log)-1], "field (15,10)") {
 		t.Fatalf("death should log killer and location, got %#v", p.log)
 	}
@@ -139,7 +139,7 @@ func TestDeathWithEmptyPackStillLeavesCorpse(t *testing.T) {
 	h := newHub()
 	p := heroAt("field", 15, 10)
 	p.bag = map[string]int{}
-	h.playerDie(p, "Slime")
+	h.playerDie(p, "Goblin")
 	cs := h.corpses["field"]
 	if len(cs) != 1 || cs[0].tx != 15 || cs[0].ty != 10 {
 		t.Fatalf("death should leave an openable empty corpse, got %+v", cs)

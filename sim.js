@@ -305,15 +305,15 @@ const MAPS = {
     })(),
     trees: [],
     props: [['well', 19, 14]],
-    deco: [ // [sx, sy, w, h, x, y, solid] chipset sprites, feet at tile (x,y)
-      [432, 64, 16, 16, 9, 5, false],  // hanging sword sign (weapon shop)
-      [464, 64, 16, 16, 29, 5, false], // hanging flask sign (item shop)
-      [384, 64, 16, 16, 2, 6, true],   // torches
-      [384, 64, 16, 16, 37, 6, true],
-      [448, 128, 16, 32, 2, 22, true], // barrels
-      [448, 128, 16, 32, 3, 22, true],
-      [448, 128, 16, 32, 36, 22, true],
-      [448, 128, 16, 32, 37, 22, true],
+    deco: [ // [sx, sy, w, h, x, y, solid] 48px chipset sprites, feet at tile (x,y)
+      [144, 48, 48, 48, 9, 5, false],  // hanging sword sign (weapon shop)
+      [192, 48, 48, 48, 29, 5, false], // hanging plate sign (item shop)
+      [336, 48, 48, 144, 2, 6, true],  // streetlights
+      [336, 48, 48, 144, 37, 6, true],
+      [624, 0, 48, 48, 2, 22, true],   // barrels
+      [624, 0, 48, 48, 3, 22, true],
+      [624, 0, 48, 48, 36, 22, true],
+      [624, 0, 48, 48, 37, 22, true],
     ],
     hedge: false,
     spawn: false,
@@ -322,14 +322,14 @@ const MAPS = {
 };
 function cur() { return MAPS[game.mapId]; }
 
-const npcs = [
-  { id: 'elder', map: 'field', cx: 2, cy: 1, tx: 7, ty: 20, dir: 'down' },
-  { id: 'girl', map: 'field', cx: 3, cy: 0, tx: 29, ty: 9, dir: 'down' },
+const npcs = [ // cells index the MZ sheets: npc = People2, custom = People1
+  { id: 'elder', map: 'field', cx: 0, cy: 0, tx: 7, ty: 20, dir: 'down' },
+  { id: 'girl', map: 'field', cx: 1, cy: 0, tx: 29, ty: 9, dir: 'down' },
   { id: 'pixel', map: 'field', sheet: 'custom', cx: 0, cy: 0, tx: 14, ty: 7, dir: 'down' },
   { id: 'knight', map: 'field', sheet: 'knight', cx: 0, cy: 0, tx: 20, ty: 10, dir: 'down', wander: 2 },
-  { id: 'smith', map: 'city', cx: 0, cy: 1, tx: 7, ty: 6, dir: 'down' },
-  { id: 'grocer', map: 'city', cx: 1, cy: 1, tx: 27, ty: 6, dir: 'down' },
-  { id: 'kid', map: 'city', cx: 1, cy: 0, tx: 15, ty: 16, dir: 'down', wander: 2 },
+  { id: 'smith', map: 'city', cx: 2, cy: 1, tx: 7, ty: 6, dir: 'down' },
+  { id: 'grocer', map: 'city', cx: 3, cy: 0, tx: 27, ty: 6, dir: 'down' },
+  { id: 'kid', map: 'city', cx: 2, cy: 0, tx: 15, ty: 16, dir: 'down', wander: 2 },
   { id: 'guard', map: 'city', sheet: 'knight', cx: 0, cy: 0, tx: 3, ty: 12, dir: 'down', wander: 1 },
 ];
 for (const n of npcs) { n.px = n.tx * TS; n.py = n.ty * TS; n.anim = 1; n.moving = false; n.wait = 0; n.hx = n.tx; n.hy = n.ty; }
@@ -384,16 +384,17 @@ function say(pages, options = {}) {
 // in reach, FIRE lobs a fireball. The dirt path stays monster-free.
 const ENEMIES = {
   // flee: below this fraction of max HP the monster runs from you instead
-  slime: { name: 'Slime', cx: 0, cy: 0, hp: 14, atk: 5, def: 2, exp: 5, gold: 7, speed: 38, wait: [0.25, 0.65], range: 7, flee: 0 },
-  imp: { name: 'Imp', cx: 1, cy: 0, hp: 22, atk: 8, def: 3, exp: 8, gold: 14, speed: 54, wait: [0.12, 0.35], range: 9, flee: 0.15 },
-  ghost: { name: 'Ghost', cx: 3, cy: 0, hp: 30, atk: 11, def: 3, exp: 14, gold: 24, speed: 62, wait: [0.08, 0.25], range: 11, flee: 0.2 },
+  // (cells index the MZ Monster.png charset; kinds keep their legacy ids)
+  slime: { name: 'Goblin', cx: 1, cy: 0, hp: 14, atk: 5, def: 2, exp: 5, gold: 7, speed: 38, wait: [0.25, 0.65], range: 7, flee: 0 },
+  imp: { name: 'Imp', cx: 0, cy: 0, hp: 22, atk: 8, def: 3, exp: 8, gold: 14, speed: 54, wait: [0.12, 0.35], range: 9, flee: 0.15 },
+  ghost: { name: 'Lich', cx: 2, cy: 1, hp: 30, atk: 11, def: 3, exp: 14, gold: 24, speed: 62, wait: [0.08, 0.25], range: 11, flee: 0.2 },
 };
 function addPop(s, x, y, color) { game.pops.push({ s, x, y, t: 0, color }); }
 function enemyAt(x, y) { return game.enemies.some(en => !en.dead && en.dying <= 0 && en.tx === x && en.ty === y); }
 function playerAt(x, y) { return (game.players || []).some(p => !p.dead && p.tx === x && p.ty === y); }
-function enemyAtPoint(x, y) { // point in the 24x32 sprite box
+function enemyAtPoint(x, y) { // point in the sprite's click box
   return game.enemies.find(en => !en.dead && en.dying <= 0 &&
-    x >= en.px - 4 && x < en.px + 20 && y >= en.py - 16 && y < en.py + 16);
+    x >= en.px - 2 && x < en.px + 18 && y >= en.py - 6 && y < en.py + 16);
 }
 
 // ---- click-to-move: BFS over walkable tiles, enemies and other players count as walls
@@ -606,7 +607,7 @@ function shopNpcAtPoint(wx, wy) {
 }
 function npcAtPoint(wx, wy) {
   return npcs.find(n => n.map === game.mapId &&
-    wx >= n.px - 4 && wx < n.px + 20 && wy >= n.py - 16 && wy < n.py + 16);
+    wx >= n.px - 2 && wx < n.px + 18 && wy >= n.py - 6 && wy < n.py + 16);
 }
 function openShopChoice(who, x = null, y = null) {
   game.shop = { who, mode: 'choice', cursor: 0 };

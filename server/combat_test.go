@@ -35,7 +35,7 @@ func TestSlashKillsAdjacentEnemy(t *testing.T) {
 	if p.kills != 1 || p.gold != enemyKinds["slime"].gold || p.exp != enemyKinds["slime"].exp {
 		t.Fatalf("kill rewards wrong: kills=%d gold=%d exp=%d", p.kills, p.gold, p.exp)
 	}
-	if !hasLog(p.log, "Defeated Slime: +5 EXP, +7 gold") {
+	if !hasLog(p.log, "Defeated Goblin: +5 EXP, +7 gold") {
 		t.Fatalf("kill should log rewards, got %#v", p.log)
 	}
 	if p.atkCool <= 0 {
@@ -96,7 +96,7 @@ func TestDeathWaitsForRespawn(t *testing.T) {
 	p.iframes = 0
 	en := slimeAt(1, 16, 10)
 	h.attackHero(en, p)
-	if !p.dead || p.deathCause != "Slime" {
+	if !p.dead || p.deathCause != "Goblin" {
 		t.Fatalf("death should mark the player dead with cause, dead=%v cause=%q", p.dead, p.deathCause)
 	}
 	if p.mapID != "field" || p.tx != 15 || p.ty != 10 || p.hp != 0 {

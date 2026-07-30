@@ -132,14 +132,14 @@ function drawLoginField(f, val, active) {
   ctx.strokeRect(f.x + 0.5, f.y + 0.5, f.w - 1, f.h - 1);
   text(val, f.x + 4, f.y + 4);
   if (active && Math.floor(performance.now() / 400) % 2) {
-    ctx.font = 'bold 8px "Courier New", monospace';
+    ctx.font = FONT;
     text('_', f.x + 4 + ctx.measureText(val).width, f.y + 4);
   }
 }
 
 function drawLoginScreen() {
   const L = game.login, b = loginBox();
-  if (img.title) ctx.drawImage(img.title, (W - 320) / 2, -20, 320, 240);
+  drawTitleBg();
   ctx.fillStyle = 'rgba(0,0,0,.5)'; ctx.fillRect(0, 0, W, H);
   drawModalWindow(b.x, b.y, b.w, b.h);
   text('FABLE QUEST', b.x + 16, b.y + 12, '#ffe080');
@@ -372,7 +372,7 @@ function updateCharacterScreen() {
 
 function drawCharacterScreen() {
   const s = game.charSelect, b = charBox();
-  if (img.title) ctx.drawImage(img.title, (W - 320) / 2, -20, 320, 240);
+  drawTitleBg();
   ctx.fillStyle = 'rgba(0,0,0,.55)'; ctx.fillRect(0, 0, W, H);
   drawModalWindow(b.x, b.y, b.w, b.h);
   if (s.mode !== 'create') {
@@ -400,7 +400,7 @@ function drawCharacterScreen() {
       text(ch.map ? `Map ${ch.map}` : 'Map city', b.detail.x, b.detail.y + 50, '#9cf');
       text(`${ch.gold || 0} gold`, b.detail.x, b.detail.y + 66, '#ffd27a');
       drawWindow(b.preview.x, b.preview.y, b.preview.w, b.preview.h);
-      drawActor({ class: ch.class || 'Knight', gender: ch.gender, dir: 'down', moving: false, anim: 1 }, b.preview.x + 21, b.preview.y + 39);
+      drawActor({ class: ch.class || 'Knight', gender: ch.gender, dir: 'down', moving: false, anim: 1 }, b.preview.x + 21, b.preview.y + 39, 1, 2);
     }
     drawWindow(b.enter.x, b.enter.y, b.enter.w, b.enter.h);
     text('Enter World', b.enter.x + 12, b.enter.y + 6);
@@ -449,7 +449,7 @@ function drawCharacterScreen() {
     });
     drawWindow(b.preview.x, b.preview.y, b.preview.w, b.preview.h);
     drawActor({ class: s.class, gender: s.gender, dir: 'down', moving: false, anim: 1 },
-      b.preview.x + 21, b.preview.y + 39);
+      b.preview.x + 21, b.preview.y + 39, 1, 2);
     if (s.class === 'Archer') {
       text('Starts with a Short Bow', b.classX, b.classY + s.classes.length * b.rowH + 6, '#9ab');
       text('for ranged combat.', b.classX, b.classY + s.classes.length * b.rowH + 18, '#9ab');

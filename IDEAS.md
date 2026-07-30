@@ -13,3 +13,6 @@
 
 
 - Check if important things to be persitent are in fact persistent, like the equipped items for example.
+
+
+

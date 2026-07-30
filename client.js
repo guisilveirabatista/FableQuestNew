@@ -11,10 +11,15 @@ cv.style.outline = 'none';
 // pick the smallest integer scale that keeps the viewport within the map
 const SCALE = Math.max(1, Math.ceil(Math.max(
   window.innerWidth / (MW * TS), window.innerHeight / (MH * TS))));
-cv.width = Math.min(MW * TS, Math.ceil(window.innerWidth / SCALE));
-cv.height = Math.min(MH * TS, Math.ceil(window.innerHeight / SCALE));
-const W = cv.width, H = cv.height;
-ctx.imageSmoothingEnabled = false;
+// Logic runs in 16px "logical" tiles; the backing store is RES x that, so the
+// 48px RPG Maker MZ art (3 x 16) renders 1:1 at native resolution.
+const RES = 3;
+const W = Math.min(MW * TS, Math.ceil(window.innerWidth / SCALE));
+const H = Math.min(MH * TS, Math.ceil(window.innerHeight / SCALE));
+cv.width = W * RES;
+cv.height = H * RES;
+ctx.setTransform(RES, 0, 0, RES, 0, 0);
+ctx.imageSmoothingEnabled = true;
 
 function camPos() { // camera centered on the hero, clamped to the map
   const h = game.hero;
@@ -26,44 +31,45 @@ function camPos() { // camera centered on the hero, clamped to the map
 
 // ---------------------------------------------------------------- assets
 const IMAGES = ['chipset', 'hero', 'npc', 'custom', 'knight',
-  'general1', 'general2', 'protagonist1', 'protagonist2', 'protagonist4',
+  'protagonist1', 'protagonist2', 'protagonist4',
   'system', 'title',
-  'monsters', 'slash', 'flame', 'punch', 'skeleton',
+  'monsters', 'flame', 'skeleton',
   'i_potion', 'i_bread', 'i_meat', 'i_sword1', 'i_sword2', 'i_sword3', 'i_bow1', 'i_arrow1', 'i_arrow2', 'i_arrow3',
   'i_hat', 'i_helm', 'i_shield', 'i_armor', 'i_legs', 'i_boots', 'i_ring', 'i_amulet'];
 const img = {};
+// MZ charsets: protagonist1 = Actor1, protagonist2 = Actor2, protagonist4 = Actor3
 const CLASS_SPRITES_MALE = {
-  Knight: { sheet: 'protagonist1', cx: 2, cy: 0 },
-  Lancer: { sheet: 'protagonist4', cx: 2, cy: 0 },
-  Wizard: { sheet: 'protagonist1', cx: 0, cy: 1 },
+  Knight: { sheet: 'protagonist1', cx: 0, cy: 0 },
+  Lancer: { sheet: 'protagonist2', cx: 0, cy: 0 },
+  Wizard: { sheet: 'protagonist2', cx: 2, cy: 0 },
   Archer: { sheet: 'protagonist2', cx: 2, cy: 1 },
-  Vampire: { sheet: 'protagonist4', cx: 3, cy: 0 },
-  Holy: { sheet: 'general2', cx: 0, cy: 0 },
+  Vampire: { sheet: 'protagonist4', cx: 0, cy: 1 },
+  Holy: { sheet: 'protagonist1', cx: 2, cy: 1 },
 };
 const CLASS_SPRITES_FEMALE = {
-  Knight: { sheet: 'protagonist1', cx: 3, cy: 0 },
-  Lancer: { sheet: 'protagonist4', cx: 1, cy: 1 },
+  Knight: { sheet: 'protagonist2', cx: 1, cy: 0 },
+  Lancer: { sheet: 'protagonist2', cx: 3, cy: 0 },
   Wizard: { sheet: 'protagonist1', cx: 1, cy: 1 },
-  Archer: { sheet: 'protagonist2', cx: 3, cy: 1 },
-  Vampire: { sheet: 'protagonist4', cx: 2, cy: 1 },
-  Holy: { sheet: 'general2', cx: 1, cy: 0 },
+  Archer: { sheet: 'protagonist4', cx: 1, cy: 1 },
+  Vampire: { sheet: 'protagonist4', cx: 3, cy: 1 },
+  Holy: { sheet: 'protagonist1', cx: 3, cy: 1 },
 };
 const CLASS_SPRITES = CLASS_SPRITES_MALE;
 let audioOk = false;
 function sfx(name) {
   if (!audioOk) return;
-  const a = new Audio('assets/' + name + '.wav');
+  const a = new Audio('assets/se/' + name + '.ogg');
   a.volume = 0.5;
   a.play().catch(() => {});
 }
 
-// chipset source rects
+// chipset source rects (48px MZ atlas, see tools/rip_mz.js): [sx, sy, sw, sh]
 const T = {
-  grass: [304, 48], dirt: [352, 48], water: [0, 64],
-  bush: [288, 144], rock: [432, 16], well: [432, 32], sign: [416, 48],
-  palm: [320, 144], cactus: [304, 144],
+  rock: [480, 0, 48, 48], well: [528, 0, 48, 48], sign: [576, 0, 48, 48],
+  barrel: [624, 0, 48, 48], cactus: [672, 0, 48, 48], bush: [720, 0, 48, 48],
+  palm: [96, 48, 48, 96],
 };
-const TREE = [288, 160, 32, 32]; // big tree, 2x2 tiles, base row at bottom
+const TREE = [0, 48, 96, 96]; // big tree, 2x2 tiles, base row at bottom
 
 // ---------------------------------------------------------------- input
 const held = {};
@@ -284,11 +290,11 @@ function buttonFeedbackAlpha(x, y, w, h, force = false) {
   return alpha;
 }
 function drawWindow(x, y, w, h) {
-  const s = img.system;
+  const s = img.system; // MZ Window.png: 96x96 back at (0,0), 96x96 frame at (96,0)
   ctx.globalAlpha = 0.85;
-  ctx.drawImage(s, 0, 0, 32, 32, x + 1, y + 1, w - 2, h - 2);
+  ctx.drawImage(s, 0, 0, 96, 96, x + 1, y + 1, w - 2, h - 2);
   ctx.globalAlpha = 1;
-  nineSlice(s, 32, 0, x, y, w, h);
+  nineSlice(s, 96, 0, x, y, w, h);
   const feedback = buttonFeedbackAlpha(x, y, w, h);
   if (feedback > 0) {
     ctx.fillStyle = `rgba(0,0,0,${feedback})`;
@@ -316,7 +322,11 @@ function drawModalBackdrop(alpha = 0.18) {
   ctx.fillRect(0, 0, W, H);
 }
 function drawCursor(x, y, w, h) {
-  nineSlice(img.system, 64, 0, x, y, w, h);
+  // MZ Window.png cursor block (96,96)-(144,144), pulsing like the engine does
+  const pulse = 0.7 + 0.3 * Math.sin(performance.now() / 250);
+  ctx.globalAlpha = pulse;
+  ctx.drawImage(img.system, 97, 97, 46, 46, x, y, w, h);
+  ctx.globalAlpha = 1;
   const feedback = buttonFeedbackAlpha(x, y, w, h, true);
   if (feedback > 0) {
     ctx.fillStyle = `rgba(0,0,0,${feedback})`;
@@ -324,26 +334,28 @@ function drawCursor(x, y, w, h) {
   }
 }
 function nineSlice(s, sx, sy, x, y, w, h) {
-  const b = 8, m = 32 - 2 * b;
-  ctx.drawImage(s, sx, sy, b, b, x, y, b, b);
-  ctx.drawImage(s, sx + 32 - b, sy, b, b, x + w - b, y, b, b);
-  ctx.drawImage(s, sx, sy + 32 - b, b, b, x, y + h - b, b, b);
-  ctx.drawImage(s, sx + 32 - b, sy + 32 - b, b, b, x + w - b, y + h - b, b, b);
-  ctx.drawImage(s, sx + b, sy, m, b, x + b, y, w - 2 * b, b);
-  ctx.drawImage(s, sx + b, sy + 32 - b, m, b, x + b, y + h - b, w - 2 * b, b);
-  ctx.drawImage(s, sx, sy + b, b, m, x, y + b, b, h - 2 * b);
-  ctx.drawImage(s, sx + 32 - b, sy + b, b, m, x + w - b, y + b, b, h - 2 * b);
+  // MZ 96x96 frame with 24px corners; dest corners are 8 logical px (24 device)
+  const B = 24, M = 96 - 2 * B, b = 8;
+  ctx.drawImage(s, sx, sy, B, B, x, y, b, b);
+  ctx.drawImage(s, sx + 96 - B, sy, B, B, x + w - b, y, b, b);
+  ctx.drawImage(s, sx, sy + 96 - B, B, B, x, y + h - b, b, b);
+  ctx.drawImage(s, sx + 96 - B, sy + 96 - B, B, B, x + w - b, y + h - b, b, b);
+  ctx.drawImage(s, sx + B, sy, M, B, x + b, y, w - 2 * b, b);
+  ctx.drawImage(s, sx + B, sy + 96 - B, M, B, x + b, y + h - b, w - 2 * b, b);
+  ctx.drawImage(s, sx, sy + B, B, M, x, y + b, b, h - 2 * b);
+  ctx.drawImage(s, sx + 96 - B, sy + B, B, M, x + w - b, y + b, b, h - 2 * b);
 }
+const FONT = 'bold 8px GameFont, "Courier New", monospace';
 function text(str, x, y, color = '#fff') {
-  ctx.font = 'bold 8px "Courier New", monospace';
+  ctx.font = FONT;
   ctx.textBaseline = 'top';
   ctx.fillStyle = '#1a2a3a';
-  ctx.fillText(str, x + 1, y + 1);
+  ctx.fillText(str, x + 0.5, y + 0.5);
   ctx.fillStyle = color;
   ctx.fillText(str, x, y);
 }
 function textWidth(str) {
-  ctx.font = 'bold 8px "Courier New", monospace';
+  ctx.font = FONT;
   return ctx.measureText(str).width;
 }
 function drawMeter(x, y, w, h, cur, max, fill = '#d84242') {
@@ -384,13 +396,14 @@ function syncMusic() {
 // ---------------------------------------------------------------- map data
 // ground chars: G grass, D dirt, W water (blocked), P pavement,
 // X city wall, R shop brick, U shop stucco, O shop door (all blocked)
-const GROUND_T = {
-  G: [304, 48], D: [352, 48], W: [0, 64], P: [192, 80],
-  X: [224, 0], R: [224, 32], U: [224, 48], O: [208, 32],
+const GROUND_T = { // 48px cells in the MZ atlas; W animates over 3 frames
+  G: [0, 0], D: [48, 0], W: [144, 0], P: [96, 0],
+  X: [288, 0], R: [336, 0], U: [384, 0], O: [432, 0],
 };
+const WATER_FRAMES = [[144, 0], [192, 0], [240, 0]];
 const MAP_COLOR = {
-  G: '#376f45', D: '#a9844d', W: '#2e6f9f', P: '#767f89',
-  X: '#3e4d59', R: '#78484d', U: '#a87957', O: '#4a332a',
+  G: '#5aab47', D: '#d6c088', W: '#3fa4d4', P: '#a3a3a3',
+  X: '#71767c', R: '#c06a31', U: '#cbb391', O: '#6b4a2f',
 };
 const MAP_NAME = { field: 'Field', city: 'City' };
 const NPC_NAME = {
@@ -1452,19 +1465,20 @@ function drawShop() {
   for (const b of shopButtons(l, s)) drawShopButton(b, hit(mouse, b.x, b.y, b.w, b.h));
 }
 
-// tint buffer for colored hit-flashes on 24x32 charas
+// tint buffer for colored hit-flashes on 48x48 MZ charas
 const tintCv = document.createElement('canvas');
-tintCv.width = 24; tintCv.height = 32;
+tintCv.width = 48; tintCv.height = 48;
 const tint = tintCv.getContext('2d');
 function drawTint(sheet, cx, cy, dir, frame, px, py, color, alpha) {
-  tint.clearRect(0, 0, 24, 32);
-  tint.drawImage(sheet, cx * 72 + frame * 24, cy * 128 + (DIRROW[dir] ?? DIRROW.down) * 32, 24, 32, 0, 0, 24, 32);
+  const [sx, sy] = charSrc(cx, cy, dir, frame);
+  tint.clearRect(0, 0, 48, 48);
+  tint.drawImage(sheet, sx, sy, 48, 48, 0, 0, 48, 48);
   tint.globalCompositeOperation = 'source-in';
   tint.fillStyle = color;
-  tint.fillRect(0, 0, 24, 32);
+  tint.fillRect(0, 0, 48, 48);
   tint.globalCompositeOperation = 'source-over';
   ctx.globalAlpha = alpha;
-  ctx.drawImage(tintCv, px - 4, py - 16);
+  ctx.drawImage(tintCv, 0, 0, 48, 48, px, py - 2, 16, 16);
   ctx.globalAlpha = 1;
 }
 
@@ -1482,15 +1496,15 @@ function drawEnemy(en) {
       Math.min(1, en.flash * 3) * (en.dying > 0 ? en.dying / 0.45 : 1));
   if (en.hp > 0 && (game.lock === en || (en.hurtT < 1.6 && en.hp < en.maxhp))) {
     ctx.fillStyle = '#222';
-    ctx.fillRect(en.px, en.py - 18, 16, 2);
+    ctx.fillRect(en.px, en.py - 6, 16, 2);
     ctx.fillStyle = '#d33';
-    ctx.fillRect(en.px, en.py - 18, Math.ceil(16 * en.hp / en.maxhp), 2);
+    ctx.fillRect(en.px, en.py - 6, Math.ceil(16 * en.hp / en.maxhp), 2);
   }
 }
 
 function drawActorTargetBox(en, color) {
   const p = Math.floor(performance.now() / 250) % 2; // gentle pulse
-  const x = en.px - 3 - p, y = en.py - 12 - p, w = 22 + 2 * p, hh = 29 + 2 * p, L = 5;
+  const x = en.px - 2 - p, y = en.py - 5 - p, w = 20 + 2 * p, hh = 21 + 2 * p, L = 5;
   ctx.fillStyle = '#1a2a3a';
   drawCorners(x + 1, y + 1, w, hh, L);
   ctx.fillStyle = color;
@@ -1506,7 +1520,7 @@ function drawPvpTargetBox() {
 function drawFollowBox() {
   const en = game.lock || game.followPlayer || game.pvpTarget;
   if (!en) return;
-  const x = en.px - 8, y = en.py - 17, w = 32, hh = 39, L = 6;
+  const x = en.px - 6, y = en.py - 9, w = 28, hh = 29, L = 6;
   ctx.fillStyle = '#0a1424';
   drawCorners(x + 1, y + 1, w, hh, L);
   ctx.fillStyle = '#4bacff';
@@ -1523,25 +1537,46 @@ const SLASH_ROT = {
   right: 0, downright: Math.PI / 4, down: Math.PI / 2, downleft: 3 * Math.PI / 4,
   left: Math.PI, upleft: -3 * Math.PI / 4, up: -Math.PI / 2, upright: -Math.PI / 4,
 };
+// Melee effects are drawn procedurally (glowing arcs/bursts) — RPG Maker MZ
+// ships its combat effects as Effekseer particles, not sprite sheets.
+function slashArc(prog, r, sweep = Math.PI * 0.9) {
+  // a bright crescent that sweeps across the facing direction and fades
+  const a0 = -sweep / 2, a1 = a0 + sweep * Math.min(1, prog * 1.4);
+  const fade = 1 - Math.max(0, prog - 0.45) / 0.55;
+  ctx.lineCap = 'round';
+  ctx.globalAlpha = 0.45 * fade;
+  ctx.strokeStyle = '#bfe6ff';
+  ctx.lineWidth = 6;
+  ctx.beginPath(); ctx.arc(0, 0, r, a0, a1); ctx.stroke();
+  ctx.globalAlpha = 0.9 * fade;
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 2.5;
+  ctx.beginPath(); ctx.arc(0, 0, r, a0, a1); ctx.stroke();
+}
 function drawSlash() {
   const h = game.hero, f = game.slashFx;
+  const prog = f.t / (f.dur || 0.18);
   ctx.save();
-  ctx.globalAlpha = 0.9;
   if (f.spin) { // full turn around the hero
     ctx.translate(h.px + 8, h.py + 8);
-    ctx.rotate(f.t / f.dur * Math.PI * 2);
-    ctx.drawImage(img.slash, 2 * 96, 0, 96, 96, TS - 22, -22, 44, 44);
+    ctx.rotate(prog * Math.PI * 2);
+    slashArc(Math.min(1, prog + 0.3), TS * 0.95, Math.PI * 1.1);
   } else if (f.punch) { // unarmed: expanding impact burst on the struck tile
-    const i = Math.min(3, Math.floor(f.t / 0.06));
     const d = DIRV[f.dir];
     ctx.translate(h.px + 8 + d[0] * TS, h.py + 8 + d[1] * TS);
-    ctx.drawImage(img.punch, i * 96, 0, 96, 96, -16, -16, 32, 32);
+    const rr = 3 + prog * 9, fade = 1 - prog;
+    ctx.globalAlpha = 0.5 * fade;
+    ctx.fillStyle = '#ffe9c9';
+    ctx.beginPath(); ctx.arc(0, 0, rr * 0.6, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 0.9 * fade;
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(0, 0, rr, 0, Math.PI * 2); ctx.stroke();
   } else {
-    const i = Math.min(2, Math.floor(f.t / 0.06)); // frames 0-2: growing streak
     const d = DIRV[f.dir];
-    ctx.translate(h.px + 8 + d[0] * TS, h.py + 8 + d[1] * TS);
+    ctx.translate(h.px + 8 + d[0] * TS * 0.4, h.py + 8 + d[1] * TS * 0.4);
     ctx.rotate(SLASH_ROT[f.dir]);
-    ctx.drawImage(img.slash, i * 96, 0, 96, 96, -22, -22, 44, 44);
+    slashArc(prog, TS * 0.95);
   }
   ctx.restore();
   ctx.globalAlpha = 1;
@@ -1627,13 +1662,19 @@ function drawProjectiles() {
       ctx.beginPath(); ctx.moveTo(-6, 0); ctx.lineTo(-8, -2); ctx.lineTo(-4, 0); ctx.lineTo(-8, 2); ctx.fill();
       ctx.restore();
     } else {
-      const fr = Math.floor(p.t * 12) % 2;
+      // MZ fireball VFX sheet: 15 frames x 4 direction rows of 64x64
+      const row = Math.abs(p.dx) > Math.abs(p.dy) ? (p.dx > 0 ? 2 : 1) : (p.dy > 0 ? 0 : 3);
       if (p.boom !== undefined) {
-        ctx.globalAlpha = Math.max(0, p.boom / 0.18);
-        ctx.drawImage(img.flame, 4 * 96 + 30, 3 * 96 + 30, 36, 36, p.x - 14, p.y - 14, 28, 28);
+        const a = Math.max(0, p.boom / 0.18);
+        ctx.globalAlpha = a * 0.6;
+        ctx.fillStyle = '#ffb347';
+        ctx.beginPath(); ctx.arc(p.x, p.y, 12 * (1.4 - a * 0.4), 0, Math.PI * 2); ctx.fill();
+        ctx.globalAlpha = a;
+        ctx.drawImage(img.flame, 14 * 64, row * 64, 64, 64, p.x - 12, p.y - 12, 24, 24);
         ctx.globalAlpha = 1;
       } else {
-        ctx.drawImage(img.flame, fr * 96 + 30, 30, 36, 36, p.x - 9, p.y - 9, 18, 18);
+        const fr = Math.floor(p.t * 30) % 15;
+        ctx.drawImage(img.flame, fr * 64, row * 64, 64, 64, p.x - 11, p.y - 11, 22, 22);
       }
     }
   }
@@ -1641,7 +1682,7 @@ function drawProjectiles() {
 
 function drawPops() {
   for (const p of game.pops) {
-    ctx.font = 'bold 8px "Courier New", monospace';
+    ctx.font = FONT;
     const w = ctx.measureText(p.s).width;
     text(p.s, Math.round(p.x - w / 2), Math.round(Math.max(2, p.y - p.t * 18)), p.color);
   }
@@ -1649,11 +1690,12 @@ function drawPops() {
 
 function drawDeadHero(px, py, alpha = 0.85, actor = game.hero) {
   const sp = actorSprite(actor);
+  const [sx, sy] = charSrc(sp.cx, sp.cy, 'down', 1);
   ctx.save();
   ctx.translate(px + 8, py + 8);
   ctx.rotate(Math.PI / 2);
   ctx.globalAlpha = alpha;
-  ctx.drawImage(img[sp.sheet] || img.hero, sp.cx * 72 + 24, sp.cy * 128 + 64, 24, 32, -12, -16, 24, 32);
+  ctx.drawImage(img[sp.sheet] || img.hero, sx, sy, 48, 48, -8, -8, 16, 16);
   ctx.globalAlpha = 1;
   ctx.restore();
 }
@@ -1840,8 +1882,7 @@ function drawWorldDrag() {
     if (d.n > 1) text(String(d.n), mouse.x + 2, mouse.y + 5, '#ffe080');
   } else if (d.decayed) {
     ctx.translate(mouse.x, mouse.y);
-    ctx.rotate(Math.PI / 2);
-    ctx.drawImage(img.skeleton, -16, -10, 32, 20);
+    ctx.drawImage(img.skeleton, -8, -8, 16, 16); // MZ bones tile lies flat already
   } else {
     drawDeadHero(mouse.x - 8, mouse.y - 8, 0.82, corpseActor(d));
   }
@@ -2700,26 +2741,39 @@ function drawMenu() {
 }
 
 // Sprites only have 4 facings; map diagonals to the horizontal component.
+// MZ charset row order: down, left, right, up.
 const DIRROW = {
-  up: 0, right: 1, down: 2, left: 3,
-  upright: 1, downright: 1, upleft: 3, downleft: 3,
+  down: 0, left: 1, right: 2, up: 3,
+  upright: 2, downright: 2, upleft: 1, downleft: 1,
 };
-function drawChar(sheet, cx, cy, dir, frame, px, py) {
-  const sx = cx * 72 + Math.floor(frame) % 3 * 24;
-  const sy = cy * 128 + (DIRROW[dir] ?? DIRROW.down) * 32;
-  ctx.drawImage(sheet, sx, sy, 24, 32, px - 4, py - 16, 24, 32);
+function charSrc(cx, cy, dir, frame) {
+  // MZ charset: 144x192 per character (3 frames x 4 rows of 48x48)
+  return [cx * 144 + Math.floor(frame) % 3 * 48,
+    cy * 192 + (DIRROW[dir] ?? DIRROW.down) * 48];
+}
+function drawChar(sheet, cx, cy, dir, frame, px, py, scale = 1) {
+  const [sx, sy] = charSrc(cx, cy, dir, frame);
+  const d = 16 * scale;
+  // feet on the tile with the MZ 6-device-px lift (2 logical px)
+  ctx.drawImage(sheet, sx, sy, 48, 48, px - (d - 16) / 2, py + 14 - d, d, d);
 }
 function actorSprite(a = {}) {
   const gender = (a.gender || 'male').toLowerCase();
   const sprites = gender === 'female' ? CLASS_SPRITES_FEMALE : CLASS_SPRITES_MALE;
   return sprites[a.class] || sprites.Knight;
 }
-function drawActor(a, px = a.px, py = a.py, alpha = 1) {
+function drawActor(a, px = a.px, py = a.py, alpha = 1, scale = 1) {
   const sp = actorSprite(a);
   const frame = a.moving ? [0, 1, 2, 1][Math.floor(a.anim || 0) % 4] : 1;
   if (alpha !== 1) ctx.globalAlpha = alpha;
-  drawChar(img[sp.sheet] || img.hero, sp.cx, sp.cy, a.dir || 'down', frame, px, py);
+  drawChar(img[sp.sheet] || img.hero, sp.cx, sp.cy, a.dir || 'down', frame, px, py, scale);
   if (alpha !== 1) ctx.globalAlpha = 1;
+}
+function drawTitleBg() { // cover-fit the MZ title art to the viewport
+  if (!img.title) return;
+  const s = Math.max(W / img.title.width, H / img.title.height);
+  const dw = img.title.width * s, dh = img.title.height * s;
+  ctx.drawImage(img.title, (W - dw) / 2, (H - dh) / 2, dw, dh);
 }
 
 function drawHud() {
@@ -2753,9 +2807,11 @@ function drawMap(drawMenuLayer = true) {
   game.camY = cam.y; // drawBolts anchors lightning to the visible sky
   ctx.save();
   ctx.translate(-cam.x, -cam.y);
+  const wf = WATER_FRAMES[Math.floor(performance.now() / 400) % 3];
   for (let y = 0; y < MH; y++) for (let x = 0; x < MW; x++) {
-    const t = GROUND_T[m.ground[y][x]];
-    ctx.drawImage(img.chipset, t[0], t[1], TS, TS, x * TS, y * TS, TS, TS);
+    const g = m.ground[y][x];
+    const t = g === 'W' ? wf : GROUND_T[g];
+    ctx.drawImage(img.chipset, t[0], t[1], 48, 48, x * TS, y * TS, TS, TS);
   }
   const drawables = [];
   if (m.hedge) { // border hedge (skip exit tiles)
@@ -2768,11 +2824,12 @@ function drawMap(drawMenuLayer = true) {
   for (const [t, x, y] of m.props) drawables.push(prop(t, x, y));
   for (const [sx, sy, w, hh, x, y] of m.deco) drawables.push({
     base: (y + 1) * TS,
-    draw: () => ctx.drawImage(img.chipset, sx, sy, w, hh, x * TS, (y + 1) * TS - hh, w, hh),
+    // deco rects are 48px atlas coords; on screen 48px = one 16px logical tile
+    draw: () => ctx.drawImage(img.chipset, sx, sy, w, hh, x * TS, (y + 1) * TS - hh / 3, w / 3, hh / 3),
   });
   for (const [x, y] of m.trees) drawables.push({
     base: (y + 1) * TS,
-    draw: () => ctx.drawImage(img.chipset, TREE[0], TREE[1], TREE[2], TREE[3], x * TS, y * TS - 16, TREE[2], TREE[3]),
+    draw: () => ctx.drawImage(img.chipset, TREE[0], TREE[1], TREE[2], TREE[3], x * TS, y * TS - 16, 32, 32),
   });
   for (const c of game.corpses) {
     if (c.map !== game.mapId) continue;
@@ -2780,13 +2837,9 @@ function drawMap(drawMenuLayer = true) {
       base: c.ty * TS + 4, // under the living
       draw: () => {
         if (c.decayed) {
-          ctx.save();
-          ctx.translate(c.tx * TS + 8, c.ty * TS + 8);
-          ctx.rotate(Math.PI / 2);
           ctx.globalAlpha = 0.8;
-          ctx.drawImage(img.skeleton, -16, -10, 32, 20);
+          ctx.drawImage(img.skeleton, c.tx * TS, c.ty * TS, 16, 16);
           ctx.globalAlpha = 1;
-          ctx.restore();
         } else {
           drawDeadHero(c.tx * TS, c.ty * TS, 0.85, corpseActor(c));
         }
@@ -3050,13 +3103,15 @@ function drawLog() {
   lastLogWrapped.slice(-rows).forEach((s, i) => text(s, lx + 8, ly + 15 + i * lh, '#cde'));
 }
 function prop(t, x, y) {
+  const [sx, sy, sw, sh] = T[t];
+  const dw = sw / 3, dh = sh / 3; // 48px atlas -> 16px logical tiles
   return {
     base: (y + 1) * TS - (t === 'bush' ? 8 : 0),
-    draw: () => ctx.drawImage(img.chipset, T[t][0], T[t][1], TS, TS, x * TS, y * TS, TS, TS),
+    draw: () => ctx.drawImage(img.chipset, sx, sy, sw, sh, x * TS, (y + 1) * TS - dh, dw, dh),
   };
 }
 function wrapText(str, x, y, w) {
-  ctx.font = 'bold 8px "Courier New", monospace';
+  ctx.font = FONT;
   const words = str.split(' ');
   let line = '', ly = y;
   for (const wd of words) {
@@ -3122,12 +3177,15 @@ function configuredNetUrl() {
   const v = new URLSearchParams(location.search).get('net');
   return v && v !== '1' ? v : defaultNetUrl();
 }
-Promise.all(IMAGES.map(n => new Promise((res, rej) => {
-  const i = new Image();
-  i.onload = () => { img[n] = i; res(); };
-  i.onerror = rej;
-  i.src = 'assets/' + n + '.png';
-}))).then(() => {
+Promise.all([
+  document.fonts.load('bold 8px GameFont').catch(() => {}),
+  ...IMAGES.map(n => new Promise((res, rej) => {
+    const i = new Image();
+    i.onload = () => { img[n] = i; res(); };
+    i.onerror = rej;
+    i.src = 'assets/' + n + '.png';
+  })),
+]).then(() => {
   resetGame();
   netStart(configuredNetUrl());
   focusGame();

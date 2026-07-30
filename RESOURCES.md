@@ -1,4 +1,5 @@
 # Local
+/Users/guilhermesilveirabatista/Library/Application Support/Steam/steamapps/common/RPG Maker MZ/
 /Users/guilhermesilveirabatista/Library/Application Support/Steam/steamapps/common/RPG Maker MZ/dlc
 
 # Online
